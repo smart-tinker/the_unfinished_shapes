@@ -4,6 +4,8 @@ on:
     paths:
       - 'tools/local-model-e2e.mjs'
       - 'tools/cpu-evidence.mjs'
+      - 'tools/model-diagnostics.mjs'
+      - 'test/model-diagnostics.test.mjs'
       - 'test/cpu-evidence.test.mjs'
       - 'src/codex.mjs'
       - 'src/game-tools.mjs'
