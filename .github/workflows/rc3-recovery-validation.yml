@@ -4,6 +4,8 @@ on:
     paths:
       - '.github/workflows/rc3-recovery-validation.yml'
       - 'scripts/recovery-provenance.mjs'
+      - 'scripts/recovery-installer-transform.mjs'
+      - 'test/recovery-installer-transform.test.mjs'
       - 'scripts/electron-smoke.mjs'
       - 'scripts/smoke-graphics.mjs'
       - 'test/recovery-validation.test.mjs'

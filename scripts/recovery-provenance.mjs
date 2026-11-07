@@ -5,6 +5,7 @@ import {createHash} from 'node:crypto';
 import {createRequire} from 'node:module';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import {recoveryInstallerSmoke} from './recovery-installer-transform.mjs';
 const source=path.resolve('candidate'),harness=path.resolve('recovery-harness');
 const sha='867b5fa4dfa3d36bfad2abfc13bbfbb35b3fc488',tree='e78ce3b60655514fccd8426c0c7b32de710b72be';
 const revision=execFileSync('git',['-C',path.resolve('recovery'),'rev-parse','HEAD'],{encoding:'utf8'}).trim();
@@ -23,11 +24,9 @@ assert.equal(git('rev-parse','HEAD'),sha);assert.equal(git('rev-parse','HEAD^{tr
 assert.equal(git('diff','HEAD','--'),'','Tracked candidate content must remain unchanged');
 if(process.argv[2]==='prepare'){
  await mkdir(harness);await symlink(path.join(source,'node_modules'),path.join(harness,'node_modules'),process.platform==='win32'?'junction':'dir');
- for(const name of ['electron-smoke.mjs','smoke-graphics.mjs'])await copyFile(new URL(name,import.meta.url),path.join(harness,name));
+ for(const name of ['electron-smoke.mjs','smoke-graphics.mjs','recovery-installer-transform.mjs'])await copyFile(new URL(name,import.meta.url),path.join(harness,name));
  let installer=await readFile(path.join(source,'scripts/windows-installer-smoke.mjs'),'utf8');
- const old="assert.equal(await page.locator('#scene-error').isVisible(), false, 'WebGL scene must render');";
- assert.equal(installer.split(old).length,2,'Expected exact original installer check');
- installer="import {assertSmokeGraphics} from './smoke-graphics.mjs';\n"+installer.replace(old,"await assertSmokeGraphics(page, process.platform);");
+ installer=recoveryInstallerSmoke(installer);
  await writeFile(path.join(harness,'windows-installer-smoke.mjs'),installer);
 }else if(process.argv[2]==='report'){
  const require=createRequire(path.join(source,'package.json')),{extractFile}=await import(require.resolve('@electron/asar'));
