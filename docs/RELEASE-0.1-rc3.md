@@ -20,6 +20,8 @@ PR #16 (#15) and PR #10 (#4) were merged into RC commit `eb6d03a`, whose source 
 
 Interactive VM startup, object editing and removal passed on candidate `198063e5`, built from the verified source tree. This is candidate evidence, not final-release GUI acceptance.
 
+Current CPU acceptance requires at least one genuine valid `world_build`. Every call must match the requested design and succeed; every resulting object must have matching parameters and owner, a unique ID, and the total persisted count must equal the successful valid calls. Repeated valid construction requests execute independently. This checks game execution, not whether the model obeyed the requested call count. Historical single-build results above are preserved; revised acceptance still requires its own final-commit run.
+
 Publication requires source tests, native Linux/Windows/macOS package checks, a real CPU-model RC-branch push run and interactive GUI acceptance for the exact final commit. The release workflow verifies exact-SHA CPU evidence and immutable tag identity before publication; interactive acceptance is an operator prerequisite.
 
 Resolve the final commit from this release's tag and inspect its [Actions runs](https://github.com/smart-tinker/the_unfinished_shapes/actions). The evidence above predates final assembly and is not a claim that those final checks have already passed. Final results must be recorded against the accepted SHA before publishing that same unchanged commit.

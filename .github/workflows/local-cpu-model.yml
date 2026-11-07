@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'tools/local-model-e2e.mjs'
+      - 'tools/build-acceptance.mjs'
+      - 'test/build-acceptance.test.mjs'
       - 'tools/cpu-evidence.mjs'
       - 'tools/model-diagnostics.mjs'
       - 'test/model-diagnostics.test.mjs'

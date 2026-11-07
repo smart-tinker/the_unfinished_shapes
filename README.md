@@ -73,3 +73,5 @@ A successful build alone is not a security review. Do not run player-submitted c
 - No auto-updates, automatic clone/install flow, or production deployment. Users clone/download the repository and supply paths.
 - Existing Codex permissions remain meaningful. Game chat cannot silently approve shell commands or server changes.
 - Local game data is separate from Git. Back it up before upgrading world schemas.
+
+CPU-model acceptance validates every construction request and its persisted object: exact requested parameters, ownership, unique IDs and matching counts. Multiple valid construction calls execute independently; no duplicate-suppression guard is installed. At least one genuine construction is required.
