@@ -92,7 +92,7 @@ export class CodexBridge extends EventEmitter {
       child.stdin.on('error', () => { if (this.process === child) this.fail(new Error('Codex input stream closed.')); });
       child.on('error', () => { if (this.process === child) this.fail(new Error('Could not start the Codex executable.')); });
       child.on('exit', (code) => { if (this.process === child) this.fail(new Error(`Codex exited (${code ?? 'signal'}).`)); });
-      await this.request('initialize', { clientInfo: { name: 'the_unfinished_shapes', title: 'The Unfinished Shapes', version: '0.1.0-rc.2' }, capabilities: { experimentalApi: true } });
+      await this.request('initialize', { clientInfo: { name: 'the_unfinished_shapes', title: 'The Unfinished Shapes', version: '0.1.0-rc.3' }, capabilities: { experimentalApi: true } });
       this.write({ method: 'initialized', params: {} });
       let selected;
       if (threadId && !newGameThread) {

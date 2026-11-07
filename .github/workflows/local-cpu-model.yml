@@ -12,6 +12,8 @@ on:
       - 'src/world.mjs'
       - 'src/server.mjs'
       - '.github/workflows/local-cpu-model.yml'
+  push:
+    branches: ['release/**']
   workflow_dispatch:
 permissions:
   contents: read
