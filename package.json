@@ -1,0 +1,41 @@
+{
+  "name": "the-unfinished-shapes",
+  "version": "0.1.0-rc.1",
+  "description": "A shared 3D construction world with your own Codex companion",
+  "main": "src/main.mjs",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "start": "electron .",
+    "server": "node src/server.mjs",
+    "test": "node --test",
+    "check": "node --check src/main.mjs && node --check src/renderer.mjs && node --test",
+    "package:linux": "electron-packager . TheUnfinishedShapes --platform=linux --arch=x64 --out=dist --overwrite --ignore=^/test --ignore=^/dist",
+    "package:win": "electron-packager . TheUnfinishedShapes --platform=win32 --arch=x64 --out=dist --overwrite --ignore=^/test --ignore=^/dist"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/smart-tinker/the_unfinished_shapes.git"
+  },
+  "keywords": [],
+  "author": "",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/smart-tinker/the_unfinished_shapes/issues"
+  },
+  "homepage": "https://github.com/smart-tinker/the_unfinished_shapes#readme",
+  "private": true,
+  "dependencies": {
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^45.2.3",
+    "playwright-core": "^1.65.0"
+  },
+  "overrides": {
+    "glob": "^14.0.2",
+    "minimatch": "^11.0.1"
+  }
+}

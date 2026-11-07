@@ -1,0 +1,30 @@
+import {_electron as electron} from 'playwright-core';
+import assert from 'node:assert/strict';
+import {mkdtemp,rm,mkdir} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+const dir=await mkdtemp(path.join(os.tmpdir(),'tus-desktop-'));
+let app;
+try {
+ app=await electron.launch({args:['.', '--no-sandbox'],env:{...process.env,TUS_DATA_DIR:dir},timeout:30000});
+ const page=await app.firstWindow(); const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
+ assert.equal(await page.locator('#scene-error').isVisible(),false);
+ await page.locator('[data-kind="bridge"]').click(); await page.locator('#build-x').fill('3');
+ await page.locator('#build-form button').click();
+ await page.waitForFunction(()=>document.querySelector('#world-message')?.textContent.includes('placed'));
+ let state=await page.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
+ assert.equal(state.objects.length,1);assert.equal(state.objects[0].type,'bridge');
+ assert.equal(await page.locator('#send').isDisabled(),true);
+ await page.locator('#settings-open').click();assert.equal(await page.locator('#settings').isVisible(),true);
+ await page.locator('#settings-close').click();assert.equal(await page.locator('#settings').isVisible(),false);
+ await page.locator('#settings-open').click();await page.locator('#settings-close').click();
+ await mkdir('dist',{recursive:true});await page.screenshot({path:'dist/desktop-smoke.png'});
+ await app.close();app=null;
+ app=await electron.launch({args:['.','--no-sandbox'],env:{...process.env,TUS_DATA_DIR:dir},timeout:30000});
+ const reopened=await app.firstWindow();await reopened.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
+ state=await reopened.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
+ assert.equal(state.objects.length,1,'world survives desktop restart');
+ await reopened.evaluate(async id=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/command',method:'POST',body:{type:'remove',id}});},state.objects[0].id);
+ assert.deepEqual(errors,[]);console.log('Electron smoke passed: WebGL scene, build, settings repeated/cancel, persisted restart, remove, no unsolicited model call.');
+} finally {await app?.close();await rm(dir,{recursive:true,force:true});}

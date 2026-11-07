@@ -1,0 +1,48 @@
+name: Validate
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: npm run check
+      - run: xvfb-run --auto-servernum node scripts/electron-smoke.mjs
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: npm run package:linux && npm run package:win
+      - name: Archive portable clients
+        run: |
+          cd dist
+          tar -czf TheUnfinishedShapes-0.1-rc1-linux-x64.tar.gz TheUnfinishedShapes-linux-x64
+          zip -qr TheUnfinishedShapes-0.1-rc1-win32-x64.zip TheUnfinishedShapes-win32-x64
+          sha256sum *.tar.gz *.zip > SHA256SUMS
+      - name: Publish tested prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v0.1.0-rc1 dist/*.tar.gz dist/*.zip dist/SHA256SUMS --target "$GITHUB_SHA" --title "The Unfinished Shapes 0.1-rc1" --prerelease --notes-file docs/RELEASE-0.1-rc1.md
