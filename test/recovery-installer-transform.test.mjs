@@ -5,7 +5,7 @@ for(const ending of ['LF','CRLF'])test(`${ending}: only verified legacy launches
  assert.equal((result.match(/await launch\(verifiedLegacyExe\)/g)||[]).length,2);
  assert.match(result,/if \(verifiedLegacyExe && executablePath === verifiedLegacyExe\)/);
  assert.ok(result.indexOf("'released RC1 checksum'")<result.indexOf('verifiedLegacyExe = path.join(extracted'));
- assert.match(result,/else \{\n    await assertSmokeGraphics\(page, process.platform\);/);
+ assert.match(result,/else \{\n    await graphicsObserver.verify\(\(\) => assertSmokeGraphics\(page, process.platform\)\);/);
  assert.match(result,/launch\(path.join\(installDir, 'TheUnfinishedShapes.exe'\)\)/);
  assert.equal((result.match(/page = await launch\(installedExe\);/g)||[]).length,2);
  assert.match(result,/5ae62bdb9b61ae2a6c4317ec55c9a0aa66cb6621866c41293bdae7d3e633d110/);

@@ -9,13 +9,18 @@ export function assertLegacySnapshot(saved, objects, built, fixture) {
 export function recoveryInstallerSmoke(source) {
  let script=source.replace(/\r\n/g,'\n');
  const replace=(old,next)=>{assert.equal(script.split(old).length,2,`Expected one exact recovery transform: ${old.slice(0,90)}`);script=script.replace(old,next);};
- replace('async function launch(executablePath) {', 'let verifiedLegacyExe;\nasync function launch(executablePath) {');
+ replace('async function launch(executablePath) {', 'let verifiedLegacyExe; let rc3LaunchCount = 0;\nasync function launch(executablePath) {');
+ replace('  const page = await instance.firstWindow();', `  const legacy = verifiedLegacyExe && executablePath === verifiedLegacyExe;
+  const stage = legacy ? 'rc1-fixture' : ['clean-rc3', 'migrated-rc3', 'reinstall-rc3'][rc3LaunchCount++] || 'unexpected-rc3-launch';
+  const graphicsObserver = legacy ? null : await observeInstallerLaunch(instance, stage);
+  const page = await instance.firstWindow();
+  await graphicsObserver?.attachPage(page);`);
  replace("  await page.waitForFunction(() => document.querySelector('#connection')?.textContent.includes('World connected'), null, { timeout: 30000 });\n  assert.equal(await page.locator('#scene-error').isVisible(), false, 'WebGL scene must render');",`  if (verifiedLegacyExe && executablePath === verifiedLegacyExe) {
     // RC1 supplies real migration data, not graphics acceptance for this release.
     await page.waitForFunction(() => typeof window.tus?.loadSettings === 'function' && typeof window.tus?.request === 'function', null, { timeout: 30000 });
     await page.evaluate(async () => { const s = await window.tus.loadSettings(); const state = await window.tus.request({ ...s, path: '/state' }); if (!Array.isArray(state.objects)) throw Error('RC1 world IPC unavailable'); });
   } else {
-    await assertSmokeGraphics(page, process.platform);
+    await graphicsObserver.verify(() => assertSmokeGraphics(page, process.platform));
   }`);
  replace("  page = await launch(path.join(extracted, 'TheUnfinishedShapes-win32-x64', 'TheUnfinishedShapes.exe'));",`  verifiedLegacyExe = path.join(extracted, 'TheUnfinishedShapes-win32-x64', 'TheUnfinishedShapes.exe');
   page = await launch(verifiedLegacyExe);`);
@@ -41,5 +46,5 @@ export function recoveryInstallerSmoke(source) {
   await verifyLegacyIPC(page); await verifyLegacyDisk();
   await close(); await verifyLegacyDisk();
   console.log('Checksum-verified RC1 migration fixture generated and reloaded through public IPC; legacy graphics are not release acceptance.');`);
- return "import {assertLegacySnapshot} from './recovery-installer-transform.mjs';\nimport {assertSmokeGraphics} from './smoke-graphics.mjs';\n"+script;
+ return "import {observeInstallerLaunch} from './installer-graphics-observer.mjs';\nimport {assertLegacySnapshot} from './recovery-installer-transform.mjs';\nimport {assertSmokeGraphics} from './smoke-graphics.mjs';\n"+script;
 }

@@ -5,6 +5,8 @@ on:
       - '.github/workflows/rc3-recovery-validation.yml'
       - 'scripts/recovery-provenance.mjs'
       - 'scripts/recovery-installer-transform.mjs'
+      - 'scripts/installer-graphics-observer.mjs'
+      - 'test/installer-graphics-observer.test.mjs'
       - 'test/recovery-installer-transform.test.mjs'
       - 'scripts/electron-smoke.mjs'
       - 'scripts/smoke-graphics.mjs'

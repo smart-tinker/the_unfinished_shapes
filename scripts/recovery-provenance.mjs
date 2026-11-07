@@ -25,7 +25,7 @@ assert.equal(git('rev-parse','HEAD'),sha);assert.equal(git('rev-parse','HEAD^{tr
 assert.equal(git('diff','HEAD','--'),'','Tracked candidate content must remain unchanged');
 if(process.argv[2]==='prepare'){
  await mkdir(harness);await symlink(path.join(source,'node_modules'),path.join(harness,'node_modules'),process.platform==='win32'?'junction':'dir');
- for(const name of ['electron-smoke.mjs','smoke-graphics.mjs','recovery-installer-transform.mjs'])await copyFile(new URL(name,import.meta.url),path.join(harness,name));
+ for(const name of ['electron-smoke.mjs','smoke-graphics.mjs','recovery-installer-transform.mjs','installer-graphics-observer.mjs'])await copyFile(new URL(name,import.meta.url),path.join(harness,name));
  let installer=await readFile(path.join(source,'scripts/windows-installer-smoke.mjs'),'utf8');
  installer=recoveryInstallerSmoke(installer);
  await writeFile(path.join(harness,'windows-installer-smoke.mjs'),installer);
