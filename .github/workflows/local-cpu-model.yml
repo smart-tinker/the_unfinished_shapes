@@ -39,9 +39,9 @@ jobs:
           curl --fail --location --connect-timeout 20 --max-time 120 --max-filesize 25000000 \
             https://github.com/ggml-org/llama.cpp/releases/download/b12189/llama-b12189-bin-ubuntu-x64.tar.gz -o llama.tar.gz
           echo 'c446a7ba4df3c3b1cc880a734fbff586d6d34b9cebc09e151754813b94ded8c9  llama.tar.gz' | sha256sum --check --strict
-          curl --fail --location --connect-timeout 20 --max-time 180 --max-filesize 530000000 \
-            https://registry.ollama.ai/v2/library/qwen3/blobs/sha256:7f4030143c1c477224c5434f8272c662a8b042079a0a584f0a27a1684fe2e1fa -o qwen3-0.6b.gguf
-          echo '7f4030143c1c477224c5434f8272c662a8b042079a0a584f0a27a1684fe2e1fa  qwen3-0.6b.gguf' | sha256sum --check --strict
+          curl --fail --location --connect-timeout 20 --max-time 180 --max-filesize 1600000000 \
+            https://registry.ollama.ai/v2/library/qwen3/blobs/sha256:3d0b790534fe4b79525fc3692950408dca41171676ed7e21db57af5c65ef6ab6 -o qwen3-1.7b.gguf
+          echo '3d0b790534fe4b79525fc3692950408dca41171676ed7e21db57af5c65ef6ab6  qwen3-1.7b.gguf' | sha256sum --check --strict
           tar -xf codex.tar.gz
           tar -xf llama.tar.gz
           ./codex-x86_64-unknown-linux-musl --version
@@ -50,9 +50,9 @@ jobs:
         env:
           TUS_TEST_CODEX: ${{ runner.temp }}/tus-cpu/codex-x86_64-unknown-linux-musl
           TUS_TEST_LLAMA: ${{ runner.temp }}/tus-cpu/llama-b12189/llama-server
-          TUS_TEST_GGUF: ${{ runner.temp }}/tus-cpu/qwen3-0.6b.gguf
+          TUS_TEST_GGUF: ${{ runner.temp }}/tus-cpu/qwen3-1.7b.gguf
           TUS_TEST_REPORT: ${{ runner.temp }}/tus-cpu/report.json
-          TUS_TEST_TIMEOUT_MS: '300000'
+          TUS_TEST_TIMEOUT_MS: '450000'
         run: node tools/local-model-e2e.mjs
       - name: Include evidence in run summary without artifact storage
         if: always()

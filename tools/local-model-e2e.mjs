@@ -34,8 +34,9 @@ let bridge,timer,modelProcess,codexProcess;
 const cpuInitialization=[];
 let modelLog='';
 const events=[];const started=Date.now();let failure;
+let assistantText='',turnStatus='not_started';
 try {
- modelProcess=spawn(llamaPath,['--model',modelPath,'--alias',model,'--host','127.0.0.1','--port','11445','--n-gpu-layers','0','--ctx-size','16384','--threads','2','--parallel','1','--jinja','--reasoning-budget','0','--temp','0','--seed','42'],{stdio:['ignore','pipe','pipe']});
+ modelProcess=spawn(llamaPath,['--model',modelPath,'--alias',model,'--host','127.0.0.1','--port','11445','--n-gpu-layers','0','--ctx-size','16384','--threads','4','--parallel','1','--jinja','--reasoning-budget','0','--temp','0','--seed','42'],{stdio:['ignore','pipe','pipe']});
  let modelExit;
  modelProcess.once('error',error=>{modelExit=error.message;});
  modelProcess.once('exit',code=>{modelExit=`exit ${code}`;});
@@ -71,7 +72,11 @@ try {
   } else if(event.type==='approval') {
    rejectDone(new Error(`Live model requested unexpected approval: ${event.method}`));
   } else if(event.type==='disconnected') rejectDone(new Error(event.message));
-  else if(event.type==='notification' && event.method==='turn/completed') {
+  else if(event.type==='notification' && event.method==='item/completed' && event.params?.item?.type==='agentMessage') {
+   // Only synthetic test assistant output, never reasoning or arbitrary tool output.
+   assistantText=String(event.params.item.text ?? '').replaceAll(token,'[redacted]').slice(0,4000);
+  } else if(event.type==='notification' && event.method==='turn/completed') {
+   turnStatus=event.params?.turn?.status ?? 'unknown';
    if(event.params?.turn?.status==='failed') rejectDone(new Error(`Model turn failed: ${JSON.stringify(event.params.turn.error)}`));else resolveDone();
   }
  });
@@ -80,7 +85,11 @@ try {
  const design={command:{type:'build',objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#c8a570'}};
  await bridge.send(`Build this supplied design in the game. Call world_command exactly once with these exact JSON arguments: ${JSON.stringify(design)}. The command type must be build, not move. Do not call shell tools, write code, or change the design. After world_command succeeds, say done. /no_think`);
  await done;
- const state=JSON.parse(await readFile(path.join(dir,'world.json'),'utf8'));
+ let savedWorld;
+ try {savedWorld=await readFile(path.join(dir,'world.json'),'utf8');}
+ catch(error){if(error.code!=='ENOENT')throw error;}
+ assert.ok(savedWorld,'No world state was persisted: the model did not perform a successful game action.');
+ const state=JSON.parse(savedWorld);
  assert.equal(state.objects.length,1,'Expected exactly one persisted object, not a prose claim.');
  assert.equal(state.objects[0].type,'block');assert.equal(state.objects[0].ownerId,'cpu-test-builder');
  assert.deepEqual(state.objects[0].position,{x:3,y:1,z:4});
@@ -90,12 +99,12 @@ try {
  assert.equal(commands[0].success,true,'Real-model game command did not succeed.');
  assert.deepEqual(commands[0].arguments,design,'Model changed the supplied build design.');
  assert.match(cpuInitialization.join('\n'),/CPU.*(buffer|model)|model.*CPU/i,'CPU model allocation not recorded.');
- const evidence={status:'passed',transport:'real Codex app-server → local llama.cpp Responses API → world dynamic tool → persisted server state',model,modelDigest,cpuOnly:true,cpuEvidence:cpuInitialization,elapsedMs:Date.now()-started,toolCalls:events,worldRevision:state.revision,object:{type:state.objects[0].type,position:state.objects[0].position,ownerId:state.objects[0].ownerId}};
+ const evidence={status:'passed',transport:'real Codex app-server → local llama.cpp Responses API → world dynamic tool → persisted server state',model,modelDigest,cpuOnly:true,cpuEvidence:cpuInitialization,elapsedMs:Date.now()-started,toolCalls:events,turnStatus,assistantText,worldRevision:state.revision,object:{type:state.objects[0].type,position:state.objects[0].position,ownerId:state.objects[0].ownerId}};
  console.log(JSON.stringify(evidence,null,2));
  if(process.env.TUS_TEST_REPORT) await writeFile(path.resolve(process.env.TUS_TEST_REPORT),JSON.stringify(evidence,null,2)+'\n');
 } catch(error) {
  failure=error;
- const evidence={status:'failed',model,modelDigest,elapsedMs:Date.now()-started,error:error.message,toolCalls:events,cpuInitialization:cpuInitialization};
+ const evidence={status:'failed',model,modelDigest,elapsedMs:Date.now()-started,error:error.message,toolCalls:events,turnStatus,assistantText,cpuInitialization:cpuInitialization};
  console.error(JSON.stringify(evidence));
  if(process.env.TUS_TEST_REPORT) await writeFile(path.resolve(process.env.TUS_TEST_REPORT),JSON.stringify(evidence,null,2)+'\n');
 }

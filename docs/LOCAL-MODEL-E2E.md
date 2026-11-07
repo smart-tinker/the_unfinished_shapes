@@ -7,10 +7,10 @@ This is a live model acceptance test, not a mock and not part of `npm test`. It 
 - An installed Codex CLI with working app-server sandbox support.
 - Official CPU `llama-server` with `/v1/responses` and tool-call support.
 - A downloaded tool-capable GGUF model. A small model may fail to use the tools correctly; this is a failed test, not permission to replace its output with a scripted tool call.
-- About 2 GiB free RAM for a 0.6B model and 16K context, plus Codex/runtime memory.
+- At least 4 GiB free RAM for the 1.7B candidate and 16K context, plus Codex/runtime memory.
 - Loopback networking permitted. This test never changes permissions or disables a sandbox to overcome a denial.
 
-The test starts llama-server on `127.0.0.1:11445` with GPU layers set to zero, two CPU threads and one inference slot. Stop any existing service using that port before running. It creates temporary world/workspace/config directories, uses a fresh isolated Codex config pointing only to the loopback provider, and removes the temporary directories on completion. It does not read or copy the user's Codex credentials or existing conversations. The model server and Codex child are stopped in cleanup.
+The test starts llama-server on `127.0.0.1:11445` with GPU layers set to zero, four CPU threads and one inference slot. Stop any existing service using that port before running. It creates temporary world/workspace/config directories, uses a fresh isolated Codex config pointing only to the loopback provider, and removes the temporary directories on completion. It does not read or copy the user's Codex credentials or existing conversations. The model server and Codex child are stopped in cleanup.
 
 ## Run
 
@@ -55,3 +55,15 @@ This is a distinct acceptance run on a clean supported executor, not a workaroun
 Hosted run `42394553433` reached actual local-model inference and the dynamic game tool. It failed semantic acceptance: the model issued `world_command` with a `move` command at the requested coordinates, not a `build`. The server correctly accepted the movement, but zero objects were saved. This is **not** a passing build test.
 
 The next check gives the model the exact build-design JSON, with temperature zero and fixed seed, while retaining and strengthening object, size, color, ownership and exact-command assertions. This tests applying a supplied design, not unrestricted natural-language planning. It also preserves CPU initialization evidence separately from rolling runtime logs and waits for child shutdown before temporary-directory cleanup. These changes require a new hosted result; a 0.6B model may still prove inadequate.
+
+### Stronger bounded candidate after the second semantic failure
+
+Hosted run `42394937741` completed after about 110 seconds with no dynamic tool calls and no saved world file. Qwen3 0.6B has therefore failed both attempts; there is no claim that its prose constituted a successful action.
+
+The next workflow candidate is **Qwen3 1.7B**, model-layer size **1,359,279,776 bytes**, pinned SHA-256 **`3d0b790534fe4b79525fc3692950408dca41171676ed7e21db57af5c65ef6ab6`**, verified from the public registry's `library/qwen3:1.7b` manifest. Download URL:
+
+`https://registry.ollama.ai/v2/library/qwen3/blobs/sha256:3d0b790534fe4b79525fc3692950408dca41171676ed7e21db57af5c65ef6ab6`
+
+The download has a 1.6 GB size cap and 180-second limit. Inference uses four CPU threads, temperature zero, a fixed seed and a 450-second budget within the unchanged 15-minute job limit. The exact build-design and persistence assertions remain strict. The report now captures up to 4,000 characters of the synthetic assistant's final message and the turn status, never reasoning or arbitrary tool output, to explain semantic failures. A missing world file is reported as an acceptance assertion rather than an unexplained filesystem error.
+
+This candidate has been prepared, not yet validated. No additional local run was attempted against the blocked sandbox route.
