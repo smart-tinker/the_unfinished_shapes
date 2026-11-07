@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-const workflow=readFileSync(new URL('../.github/workflows/ci.yml',import.meta.url),'utf8');
+const source=readFileSync(new URL('../.github/workflows/ci.yml',import.meta.url),'utf8');
+// Checkout line endings must not change any publication-gate assertion.
+for(const lineEnding of ['LF','CRLF']) {
+ const fixture=source.replace(/\r\n/g,'\n').replace(/\n/g,lineEnding==='CRLF'?'\r\n':'\n');
+ const workflow=fixture.replace(/\r\n/g,'\n');
 const release=workflow.split('  release-windows:\n')[1].split('  release-macos:\n')[0];
 const condition=release.match(/^    if: (.+)$/m)[1];
-test('publication requires explicit exact-branch push or opted-in RC dispatch',()=>{
+test(`${lineEnding}: publication requires explicit exact-branch push or opted-in RC dispatch`,()=>{
  const allows=(event,ref,opt=false,privateRepo=false)=>runInNewContext(condition,{github:{event:{repository:{private:privateRepo}},event_name:event,ref},inputs:{publish_rc:opt}},{timeout:100});
  assert.equal(allows('push','refs/heads/publish/0.1.0-rc3'),true);
  assert.equal(allows('workflow_dispatch','refs/heads/release/0.1.0-rc3',true),true);
@@ -18,7 +22,7 @@ test('publication requires explicit exact-branch push or opted-in RC dispatch',(
  assert.equal(allows('push','refs/heads/publish/0.1.0-rc3',false,true),false);
  assert.equal(allows('workflow_dispatch','refs/heads/release/0.1.0-rc3',true,true),false);
 });
-test('both routes retain RC-head, exact CPU-run, platform and immutable tag gates',()=>{
+test(`${lineEnding}: both routes retain RC-head, exact CPU-run, platform and immutable tag gates`,()=>{
  assert.match(workflow,/branches: \[main, 'release\/\*\*', 'publish\/0\.1\.0-rc3'\]/);
  assert.match(release,/needs: \[test, windows-installer, macos-native\]/);
  assert.match(release,/git\/ref\/heads\/release\/0\.1\.0-rc3/);
@@ -29,7 +33,7 @@ test('both routes retain RC-head, exact CPU-run, platform and immutable tag gate
  assert.match(workflow,/node \.\.\/scripts\/verify-release-tag\.mjs "\$TAG"\n          gh release edit/);
 });
 
-test('both publication routes serialize the entire workflow without cancellation',()=>{
+test(`${lineEnding}: both publication routes serialize the entire workflow without cancellation`,()=>{
  const group=workflow.match(/^  group: \$\{\{ (.+) \}\}$/m)[1];
  const cancel=workflow.match(/^  cancel-in-progress: \$\{\{ (.+) \}\}$/m)[1];
  const evaluate=(expression,event,ref,opt=false)=>runInNewContext(expression,{github:{event_name:event,ref},inputs:{publish_rc:opt},format:(pattern,value)=>pattern.replace('{0}',value)},{timeout:100});
@@ -40,10 +44,12 @@ test('both publication routes serialize the entire workflow without cancellation
  }
 });
 
-test('CPU gate accepts exact RC push only, not synthetic PR or foreign branch evidence',()=>{
+test(`${lineEnding}: CPU gate accepts exact RC push only, not synthetic PR or foreign branch evidence`,()=>{
  const predicate=release.match(/r\.some\(x=>(.+?)\)\)/)[1];
  const sha='a'.repeat(40),base={path:'.github/workflows/local-cpu-model.yml',event:'push',head_branch:'release/0.1.0-rc3',head_sha:sha,status:'completed',conclusion:'success'};
  const accepts=x=>runInNewContext(predicate,{x,process:{env:{GITHUB_SHA:sha}}},{timeout:100});
  assert.equal(accepts(base),true);
  for(const overrides of [{event:'pull_request'},{event:'workflow_dispatch'},{head_branch:'feature/tools'},{head_branch:'publish/0.1.0-rc3'},{head_sha:'b'.repeat(40)},{status:'in_progress'},{conclusion:'failure'},{path:'.github/workflows/other.yml'}])assert.equal(accepts({...base,...overrides}),false,JSON.stringify(overrides));
 });
+
+}
