@@ -16,3 +16,17 @@ No system graphics packages, security settings or sandbox settings were changed 
 Keep ordinary rendering as the default. Do not silently add `--no-sandbox`, disable web security, ignore security warnings, or enable unsafe software-rendering flags to obtain a green test. If a test environment requires security-sensitive changes, stop and obtain the specific approval rather than treating them as an ordinary graphics fallback.
 
 Native macOS and Windows package checks are separate acceptance gates. A successful Linux software-rendering test does not establish either platform's compatibility. Record renderer, tested architecture, visual actions and any warnings in release evidence.
+
+## Reproducing the explicit Linux desktop check
+
+Use the verified Linux release executable (or a candidate built from the exact accepted commit). Close any running copy first: the single-instance guard otherwise keeps its original graphics settings.
+
+Start it from the desktop with these application arguments:
+
+```
+TheUnfinishedShapes --use-gl=angle --use-angle=swiftshader
+```
+
+This is an explicit, temporary diagnostic launch, not a change to the default renderer or system configuration. Keep the Chromium warning visible in the test record. Do not add the unsafe opt-in flag suggested by that warning. On a version where the above no longer creates a context, record failure rather than weakening security.
+
+Acceptance steps: verify the scene and player; create and select a shape; edit its position and size and observe both the visual result and server confirmation; remove it; restart and verify persisted state/settings. Separately run the real-model test and platform CI. Record the exact commit/build used; a preview from an uncommitted worktree is not final-release acceptance.
