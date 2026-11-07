@@ -1,11 +1,12 @@
 import {_electron as electron} from 'playwright-core';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,mkdir,writeFile,access} from 'node:fs/promises';
+import {mkdtemp,rm,mkdir,writeFile,access,realpath} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 const dir=await mkdtemp(path.join(os.tmpdir(),'tus-desktop-'));
 const fakeBin=path.join(dir,'bin'),fakeCodex=path.join(fakeBin,'codex'),marker=path.join(dir,'unexpected-codex-run');
 await mkdir(fakeBin);await writeFile(fakeCodex,`#!/bin/sh\ntouch '${marker}'\nexit 99\n`,{mode:0o755});
+const expectedCodexPath=await realpath(fakeCodex);
 const testEnv={...process.env,TUS_DATA_DIR:dir,PATH:fakeBin+path.delimiter+process.env.PATH};
 const packagedExecutable=process.env.TUS_SMOKE_EXECUTABLE;
 // Preserve the existing Linux CI exception only; native macOS uses its normal sandbox.
@@ -29,8 +30,8 @@ try {
  await page.locator('#settings-close').click();assert.equal(await page.locator('#settings').isVisible(),false);
  await page.locator('#settings-open').click();
  await page.locator('#find-codex').click();
- const candidate=page.locator('.codex-candidate').filter({hasText:fakeCodex});await candidate.waitFor();await candidate.click();
- assert.equal(await page.locator('#codex').inputValue(),fakeCodex);
+ const candidate=page.locator('.codex-candidate').filter({hasText:expectedCodexPath});await candidate.waitFor();await candidate.click();
+ assert.equal(await page.locator('#codex').inputValue(),expectedCodexPath);
  await page.locator('#workspace').fill(dir);await page.locator('#save-world').click();
  await page.waitForFunction(()=>document.querySelector('#settings-message')?.textContent.includes('saved'));
  await page.locator('#settings-close').click();
@@ -42,7 +43,7 @@ try {
  const reopened=await app.firstWindow();reopened.on('pageerror',e=>errors.push(e.message));await reopened.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
  state=await reopened.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
  assert.equal(state.objects.length,1,'world survives desktop restart');
- const restored=await reopened.evaluate(()=>window.tus.loadSettings());assert.equal(restored.codexPath,fakeCodex);assert.equal(restored.workspacePath,dir);assert.equal(restored.threadId,'smoke-preserved-game-thread');
+ const restored=await reopened.evaluate(()=>window.tus.loadSettings());assert.equal(restored.codexPath,expectedCodexPath);assert.equal(restored.workspacePath,dir);assert.equal(restored.threadId,'smoke-preserved-game-thread');
  // Removal below exercises the authenticated command API, not canvas selection or the Remove button.
  await reopened.evaluate(async id=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/command',method:'POST',body:{type:'remove',id}});},state.objects[0].id);
  const emptied=await reopened.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});assert.equal(emptied.objects.length,0,'API removal is confirmed by authoritative state read');
