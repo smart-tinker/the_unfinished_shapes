@@ -48,13 +48,43 @@ export function applyCommand(state, actor, command) {
       const object = {id:randomUUID(),type:command.objectType,position,size,color,ownerId:actor.id};
       next.objects.push(object); result = {object}; break;
     }
+    case 'update': {
+      const object = next.objects.find(o => o.id === command.id);
+      if (!object) fail('not_found','Object not found.',404);
+      if (actor.role !== 'admin' && (actor.role !== 'builder' || object.ownerId !== actor.id)) fail('forbidden','Only the owner or an admin may edit this object.',403);
+      const editable = ['position','size','color'];
+      if (Object.keys(command).some(key => !['type','id','expected',...editable].includes(key)) || !editable.some(key => Object.hasOwn(command,key))) fail('invalid_command','Update requires position, size or color; identity and mechanic cannot be changed.');
+      if (Object.hasOwn(command,'expected')) {
+        const expected = command.expected;
+        const changed = editable.filter(key => Object.hasOwn(command,key));
+        if (!expected || typeof expected !== 'object' || Array.isArray(expected) || Object.keys(expected).length !== changed.length || changed.some(key => !Object.hasOwn(expected,key))) fail('invalid_command','Expected values must cover exactly the edited fields.');
+        for (const key of changed) {
+          let matches;
+          if (key === 'color') {
+            if (typeof expected.color !== 'string' || !/^#[a-f0-9]{6}$/i.test(expected.color)) fail('invalid_color','Expected color must be a hex color.');
+            matches = expected.color.toLowerCase() === object.color.toLowerCase();
+          } else {
+            const previous = vector(expected[key],key === 'size');
+            matches = ['x','y','z'].every(axis => previous[axis] === object[key][axis]);
+          }
+          if (!matches) fail('conflict','The object changed since it was read. Refresh it before editing.',409);
+        }
+      }
+      if (Object.hasOwn(command,'position')) object.position = vector(command.position);
+      if (Object.hasOwn(command,'size')) object.size = vector(command.size,true);
+      if (Object.hasOwn(command,'color')) {
+        if (typeof command.color !== 'string' || !/^#[a-f0-9]{6}$/i.test(command.color)) fail('invalid_color','Use a hex color such as #c8a570.');
+        object.color = command.color;
+      }
+      result = {object}; break;
+    }
     case 'remove': {
       const index = next.objects.findIndex(o => o.id === command.id);
       if (index < 0) fail('not_found','Object not found.',404);
       if (actor.role !== 'admin' && (actor.role !== 'builder' || next.objects[index].ownerId !== actor.id)) fail('forbidden','Only the owner or an admin may remove this object.',403);
       next.objects.splice(index,1); break;
     }
-    default: fail('invalid_command','Supported commands: move, build, remove.');
+    default: fail('invalid_command','Supported commands: move, build, update, remove.');
   }
   if (state.revision >= Number.MAX_SAFE_INTEGER) fail('revision_exhausted','World revision limit reached.',409);
   next.revision++;

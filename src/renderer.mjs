@@ -9,6 +9,8 @@ let settingsGeneration = 0;
 let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 1, z: 0 }, meId = null;
 let scene, renderer, camera, controls, player, companion, selectionBox;
 let objectSnapshot = '';
+let inspectorBase = null, inspectorDirty = false, editing = false, role = 'viewer';
+const objectData = new Map();
 const meshes = new Map(), otherPlayers = new Map(), keys = new Set();
 const sceneRoot = new THREE.Group();
 const clock = new THREE.Clock();
@@ -84,20 +86,36 @@ function objectMesh(object) {
   group.position.set(object.position.x, object.position.y, object.position.z); return group;
 }
 function disposeGroup(group) { group.traverse(child => { child.geometry?.dispose(); if (child.material) child.material.dispose(); }); }
-function selectObject(id) {
-  selectedId = id;
+function fillInspector(object) {
+  inspectorBase = object ? structuredClone(object) : null; inspectorDirty = false;
+  $('edit-form').hidden = !object;
+  if (!object) return;
+  for (const field of ['position', 'size']) for (const axis of ['x', 'y', 'z']) $(`edit-${field}-${axis}`).value = object[field][axis];
+  $('edit-color').value = object.color;
+  const canEdit = role === 'admin' || (role === 'builder' && object.ownerId === meId);
+  $('edit-fields').disabled = editing || !canEdit;
+  $('edit-message').textContent = !canEdit ? 'Read-only: you do not have permission to edit this shape.' : 'Changes are checked by the world server.';
+}
+function selectObject(id, fromPoll = false) {
+  if (!fromPoll && id !== selectedId && inspectorDirty && !window.confirm('Discard unapplied changes to this shape?')) return;
+  const changed = id !== selectedId; selectedId = id;
   if (selectionBox) { scene.remove(selectionBox); selectionBox.geometry.dispose(); selectionBox.material.dispose(); selectionBox = null; }
   if (id && meshes.has(id)) { selectionBox = new THREE.BoxHelper(meshes.get(id), '#ffe5a1'); scene.add(selectionBox); }
-  $('selection-label').textContent = id ? `Shape ${id.slice(0, 12)}` : 'No shape selected'; $('remove').disabled = !id;
+  const object = objectData.get(id);
+  $('selection-label').textContent = object ? `${object.type} · ${id.slice(0, 12)}` : 'No shape selected';
+  $('remove').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId));
+  if (changed || !inspectorDirty || !object) fillInspector(object);
+  else if (JSON.stringify(object) !== JSON.stringify(inspectorBase)) $('edit-message').textContent = 'This shape changed on the server. Your unapplied values are preserved; Reset reloads the current shape.';
 }
 function renderWorld(state) {
   if (meId !== state.me.id) { const savedPlayer = state.players.find(p => p.id === state.me.id); if (savedPlayer) playerPosition = { ...savedPlayer.position }; }
-  meId = state.me.id; $('role').textContent = `Role: ${state.me.role}`; $('revision').textContent = `REV ${state.revision}`;
+  meId = state.me.id; role = state.me.role; $('role').textContent = `Role: ${state.me.role}`; $('revision').textContent = `REV ${state.revision}`;
   const nextSnapshot = JSON.stringify(state.objects);
   if (objectSnapshot !== nextSnapshot) {
     for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear();
-    for (const object of state.objects) { const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh); }
-    selectObject(meshes.has(selectedId) ? selectedId : null); worldRevision = state.revision; objectSnapshot = nextSnapshot;
+    objectData.clear();
+    for (const object of state.objects) { objectData.set(object.id, object); const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh); }
+    selectObject(meshes.has(selectedId) ? selectedId : null, true); worldRevision = state.revision; objectSnapshot = nextSnapshot;
   }
   const live = new Set();
   for (const remote of state.players) {
@@ -126,6 +144,30 @@ async function command(body) { const result = await request('/command', 'POST', 
 for (const button of document.querySelectorAll('[data-kind]')) button.addEventListener('click', () => { selectedKind = button.dataset.kind; document.querySelectorAll('[data-kind]').forEach(el => el.classList.toggle('selected', el === button)); });
 $('build-form').addEventListener('submit', async event => { event.preventDefault(); const button = event.submitter; button.disabled = true; try { await command({ type: 'build', objectType: selectedKind, position: { x: Number($('build-x').value), y: selectedKind === 'block' ? 1 : .5, z: Number($('build-z').value) } }); feedback(`${selectedKind[0].toUpperCase() + selectedKind.slice(1)} placed in the shared world.`); } catch (error) { feedback(error.message, true); } finally { button.disabled = false; } });
 $('remove').addEventListener('click', async () => { if (!selectedId) return; const id = selectedId; $('remove').disabled = true; try { await command({ type: 'remove', id }); feedback('Shape removed.'); } catch (error) { feedback(error.message, true); } finally { $('remove').disabled = !selectedId; } });
+$('edit-form').addEventListener('input', () => { inspectorDirty = true; });
+$('edit-reset').addEventListener('click', () => fillInspector(objectData.get(selectedId)));
+$('edit-form').addEventListener('submit', async event => {
+  event.preventDefault(); if (!selectedId || !inspectorBase || editing) return;
+  const id = selectedId, baseline = inspectorBase, current = objectData.get(id), body = { type: 'update', id };
+  for (const field of ['position', 'size']) {
+    const value = Object.fromEntries(['x', 'y', 'z'].map(axis => [axis, Number($(`edit-${field}-${axis}`).value)]));
+    if (JSON.stringify(value) !== JSON.stringify(baseline[field])) body[field] = value;
+  }
+  if ($('edit-color').value !== baseline.color) body.color = $('edit-color').value;
+  const fields = Object.keys(body).filter(key => !['type', 'id'].includes(key));
+  if (!fields.length) { $('edit-message').textContent = 'No changes to apply.'; return; }
+  if (!current || fields.some(field => JSON.stringify(current[field]) !== JSON.stringify(baseline[field]))) { $('edit-message').textContent = 'A field you edited also changed on the server. Reset to reload it before applying.'; return; }
+  body.expected = Object.fromEntries(fields.map(field => [field, structuredClone(baseline[field])]));
+  inspectorDirty = true; editing = true; $('edit-fields').disabled = true; const generation = settingsGeneration;
+  try {
+    const result = await command(body);
+    if (generation !== settingsGeneration) return;
+    if (result.object) objectData.set(id, result.object);
+    if (selectedId === id) { inspectorDirty = false; fillInspector(objectData.get(id)); $('edit-message').textContent = 'Changes saved on the server.'; }
+    feedback('Shape updated on the server.');
+  } catch (error) { if (generation === settingsGeneration) { await poll(); if (generation !== settingsGeneration) return; if (selectedId === id) $('edit-message').textContent = error.message + ' Your unapplied values are preserved. Reset to reload the server values.'; feedback(error.message, true); } }
+  finally { editing = false; const object = objectData.get(selectedId); $('edit-fields').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId)); }
+});
 window.addEventListener('keydown', event => { if (!['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) keys.add(event.key.toLowerCase()); });
 window.addEventListener('keyup', event => keys.delete(event.key.toLowerCase())); window.addEventListener('blur', () => keys.clear());
 $('find-codex').addEventListener('click', async () => {
@@ -152,7 +194,7 @@ async function saveSettings() {
   settings = next; settingsGeneration++;
   const { token, ...persisted } = settings; await bridge.saveSettings(persisted);
   worldRevision = -1; objectSnapshot = ''; meId = null; lastPosition = '';
-  if (scene) { selectObject(null); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
+  if (scene) { selectObject(null, true); objectData.clear(); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
   await poll();
 }
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('settings-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('settings-message').textContent = error.message; } });

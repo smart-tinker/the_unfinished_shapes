@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { realpath } from 'node:fs/promises';
-import { CodexBridge } from '../src/codex.mjs';
+import { CodexBridge, WORLD_TOOLS } from '../src/codex.mjs';
 
 const cwd = await realpath(process.cwd());
 function fixture(handler = () => undefined, timeoutMs = 500) {
@@ -154,4 +154,12 @@ test('tool calls cannot run outside an explicit turn, from another thread or nam
     assert.equal(f.requests.at(-1).result.success,false);
   }
   assert.equal(events.length,0);f.bridge.stop();
+});
+
+test('world tool schema advertises partial update without ownership mutation',()=>{
+ const variants=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command.oneOf;
+ const update=variants.find(v=>v.properties.type.const==='update');
+ assert.ok(update);assert.deepEqual(update.required,['type','id','expected']);
+ assert.deepEqual(update.anyOf,[{required:['position']},{required:['size']},{required:['color']}]);
+ assert.equal(update.additionalProperties,false);assert.equal(update.properties.ownerId,undefined);assert.equal(update.properties.objectType,undefined);
 });
