@@ -1,3 +1,4 @@
+import {pathToFileURL} from 'node:url';
 // Diagnostic-only: real RC1 data, exact RC3 package, fresh test-owned profiles.
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
@@ -13,7 +14,7 @@ assert.equal((await run('git',['-C',root,'rev-parse','HEAD'])).stdout.trim(),'86
 assert.equal((await run('git',['-C',root,'rev-parse','HEAD^{tree}'])).stdout.trim(),'e78ce3b60655514fccd8426c0c7b32de710b72be');
 assert.equal((await run('git',['-C',root,'diff','HEAD','--'])).stdout,'');
 const require=createRequire(path.join(root,'package.json')),{_electron:electron}=require('playwright-core');
-const {extractFile}=await import(require.resolve('@electron/asar'));
+const {extractFile}=await import(pathToFileURL(require.resolve('@electron/asar')).href);
 const binary=path.join(root,'dist/TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe');
 const archive=path.join(root,'dist/TheUnfinishedShapes-win32-x64/resources/app.asar');
 for(const entry of await readdir(path.join(root,'src'),{recursive:true,withFileTypes:true}))if(entry.isFile()){

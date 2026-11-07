@@ -1,3 +1,4 @@
+import {pathToFileURL} from 'node:url';
 // Validation-only recovery for immutable rc3. No network or release mutations.
 import {execFileSync} from 'node:child_process';
 import {readFile,mkdir,copyFile,symlink,writeFile,readdir} from 'node:fs/promises';
@@ -29,7 +30,7 @@ if(process.argv[2]==='prepare'){
  installer=recoveryInstallerSmoke(installer);
  await writeFile(path.join(harness,'windows-installer-smoke.mjs'),installer);
 }else if(process.argv[2]==='report'){
- const require=createRequire(path.join(source,'package.json')),{extractFile}=await import(require.resolve('@electron/asar'));
+ const require=createRequire(path.join(source,'package.json')),{extractFile}=await import(pathToFileURL(require.resolve('@electron/asar')).href);
  const platform=process.platform,arch=process.arch,folder=path.join(source,'dist',`TheUnfinishedShapes-${platform}-${arch}`);
  const archive=platform==='darwin'?path.join(folder,'TheUnfinishedShapes.app/Contents/Resources/app.asar'):path.join(folder,'resources/app.asar');
  for(const item of await readdir(path.join(source,'src'),{recursive:true,withFileTypes:true}))if(item.isFile()){
