@@ -79,3 +79,44 @@ test('late prior-turn and foreign-thread results cannot enter a new request acti
   assert.equal(h.element('agent-actions').children.length,1);
   assert.equal(h.element('agent-actions').children[0].dataset.status,'running');
 });
+
+test('flat world_build shows requested construction type/position, then server-confirmed object', () => {
+  const h = activityHarness(), design = { objectType: 'port', position: { x: 12, y: 0.5, z: -8 }, size: { x: 12, y: 1, z: 8 }, color: '#c8a570' };
+  h.tool({ type: 'tool-start', name: 'world_build', arguments: design });
+  assert.equal(h.element('agent-intent').textContent, 'Build port at (12, 0.5, -8) requested.');
+  assert.equal(h.element('agent-actions').children[0].dataset.status, 'running');
+  assert.doesNotMatch(h.element('agent-actions').children[0].textContent, /confirmed|Built/);
+  h.tool({ type: 'tool-result', name: 'world_build', arguments: design, result: { success: true, contentItems: [{ type: 'inputText', text: JSON.stringify({ revision: 9, object: { id: 'port-1', type: 'port', position: { x: 12, y: 0.5, z: -8 } } }) }] } });
+  assert.equal(h.element('agent-actions').children[0].textContent, 'Built port at (12, 0.5, -8) · server confirmed · revision 9');
+});
+test('world_build result uses returned object coordinates, not the proposed design', () => {
+  const h = activityHarness();
+  h.tool({ type: 'tool-result', name: 'world_build', arguments: { objectType: 'block', position: { x: 1, y: 2, z: 3 } }, result: { success: true, contentItems: [{ type: 'inputText', text: JSON.stringify({ revision: 10, object: { id: 'block-1', type: 'block', position: { x: 4, y: 5, z: 6 } } }) }] } });
+  assert.match(h.element('agent-actions').children[0].textContent, /Built block at \(4, 5, 6\)/);
+});
+test('world_build never confirms a move-like success, malformed output, or failed build', () => {
+  for (const result of [
+    { success: true, contentItems: [{ type: 'inputText', text: '{"revision":11}' }] },
+    { success: true, contentItems: [{ type: 'inputText', text: 'not JSON' }] },
+    { success: false, contentItems: [{ type: 'inputText', text: '{"revision":11,"object":{"id":"x","type":"port","position":{"x":0,"y":1,"z":2}}}' }] },
+  ]) {
+    const h = activityHarness(); h.tool({ type: 'tool-result', name: 'world_build', arguments: { objectType: 'port', position: { x: 0, y: 1, z: 2 } }, result });
+    assert.notEqual(h.element('agent-actions').children[0].dataset.status, 'completed');
+    assert.doesNotMatch(h.element('agent-actions').children[0].textContent, /server confirmed|Built port/);
+  }
+});
+test('world_build formats allowlisted type and finite position without exposing arbitrary arguments', () => {
+  const h = activityHarness(); h.tool({ type: 'tool-start', name: 'world_build', arguments: { objectType: 'SECRET', position: { x: 'SECRET', y: 0, z: 0 }, color: 'SECRET' } });
+  assert.equal(h.element('agent-intent').textContent, 'Build shape (invalid design) requested.');
+  assert.equal(h.text().includes('SECRET'), false);
+});
+
+test('game guide supports legacy resumed tools without automatic conversation replacement', async () => {
+  const { readFileSync } = await import('node:fs');
+  const main = readFileSync(new URL('../src/main.mjs', import.meta.url), 'utf8');
+  assert.match(main, /When world_build is available/);
+  assert.match(main, /flat arguments \{objectType,position,size,color\}/);
+  assert.match(main, /resumed conversation only has the legacy world_command schema, use its existing build variant/);
+  assert.match(main, /Never invoke an unavailable tool or create a new conversation automatically/);
+  assert.match(main, /Confirm construction only from a successful server result containing the created object/);
+});
