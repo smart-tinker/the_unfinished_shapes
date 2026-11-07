@@ -10,7 +10,7 @@ This validates applying one explicit supplied design, **not general model compet
 
 ## What the check proves
 
-The production `CodexBridge` connects to real Codex app-server and a local Responses API model server. The model must emit a genuine dynamic `world_build` call with exactly the requested type, position, size and color. The production game-tool dispatcher must receive server success, and the saved authoritative world must contain exactly one matching object owned by the test builder. Prose claiming completion is insufficient. Unexpected approvals fail rather than being automatically accepted.
+The production `CodexBridge` connects to real Codex app-server and a local Responses API model server. The model must emit a genuine dynamic `world_build` call with exactly the requested type, position, size and color. At least one genuine construction call is required. Every construction must be `world_build`, carry exactly the supplied parameters, and receive server success. The saved authoritative world must contain one matching object per successful valid call, with distinct IDs and the test builder as owner. Multiple valid identical constructions are accepted and executed independently; missing arguments, wrong colors, moves, failed calls, no-ops, and mismatched persisted counts fail. Prose claiming completion is insufficient. Unexpected approvals fail rather than being automatically accepted.
 
 The server runs on loopback with GPU layers set to zero, four CPU threads, one inference slot, deterministic sampling and a 450-second inference budget. CPU evidence is independent of that requested configuration: positive model-buffer allocations must belong exactly to `CPU`, `CPU_Mapped` or `CPU_REPACK`, with no contradictory positive GPU allocation/offload. Missing evidence fails.
 
@@ -52,3 +52,9 @@ See [schema investigation](CODEX-SCHEMA-DIAGNOSTIC.md). Existing conversations k
 The local VM attempt stopped before inference: Codex `thread/start` reported a sandbox-helper error requiring its app-server socket directory to be user-owned with mode 0700. Creating the test's temporary directories with mode 0700 did not resolve it. No runtime permissions were changed and no sandbox was disabled. Tool-call count was zero.
 
 The later hosted pass used a supported clean executor. It does not erase this VM startup limitation or prove live Codex integration works there. Local interactive rendering tests and hosted model acceptance remain distinct evidence.
+
+## Owner-approved acceptance update
+
+The owner explicitly chose to execute both requests when the model issues two valid construction requests. The harness now checks every request and its persisted effects instead of requiring exactly one invocation. The model prompt is unchanged (it still requests one call), so a pass demonstrates correct execution, not perfect compliance with the requested call count. No duplicate-suppression guard is integrated.
+
+[Run 42406443242](https://github.com/smart-tinker/the_unfinished_shapes/actions/runs/42406443242) failed the previous single-call gate after two valid `world_build` calls created two objects. That historical failure is retained, not relabeled as a newly executed pass. The earlier successful run above used the old gate; the revised acceptance needs its own live result.

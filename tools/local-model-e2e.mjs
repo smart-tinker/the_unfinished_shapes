@@ -1,5 +1,6 @@
 // Live CPU acceptance test, separate from npm test; no cloud provider or credentials.
 import assert from 'node:assert/strict';
+import { assertBuildAcceptance } from './build-acceptance.mjs';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
@@ -117,17 +118,9 @@ try {
  catch(error){if(error.code!=='ENOENT')throw error;}
  assert.ok(savedWorld,'No world state was persisted: the model did not perform a successful game action.');
  const state=JSON.parse(savedWorld);
- assert.equal(state.objects.length,1,'Expected exactly one persisted object, not a prose claim.');
- assert.equal(state.objects[0].type,'block');assert.equal(state.objects[0].ownerId,'cpu-test-builder');
- assert.deepEqual(state.objects[0].position,{x:3,y:1,z:4});
- assert.deepEqual(state.objects[0].size,{x:2,y:2,z:2});assert.equal(state.objects[0].color,'#3366cc');
- const commands=events.filter(e=>e.name==='world_build'||e.name==='world_command');
- assert.equal(commands.length,1,'Expected exactly one model-issued game command.');
- assert.equal(commands[0].name,'world_build','Expected the dedicated construction tool.');
- assert.equal(commands[0].success,true,'Real-model game command did not succeed.');
- assert.deepEqual(commands[0].arguments,design,'Model changed the supplied build design.');
+ const acceptance=assertBuildAcceptance({events,state,design,ownerId:'cpu-test-builder'});
  assert.equal(cpuEvidence.result().cpuOnly,true,'Positive CPU allocation was not observed, or GPU allocation contradicts CPU-only execution.');
- const evidence={status:'passed',transport:'real Codex app-server → local llama.cpp Responses API → world dynamic tool → persisted server state',model,modelDigest,cpuOnly:cpuEvidence.result().cpuOnly,requestedGpuLayers:0,cpuEvidence:cpuEvidence.result(),elapsedMs:Date.now()-started,toolCalls:events,turnStatus,stage,diagnostics:diagnostics.result(),assistantText,worldRevision:state.revision,object:{type:state.objects[0].type,position:state.objects[0].position,ownerId:state.objects[0].ownerId}};
+ const evidence={status:'passed',acceptance,transport:'real Codex app-server → local llama.cpp Responses API → world dynamic tool → persisted server state',model,modelDigest,cpuOnly:cpuEvidence.result().cpuOnly,requestedGpuLayers:0,cpuEvidence:cpuEvidence.result(),elapsedMs:Date.now()-started,toolCalls:events,turnStatus,stage,diagnostics:diagnostics.result(),assistantText,worldRevision:state.revision,object:{type:state.objects[0].type,position:state.objects[0].position,ownerId:state.objects[0].ownerId}};
  console.log(JSON.stringify(evidence,null,2));
  if(process.env.TUS_TEST_REPORT) await writeFile(path.resolve(process.env.TUS_TEST_REPORT),JSON.stringify(evidence,null,2)+'\n');
 } catch(error) {
