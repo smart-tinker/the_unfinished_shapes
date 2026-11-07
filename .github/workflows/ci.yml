@@ -11,6 +11,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test:
+    if: github.event.repository.private == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -23,7 +24,36 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: xvfb-run --auto-servernum node scripts/electron-smoke.mjs
+  macos-native:
+    if: github.event.repository.private == false
+    # Standard public runner: Apple Silicon, not a paid -large/-xlarge label.
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: arm64
+      - name: Verify native macOS arm64 runner
+        run: |
+          sw_vers
+          test "$(uname -m)" = arm64
+          node -e "if(process.platform!=='darwin'||process.arch!=='arm64') throw Error('Expected native macOS arm64'); console.log(process.platform,process.arch)"
+      - run: npm ci
+      - run: npm run check
+      - run: node scripts/electron-smoke.mjs
+      - run: node scripts/package-macos.mjs
+      - name: Launch the native packaged application
+        env:
+          TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-darwin-arm64/TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes
+        run: |
+          test "$(lipo -archs "$TUS_SMOKE_EXECUTABLE")" = arm64
+          node scripts/electron-smoke.mjs
   windows-installer:
+    if: github.event.repository.private == false
     runs-on: windows-latest
     timeout-minutes: 20
     env:
@@ -42,8 +72,8 @@ jobs:
       - name: Verify clean install, RC1 migration, installed runtime and retained data
         run: node scripts/windows-installer-smoke.mjs
   release-windows:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, windows-installer]
+    if: github.event.repository.private == false && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, windows-installer, macos-native]
     runs-on: windows-latest
     timeout-minutes: 20
     permissions:
@@ -108,13 +138,50 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           if ! gh release view "$TAG" > /dev/null 2>&1; then
-            gh release create "$TAG" --target "$GITHUB_SHA" --title "The Unfinished Shapes ${VERSION}" --draft --prerelease --notes-file docs/RELEASE-0.1-rc2.md
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "The Unfinished Shapes ${VERSION}" --draft --prerelease --notes-file docs/RELEASE-0.1-rc3.md
           fi
           gh release view "$TAG" --json isDraft,targetCommitish > release-state.json
           node -e "const r=require('./release-state.json'); if(!r.isDraft || r.targetCommitish!==process.env.GITHUB_SHA) throw Error('Refusing to overwrite a published release or a draft for another commit')"
           gh release upload "$TAG" dist/*.zip dist/*.exe dist/SHA256SUMS-windows --clobber
-  release:
+  release-macos:
     needs: release-windows
+    if: needs.release-windows.outputs.published == 'false'
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: arm64
+      - name: Verify native macOS arm64 runner
+        run: |
+          test "$(uname -m)" = arm64
+          node -e "if(process.platform!=='darwin'||process.arch!=='arm64') throw Error('Expected native macOS arm64')"
+      - run: npm ci
+      - run: node scripts/package-macos.mjs
+      - name: Test the exact native app that will be uploaded
+        env:
+          TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-darwin-arm64/TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes
+        run: |
+          test "$(lipo -archs "$TUS_SMOKE_EXECUTABLE")" = arm64
+          node scripts/electron-smoke.mjs
+      - name: Stage tested macOS arm64 package in the matching draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-windows.outputs.tag }}
+          VERSION: ${{ needs.release-windows.outputs.version }}
+        run: |
+          gh release view "$TAG" --json isDraft,targetCommitish > release-state.json
+          node -e "const r=require('./release-state.json'); if(!r.isDraft || r.targetCommitish!==process.env.GITHUB_SHA) throw Error('Refusing to overwrite a published release or a draft for another commit')"
+          ditto -c -k --sequesterRsrc --keepParent dist/TheUnfinishedShapes-darwin-arm64/TheUnfinishedShapes.app "dist/TheUnfinishedShapes-${VERSION}-darwin-arm64.zip"
+          gh release upload "$TAG" "dist/TheUnfinishedShapes-${VERSION}-darwin-arm64.zip" --clobber
+  release:
+    needs: [release-windows, release-macos]
     if: needs.release-windows.outputs.published == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -137,11 +204,11 @@ jobs:
         run: |
           gh release view "$TAG" --json isDraft,targetCommitish,assets > release-state.json
           node -e "const r=require('./release-state.json'); if(!r.isDraft || r.targetCommitish!==process.env.GITHUB_SHA) throw Error('Draft does not match this tested commit')"
-          node -e "const r=require('./release-state.json'); for(const name of ['TheUnfinishedShapes-'+process.env.VERSION+'-win32-x64.zip','TheUnfinishedShapes-'+process.env.VERSION+'-Setup-x64.exe']) { const a=r.assets.filter(x=>x.name===name); if(a.length!==1 || a[0].size<1 || a[0].size>536870912) throw Error('Missing, duplicate or oversized expected asset: '+name); }"
+          node -e "const r=require('./release-state.json'); for(const name of ['TheUnfinishedShapes-'+process.env.VERSION+'-win32-x64.zip','TheUnfinishedShapes-'+process.env.VERSION+'-Setup-x64.exe','TheUnfinishedShapes-'+process.env.VERSION+'-darwin-arm64.zip']) { const a=r.assets.filter(x=>x.name===name); if(a.length!==1 || a[0].size<1 || a[0].size>536870912) throw Error('Missing, duplicate or oversized expected asset: '+name); }"
           cd dist
           tar -czf "TheUnfinishedShapes-${VERSION}-linux-x64.tar.gz" TheUnfinishedShapes-linux-x64
-          gh release download "$TAG" --pattern "TheUnfinishedShapes-${VERSION}-win32-x64.zip" --pattern "TheUnfinishedShapes-${VERSION}-Setup-x64.exe" --dir .
-          sha256sum "TheUnfinishedShapes-${VERSION}-win32-x64.zip" "TheUnfinishedShapes-${VERSION}-Setup-x64.exe" *.tar.gz > SHA256SUMS
+          gh release download "$TAG" --pattern "TheUnfinishedShapes-${VERSION}-win32-x64.zip" --pattern "TheUnfinishedShapes-${VERSION}-Setup-x64.exe" --pattern "TheUnfinishedShapes-${VERSION}-darwin-arm64.zip" --dir .
+          sha256sum "TheUnfinishedShapes-${VERSION}-win32-x64.zip" "TheUnfinishedShapes-${VERSION}-Setup-x64.exe" "TheUnfinishedShapes-${VERSION}-darwin-arm64.zip" *.tar.gz > SHA256SUMS
           test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
           gh release upload "$TAG" *.tar.gz SHA256SUMS --clobber
           gh release edit "$TAG" --draft=false --prerelease
