@@ -1,0 +1,41 @@
+name: Exact RC3 Windows profile graphics diagnostic
+on:
+  pull_request:
+    paths:
+      - 'tools/windows-profile-graphics-diagnostic.mjs'
+      - 'tools/windows-graphics-outcome.mjs'
+      - 'test/windows-profile-diagnostic.test.mjs'
+      - '.github/workflows/windows-profile-graphics-diagnostic.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-profile-graphics-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    if: github.event.repository.private == false && ((github.event_name == 'pull_request' && github.head_ref == 'recovery/rc3-graphics-validation' && github.base_ref == 'release/0.1.0-rc3' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/recovery/rc3-graphics-validation'))
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: diagnostic
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: smart-tinker/the_unfinished_shapes
+          ref: 867b5fa4dfa3d36bfad2abfc13bbfbb35b3fc488
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - run: npm ci
+        working-directory: candidate
+      - run: npm run package:win
+        working-directory: candidate
+      - name: Isolate genuine old data, profile cache and explicit rendering backend
+        env:
+          TUS_DIAGNOSTIC_SOURCE: ${{ github.workspace }}/candidate
+        run: node diagnostic/tools/windows-profile-graphics-diagnostic.mjs
