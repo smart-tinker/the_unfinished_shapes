@@ -1,0 +1,108 @@
+name: Immutable RC3 recovery validation only
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rc3-recovery-validation.yml'
+      - 'scripts/recovery-provenance.mjs'
+      - 'scripts/electron-smoke.mjs'
+      - 'scripts/smoke-graphics.mjs'
+      - 'test/recovery-validation.test.mjs'
+      - 'test/smoke-graphics.test.mjs'
+  workflow_dispatch:
+    inputs:
+      vm_accepted:
+        description: Optional operator attestation of exact 867b5fa GUI review; never automatic evidence
+        type: boolean
+        required: true
+        default: false
+      vm_evidence:
+        description: Optional public repository issue comment URL for GUI evidence; no private links
+        type: string
+        required: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: immutable-rc3-recovery-validation
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.event.repository.private == false && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/recovery/rc3-graphics-validation') || (github.event_name == 'pull_request' && github.head_ref == 'recovery/rc3-graphics-validation' && github.base_ref == 'release/0.1.0-rc3' && github.event.pull_request.head.repo.full_name == github.repository))
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      RECOVERY_EVENT: ${{ github.event_name }}
+      RECOVERY_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+      RECOVERY_PR_BASE: ${{ github.event.pull_request.base.sha }}
+      RECOVERY_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      VM_ACCEPTED: ${{ inputs.vm_accepted }}
+      VM_EVIDENCE: ${{ inputs.vm_evidence }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: recovery
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: smart-tinker/the_unfinished_shapes
+          ref: 867b5fa4dfa3d36bfad2abfc13bbfbb35b3fc488
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Verify fixed tag, source CPU acceptance and VM evidence reference
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node -e "if(process.env.VM_EVIDENCE&&!/^https:\/\/github\.com\/smart-tinker\/the_unfinished_shapes\/issues\/\d+#issuecomment-\d+$/.test(process.env.VM_EVIDENCE||'')) throw Error('Expected repository GUI evidence comment URL')"
+          GITHUB_SHA=867b5fa4dfa3d36bfad2abfc13bbfbb35b3fc488 node recovery/scripts/verify-release-tag.mjs v0.1.0-rc3
+          gh api 'repos/smart-tinker/the_unfinished_shapes/actions/runs?head_sha=867b5fa4dfa3d36bfad2abfc13bbfbb35b3fc488&per_page=100' > cpu-runs.json
+          node -e "const runs=require('./cpu-runs.json').workflow_runs;if(!runs.some(r=>r.path==='.github/workflows/local-cpu-model.yml'&&r.event==='push'&&r.head_branch==='release/0.1.0-rc3'&&r.head_sha==='867b5fa4dfa3d36bfad2abfc13bbfbb35b3fc488'&&r.status==='completed'&&r.conclusion==='success'))throw Error('Exact source CPU acceptance missing')"
+      - run: npm ci
+        working-directory: candidate
+      - run: npm run check
+        working-directory: candidate
+      - name: Prepare fixed harness outside immutable source
+        run: node recovery/scripts/recovery-provenance.mjs prepare
+      - name: Linux source and packaged full smoke
+        if: runner.os == 'Linux'
+        working-directory: candidate
+        shell: bash
+        run: |
+          xvfb-run --auto-servernum node ../recovery-harness/electron-smoke.mjs
+          npm run package:linux
+          TUS_SMOKE_EXECUTABLE=dist/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes xvfb-run --auto-servernum node ../recovery-harness/electron-smoke.mjs
+          tar -czf dist/TheUnfinishedShapes-0.1.0-rc.3-linux-x64.tar.gz -C dist TheUnfinishedShapes-linux-x64
+      - name: Native macOS source and packaged full smoke
+        if: runner.os == 'macOS'
+        working-directory: candidate
+        shell: bash
+        run: |
+          test "$(uname -m)" = arm64
+          node ../recovery-harness/electron-smoke.mjs
+          node scripts/package-macos.mjs
+          TUS_SMOKE_EXECUTABLE=dist/TheUnfinishedShapes-darwin-arm64/TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes node ../recovery-harness/electron-smoke.mjs
+          ditto -c -k --sequesterRsrc --keepParent dist/TheUnfinishedShapes-darwin-arm64/TheUnfinishedShapes.app dist/TheUnfinishedShapes-0.1.0-rc.3-darwin-arm64.zip
+      - name: Windows packaged and installer full smoke
+        if: runner.os == 'Windows'
+        working-directory: candidate
+        shell: pwsh
+        run: |
+          npm run package:win
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run installer:win
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node ../recovery-harness/windows-installer-smoke.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path dist/TheUnfinishedShapes-win32-x64 -DestinationPath dist/TheUnfinishedShapes-0.1.0-rc.3-win32-x64.zip
+          Copy-Item dist/installer/*.exe dist/
+      - name: Record provenance and artifact hashes without upload or publication
+        run: node recovery/scripts/recovery-provenance.mjs report

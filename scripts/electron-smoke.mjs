@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm,mkdir,writeFile,access,realpath} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {smokeGraphicsFlags,assertSmokeGraphics} from './smoke-graphics.mjs';
 const dir=await mkdtemp(path.join(os.tmpdir(),'tus-desktop-'));
 const fakeBin=path.join(dir,'bin'),fakeCodex=path.join(fakeBin,'codex'),marker=path.join(dir,'unexpected-codex-run');
 await mkdir(fakeBin);await writeFile(fakeCodex,`#!/bin/sh\ntouch '${marker}'\nexit 99\n`,{mode:0o755});
@@ -10,7 +11,7 @@ const expectedCodexPath=await realpath(fakeCodex);
 const testEnv={...process.env,TUS_DATA_DIR:dir,PATH:fakeBin+path.delimiter+process.env.PATH};
 const packagedExecutable=process.env.TUS_SMOKE_EXECUTABLE;
 // Preserve the existing Linux CI exception only; native macOS uses its normal sandbox.
-const ciFlags=process.platform==='linux'?['--no-sandbox']:[];
+const ciFlags=smokeGraphicsFlags(process.platform);
 const launchOptions={...(packagedExecutable?{executablePath:path.resolve(packagedExecutable)}:{}),args:[...(packagedExecutable?[]:['.']),...ciFlags],env:testEnv,timeout:30000};
 let app;
 try {
@@ -19,7 +20,7 @@ try {
  const page=await app.firstWindow(); const errors=[];page.on('pageerror',e=>errors.push(e.message));
  if(process.platform==='darwin') assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences().sandbox),true,'native macOS renderer sandbox remains enabled');
  await page.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
- assert.equal(await page.locator('#scene-error').isVisible(),false);
+ await assertSmokeGraphics(page,process.platform);
  await page.locator('[data-kind="bridge"]').click(); await page.locator('#build-x').fill('3');
  await page.locator('#build-form button').click();
  await page.waitForFunction(()=>document.querySelector('#world-message')?.textContent.includes('placed'));
@@ -41,6 +42,7 @@ try {
  await app.close();app=null;
  app=await electron.launch(launchOptions);
  const reopened=await app.firstWindow();reopened.on('pageerror',e=>errors.push(e.message));await reopened.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
+ await assertSmokeGraphics(reopened,process.platform);
  state=await reopened.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
  assert.equal(state.objects.length,1,'world survives desktop restart');
  const restored=await reopened.evaluate(()=>window.tus.loadSettings());assert.equal(restored.codexPath,expectedCodexPath);assert.equal(restored.workspacePath,dir);assert.equal(restored.threadId,'smoke-preserved-game-thread');
