@@ -10,15 +10,22 @@ const active = (thread) => thread?.status?.type === 'active';
 const positionSchema = { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, required: ['x', 'y', 'z'], additionalProperties: false };
 export const WORLD_TOOLS = [
   { type: 'function', name: 'world_state', description: 'Read the connected game world, supported mechanics, player identity and role. Never returns credentials.', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
-  { type: 'function', name: 'world_command', description: 'Perform a user-requested in-game action. Server checks identity, role, ownership and coordinates. Unknown mechanics require repository development and CI, not a bypass.', inputSchema: {
+  { type: 'function', name: 'world_build', description: 'Build one new object requested by the user. Specify every design field explicitly, including size and color. This creates an object; it never moves the player. Server validates the mechanic, role and coordinates.', inputSchema: {
+    type: 'object', properties: {
+      objectType: { type: 'string', enum: ['block', 'bridge', 'port'] },
+      position: positionSchema,
+      size: positionSchema,
+      color: { type: 'string', description: 'Required hex color, e.g. #6c8cff. Preserve the color requested by the user.', pattern: '^#[a-fA-F0-9]{6}$' },
+    }, required: ['objectType', 'position', 'size', 'color'], additionalProperties: false,
+  } },
+  { type: 'function', name: 'world_command', description: 'Move the player or update/remove an existing object. To create an object use world_build. Server checks identity, role, ownership and coordinates. Unknown mechanics require repository development and CI, not a bypass.', inputSchema: {
     type: 'object', properties: { command: {
-      type: 'object', description: 'Choose one operation. Build creates an object; move changes only the player position and never builds anything. Operation-specific fields are validated by the game server.',
+      type: 'object', description: 'Choose one operation. Move changes only the player position and never builds anything. Use world_build to create an object. Operation-specific fields are validated by the game server.',
       properties: {
-        type: { type: 'string', enum: ['move', 'build', 'update', 'remove'], description: 'build: create a new object. move: move the player only. update: edit an existing object. remove: delete an existing object.' },
-        objectType: { type: 'string', enum: ['block', 'bridge', 'port'], description: 'Required for build only: the mechanic to construct.' },
-        position: { ...positionSchema, description: 'Required for build and move; optional new object position for update.' },
-        size: { ...positionSchema, description: 'Optional dimensions for build or update.' },
-        color: { type: 'string', pattern: '^#[a-fA-F0-9]{6}$', description: 'Optional hex color for build or update.' },
+        type: { type: 'string', enum: ['move', 'update', 'remove'], description: 'move: move the player only. update: edit an existing object. remove: delete an existing object.' },
+        position: { ...positionSchema, description: 'Required for move; optional new object position for update.' },
+        size: { ...positionSchema, description: 'Optional dimensions for update.' },
+        color: { type: 'string', pattern: '^#[a-fA-F0-9]{6}$', description: 'Optional hex color for update.' },
         id: { type: 'string', description: 'Required existing object ID for update or remove.' },
         expected: { type: 'object', description: 'Required for update: original values from world_state for exactly the fields being edited. On conflict refresh and ask, never overwrite.', properties: { position: positionSchema, size: positionSchema, color: { type: 'string', pattern: '^#[a-fA-F0-9]{6}$' } }, minProperties: 1, additionalProperties: false },
       }, required: ['type'], additionalProperties: false,
