@@ -1,0 +1,48 @@
+name: Observe Codex emitted tool schema
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tools/inspect-codex-wire-schema.mjs'
+      - 'src/codex.mjs'
+      - '.github/workflows/codex-wire-schema.yml'
+permissions:
+  contents: read
+jobs:
+  schema-only:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install checksum-verified official Codex only
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/tus-schema"
+          cd "$RUNNER_TEMP/tus-schema"
+          curl --fail --location --connect-timeout 20 --max-time 120 --max-filesize 125000000 \
+            https://github.com/openai/codex/releases/download/rust-v0.167.0/codex-x86_64-unknown-linux-musl.tar.gz -o codex.tar.gz
+          echo '9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a  codex.tar.gz' | sha256sum --check --strict
+          tar -xf codex.tar.gz
+      - name: Observe real outgoing schema (HTTP stub, NOT model acceptance)
+        env:
+          TUS_TEST_CODEX: ${{ runner.temp }}/tus-schema/codex-x86_64-unknown-linux-musl
+          TUS_TEST_REPORT: ${{ runner.temp }}/tus-schema/report.json
+        run: node tools/inspect-codex-wire-schema.mjs
+      - name: Record schema evidence without artifact storage
+        if: always()
+        shell: bash
+        run: |
+          printf '## Schema observation only, not model E2E\n' >> "$GITHUB_STEP_SUMMARY"
+          if test -f "$RUNNER_TEMP/tus-schema/report.json"; then
+            printf '\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+            cat "$RUNNER_TEMP/tus-schema/report.json" >> "$GITHUB_STEP_SUMMARY"
+            printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'Schema observation did not complete; inspect setup/runtime failure.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
