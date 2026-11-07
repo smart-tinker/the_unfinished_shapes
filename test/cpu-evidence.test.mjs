@@ -38,3 +38,15 @@ test('split lines and independent stdout/stderr buffers preserve exact evidence'
  out.write('ped model buffer size = 128.50 MiB');out.end();err.end();
  assert.equal(evidence.result().cpuOnly,true);assert.equal(evidence.result().allocations[0].mib,128.5);
 });
+
+test('official CPU_REPACK allocations are CPU evidence, unknown CPU-prefixed names are not',()=>{
+ const evidence=createCpuEvidence();const log=evidence.stream();
+ log.write('load_tensors: CPU_REPACK model buffer size = 630.00 MiB\n');
+ assert.equal(evidence.result().cpuOnly,true);
+ for(const backend of ['CPU_CUDA','CPU_REPACK_FAKE','GPU_CPU_REPACK']) {
+  const other=createCpuEvidence();other.stream().write(`load_tensors: ${backend} model buffer size = 1.00 MiB\n`);
+  assert.equal(other.result().cpuOnly,false);
+ }
+ log.write('load_tensors: CUDA0 model buffer size = 1.00 MiB\n');
+ assert.equal(evidence.result().cpuOnly,false);
+});

@@ -1,5 +1,7 @@
 # Real local CPU model end-to-end check
 
+**Current hosted outcome: strict acceptance failed, but a real CPU-model build was observed.** Run `42397837460` created exactly one object in about 218 seconds. The model omitted the explicitly requested color, so the exact-arguments check failed. A stronger non-default-color candidate awaits review and rerun. Reported billing for that Ubuntu run: `total_ms = 0`; wall time `256000 ms`. The separate local VM startup limitation remains below.
+
 This is a live model acceptance test, not a mock and not part of `npm test`. It runs separately through the scoped workflow below or an explicit local command. It exercises the production `CodexBridge`, a real local Responses API model server, the production game-tool dispatcher, and persisted authoritative world state. Passing ordinary unit tests does not imply this check passed.
 
 ## Requirements
@@ -24,7 +26,7 @@ Set these environment variables, then run `node tools/local-model-e2e.mjs`:
 
 The model is asked to build exactly one block through `world_command`. Success requires a genuine dynamic tool event, a successful authoritative-server result, the expected object in saved world state, and CPU allocation evidence. Text claiming success does not pass. Unexpected approval requests fail rather than being automatically accepted. The test does not exercise a real player's data, a paid API, new feature deployment or production infrastructure.
 
-## Verified inputs and current outcome
+## Historical local VM attempt and verified inputs
 
 An attempted run on 2026-11-07 used:
 
@@ -32,7 +34,7 @@ An attempted run on 2026-11-07 used:
 - Qwen3 **0.6B** GGUF from the public Ollama model registry, 522,640,096 bytes. SHA-256 `7f4030143c1c477224c5434f8272c662a8b042079a0a584f0a27a1684fe2e1fa`, matched registry manifest. No Ollama account or cloud inference is needed to use this GGUF with llama.cpp.
 - Codex CLI **0.166.0-alpha.1**.
 
-**Full E2E is blocked, not passed.** llama.cpp loaded locally, but Codex `thread/start` failed before inference or game-tool execution:
+**On this local VM, E2E was blocked before inference.** llama.cpp loaded locally, but Codex `thread/start` failed before inference or game-tool execution:
 
 > error creating thread: failed to load AGENTS.md instructions for environment `local`: fs sandbox helper failed with status exit status: 1: error building bubblewrap command: app-server socket directory must be a user-owned directory with mode 0700
 
@@ -70,7 +72,7 @@ This candidate was subsequently exercised in hosted runs and has not passed; see
 
 ### CPU evidence acceptance
 
-`tools/cpu-evidence.mjs` now parses the pinned runtime's exact allocation diagnostics: `load_tensors: <backend> model buffer size = <number> MiB`. At least one positive allocation must be observed, every positive model allocation must use `CPU` or `CPU_Mapped`, and no positive GPU offload count may appear. A missing GPU summary is allowed for a CPU-only binary. `--n-gpu-layers 0` is reported separately as requested configuration, not hardware evidence.
+`tools/cpu-evidence.mjs` now parses the pinned runtime's exact allocation diagnostics: `load_tensors: <backend> model buffer size = <number> MiB`. At least one positive allocation must be observed, every positive model allocation must use exactly `CPU`, `CPU_Mapped` or `CPU_REPACK`, and no positive GPU offload count may appear. A missing GPU summary is allowed for a CPU-only binary. `--n-gpu-layers 0` is reported separately as requested configuration, not hardware evidence.
 
 Generic text such as `loading model .../tus-cpu/...` cannot satisfy acceptance. CPU evidence is retained independently of rolling logs, with separate stdout/stderr partial-line buffers. Six pure unit tests cover the misleading path, actual allocations, contradictory GPU evidence, zero-only evidence and split chunks. These checks do not themselves establish that a live inference run passed.
 
@@ -89,3 +91,16 @@ Source: https://github.com/ggml-org/llama.cpp/blob/b12189/common/log.cpp#L548
 The minimal next hosted probe keeps the same model, prompt, deterministic sampling, 450-second limit and strict persisted-object assertions. A loopback pass-through observer records only request/response byte counts, HTTP status, SSE event-type counts, output item categories, token-usage numbers, and timings. It never retains or reports headers, full prompts, reasoning text or text/argument deltas. Final assistant text remains separately limited to the synthetic test's output. No provider response is replaced or synthesized by the observer.
 
 This can distinguish: no HTTP request, a received request still evaluating its prompt, output bytes/events without a parsed Codex tool, or a completed response with a semantic error. A long prompt evaluation, stalled generation or Responses/tool parsing mismatch remain hypotheses until that evidence arrives. No time/model escalation or weaker acceptance assertion was introduced.
+
+
+### Real build observed, strict color requirement still failed
+
+Hosted run **42397837460** completed a real model-issued `build` in about **218 seconds**, persisted exactly one object, and made **two real Responses API requests**. The first request recorded **7,781 input tokens** and **79 output tokens**. This is meaningful progress, but **not a strict acceptance pass**: the model omitted `color` from its tool arguments. The requested color happened to equal the server's default `#c8a570`, so persisted-color equality alone could not establish that the model supplied it. The unchanged exact-arguments assertion correctly rejected the omission.
+
+The next supplied design explicitly requests the non-default color **`#3366cc`**. Both persisted-color and exact tool-arguments assertions require that value. All other command fields, the same model and the 450-second inference limit are unchanged. This strengthens the color check instead of accepting omitted arguments.
+
+The run also observed a positive **CPU_REPACK** allocation of about **630 MiB**. The pinned upstream `ggml/src/ggml-cpu/repack.cpp` names this buffer exactly `CPU_REPACK` and allocates it through `ggml_backend_cpu_buffer_type()`. It is now an explicit CPU allowlist entry alongside CPU and CPU_Mapped. Unknown CPU-prefixed names and any contradictory positive GPU allocation still fail. A pure fixture test covers CPU_REPACK, spoofed names and a contradictory CUDA allocation.
+
+Source: https://github.com/ggml-org/llama.cpp/blob/b12189/ggml/src/ggml-cpu/repack.cpp#L5167
+
+The strengthened candidate has not been run as part of this edit; review and a new real-model result remain required.

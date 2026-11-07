@@ -107,7 +107,7 @@ try {
  await bridge.start({codexPath,workspacePath:workspace,newGameThread:true});
  stage='codex_connected';
  timer=setTimeout(()=>rejectDone(new Error('Local model E2E exceeded its time budget.')),timeoutMs);
- const design={command:{type:'build',objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#c8a570'}};
+ const design={command:{type:'build',objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#3366cc'}};
  await bridge.send(`Build this supplied design in the game. Call world_command exactly once with these exact JSON arguments: ${JSON.stringify(design)}. The command type must be build, not move. Do not call shell tools, write code, or change the design. After world_command succeeds, say done. /no_think`);
  stage='turn_request_accepted';
  await done;
@@ -120,7 +120,7 @@ try {
  assert.equal(state.objects.length,1,'Expected exactly one persisted object, not a prose claim.');
  assert.equal(state.objects[0].type,'block');assert.equal(state.objects[0].ownerId,'cpu-test-builder');
  assert.deepEqual(state.objects[0].position,{x:3,y:1,z:4});
- assert.deepEqual(state.objects[0].size,{x:2,y:2,z:2});assert.equal(state.objects[0].color,'#c8a570');
+ assert.deepEqual(state.objects[0].size,{x:2,y:2,z:2});assert.equal(state.objects[0].color,'#3366cc');
  const commands=events.filter(e=>e.name==='world_command');
  assert.equal(commands.length,1,'Expected exactly one model-issued game command.');
  assert.equal(commands[0].success,true,'Real-model game command did not succeed.');
