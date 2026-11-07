@@ -156,10 +156,15 @@ test('tool calls cannot run outside an explicit turn, from another thread or nam
   assert.equal(events.length,0);f.bridge.stop();
 });
 
-test('world tool schema advertises partial update without ownership mutation',()=>{
- const variants=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command.oneOf;
- const update=variants.find(v=>v.properties.type.const==='update');
- assert.ok(update);assert.deepEqual(update.required,['type','id','expected']);
- assert.deepEqual(update.anyOf,[{required:['position']},{required:['size']},{required:['color']}]);
- assert.equal(update.additionalProperties,false);assert.equal(update.properties.ownerId,undefined);assert.equal(update.properties.objectType,undefined);
+test('world tool schema exposes explicit flat operations without ownership mutation',()=>{
+ const command=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command;
+ assert.equal(command.type,'object');assert.equal(command.oneOf,undefined);assert.equal(command.anyOf,undefined);
+ assert.deepEqual(command.properties.type.enum,['move','build','update','remove']);
+ assert.match(command.properties.type.description,/move the player only/);
+ assert.deepEqual(command.required,['type']);
+ assert.equal(command.additionalProperties,false);assert.equal(command.properties.ownerId,undefined);
+ assert.deepEqual(command.properties.expected.properties.position.properties.x,{type:'number'});
+ assert.equal(command.properties.expected.additionalProperties,false);
+ assert.match(command.properties.expected.description,/Required for update/);
+ assert.match(command.properties.objectType.description,/Required for build/);
 });

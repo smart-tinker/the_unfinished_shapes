@@ -33,11 +33,14 @@ function findTool(value,name) {
  return Object.values(value).flatMap(item=>findTool(item,name));
 }
 function variants(schema) {
- return (schema?.properties?.command?.oneOf ?? []).map(branch=>({
+ const command=schema?.properties?.command;
+ if(command?.oneOf)return command.oneOf.map(branch=>({
   type:branch.properties?.type?.const ?? branch.properties?.type?.enum?.[0],
   required:branch.required ?? [],fields:Object.keys(branch.properties ?? {}).sort(),
  }));
+ return (command?.properties?.type?.enum ?? []).map(type=>({type,required:command.required ?? [],fields:Object.keys(command.properties ?? {}).sort()}));
 }
+
 try {
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
  const port=server.address().port;
@@ -51,6 +54,7 @@ try {
  const schemas=findTool(tools,'world_command');
  assert.equal(schemas.length,1,'Expected one emitted world_command parameter schema.');
  const original=WORLD_TOOLS.find(tool=>tool.name==='world_command').inputSchema;
+ assert.ok(variants(original).length>0,'Original operation schema could not be summarized.');
  const evidence={kind:'schema-observation-only',realModel:false,boundary:'real Codex app-server → local rejecting HTTP stub',originalSchema:original,emittedSchema:schemas[0],originalVariants:variants(original),emittedVariants:variants(schemas[0])};
  console.log(JSON.stringify(evidence,null,2));
  if(process.env.TUS_TEST_REPORT)await writeFile(process.env.TUS_TEST_REPORT,JSON.stringify(evidence,null,2)+'\n');
