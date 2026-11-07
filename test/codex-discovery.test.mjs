@@ -25,8 +25,9 @@ test('finds PATH binary, deduplicates results and never executes it',async()=>{
     const binary=path.join(one,process.platform==='win32'?'codex.exe':'codex');await fs.writeFile(binary,`#!/bin/sh\ntouch '${root}/was-executed'\n`,{mode:0o755});
     if(process.platform!=='win32') await fs.symlink(binary,path.join(two,'codex'));
     const result=await findCodex({platform:process.platform,arch:'x64',env:{PATH:[one,two,one].join(path.delimiter)},home:root});
-    const ours=result.candidates.filter(c=>c.path===binary);
-    assert.equal(ours.length,1);assert.equal(ours[0].source,'path');
+    const canonicalBinary=await fs.realpath(binary);
+    const ours=result.candidates.filter(c=>c.path===canonicalBinary);
+    assert.equal(ours.length,1,`Expected one canonical candidate ${canonicalBinary}; found ${JSON.stringify(result.candidates)}`);assert.equal(ours[0].source,'path');
     await assert.rejects(fs.stat(path.join(root,'was-executed')),{code:'ENOENT'});
     assert.ok(result.hints.some(h=>h.includes('does not verify')));
   } finally {await fs.rm(root,{recursive:true,force:true});}
