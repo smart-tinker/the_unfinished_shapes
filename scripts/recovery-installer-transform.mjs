@@ -48,3 +48,16 @@ export function recoveryInstallerSmoke(source) {
   console.log('Checksum-verified RC1 migration fixture generated and reloaded through public IPC; legacy graphics are not release acceptance.');`);
  return "import {observeInstallerLaunch} from './installer-graphics-observer.mjs';\nimport {assertLegacySnapshot} from './recovery-installer-transform.mjs';\nimport {assertSmokeGraphics} from './smoke-graphics.mjs';\n"+script;
 }
+
+// Separate full-lifecycle experiment. The default recovery harness is unchanged.
+export function recoveryInstallerSwiftShader(source) {
+ let script=recoveryInstallerSmoke(source);
+ const replace=(old,next)=>{assert.equal(script.split(old).length,2,'Expected exact diagnostic transform target');script=script.replace(old,next);};
+ replace("args: ['--no-sandbox']", "args: ['--no-sandbox', ...(verifiedLegacyExe && executablePath === verifiedLegacyExe ? [] : ['--use-gl=angle', '--use-angle=swiftshader'])]");
+ replace('await graphicsObserver.verify(() => assertSmokeGraphics(page, process.platform));', `await graphicsObserver.verify(async () => {
+      await assertSmokeGraphics(page, process.platform);
+      const backend = await page.evaluate(() => { const gl = document.querySelector('#viewport canvas')?.getContext('webgl2'); const debug = gl?.getExtension('WEBGL_debug_renderer_info'); return debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : null; });
+      assert.ok(backend?.includes('SwiftShader'), 'Diagnostic RC3 launch must use actual SwiftShader backend');
+    });`);
+ return "console.log('DIAGNOSTIC ONLY: full RC3 installer lifecycle with explicit SwiftShader; default recovery failure remains unresolved.');\n"+script;
+}
