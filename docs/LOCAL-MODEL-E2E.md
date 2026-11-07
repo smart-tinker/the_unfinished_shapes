@@ -49,3 +49,9 @@ Sources: [llama.cpp b12189](https://github.com/ggml-org/llama.cpp/releases/tag/b
 Codex archive SHA-256: `9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a`, verified against official release metadata. Source: [Codex 0.167.0](https://github.com/openai/codex/releases/tag/rust-v0.167.0).
 
 This is a distinct acceptance run on a clean supported executor, not a workaround that changes this VM's sandbox settings. Its result must be inspected before closing the real-model acceptance issue. A future hosted-runner pass does not erase the local VM startup blocker. The workflow has only been prepared; no run was dispatched as part of preparation. Opening or updating a matching pull request will trigger acceptance before merge.
+
+### First hosted inference result
+
+Hosted run `42394553433` reached actual local-model inference and the dynamic game tool. It failed semantic acceptance: the model issued `world_command` with a `move` command at the requested coordinates, not a `build`. The server correctly accepted the movement, but zero objects were saved. This is **not** a passing build test.
+
+The next check gives the model the exact build-design JSON, with temperature zero and fixed seed, while retaining and strengthening object, size, color, ownership and exact-command assertions. This tests applying a supplied design, not unrestricted natural-language planning. It also preserves CPU initialization evidence separately from rolling runtime logs and waits for child shutdown before temporary-directory cleanup. These changes require a new hosted result; a 0.6B model may still prove inadequate.
