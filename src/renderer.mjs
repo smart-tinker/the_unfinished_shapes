@@ -199,14 +199,91 @@ async function saveSettings() {
 }
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('settings-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('settings-message').textContent = error.message; } });
 $('settings-form').addEventListener('submit', async event => { event.preventDefault(); $('connect').disabled = true; $('settings-message').textContent = 'Connecting to your Codex app-server…'; try { await saveSettings(); const result = await bridge.connectCodex({ ...settings, newGameThread: $('new-game-thread').checked }); settings.threadId = result.threadId; $('new-game-thread').checked = false; const { token, ...persisted } = settings; await bridge.saveSettings(persisted); connected = true; $('agent-status').textContent = 'Ready · responds only when asked'; updateChatControls(); $('settings').close(); addMessage('Connected to your Codex workspace. No request has been sent.'); } catch (error) { $('settings-message').textContent = error.message; } finally { $('connect').disabled = false; } });
+const toolRows = new Map(), itemRows = new Map();
+let stopRequested = false, acceptedThreadId = null, currentTurnId = null;
+const retiredTurns = new Set();
+function activityThread(threadId) {
+  if (threadId !== acceptedThreadId) { retiredTurns.clear(); currentTurnId = null; }
+  acceptedThreadId = threadId;
+}
+function activityRow(text, status = 'running') {
+  const row = document.createElement('li'); row.textContent = text; row.dataset.status = status; $('agent-actions').append(row);
+  while ($('agent-actions').children.length > 40) $('agent-actions').firstElementChild.remove();
+  return row;
+}
+function startActivity() {
+  if (currentTurnId) retiredTurns.add(currentTurnId);
+  if (retiredTurns.size > 100) retiredTurns.delete(retiredTurns.values().next().value);
+  currentTurnId = null;
+  stopRequested = false; toolRows.clear(); itemRows.clear(); $('agent-actions').replaceChildren(); $('agent-plan').replaceChildren(); $('agent-plan').hidden = true;
+  $('activity-state').textContent = 'Requested'; $('agent-intent').textContent = 'Waiting for Codex to report its next action.'; $('agent-stop-reason').textContent = 'Request submitted; no completion reported yet.';
+}
+function toolLabel(event) {
+  if (event.name === 'world_state') return 'Read world state';
+  if (event.name !== 'world_command') return 'Requested tool';
+  let args = event.arguments;
+  if (typeof args === 'string') { try { args = JSON.parse(args); } catch { return 'World command'; } }
+  const labels = { build: 'Build shape', update: 'Edit shape', remove: 'Remove shape', move: 'Move player' };
+  return labels[args?.command?.type] || labels[args?.type] || 'World command';
+}
+function toolActivity(event) {
+  if (!busy || event.threadId !== acceptedThreadId || !event.turnId || event.id == null || retiredTurns.has(event.turnId)) return;
+  if (!currentTurnId) currentTurnId = event.turnId;
+  if (event.turnId !== currentTurnId) return;
+  const label = toolLabel(event), key = JSON.stringify([event.threadId, event.turnId, event.id]);
+  if (event.type === 'tool-start') {
+    $('agent-intent').textContent = label + ' requested.'; $('activity-state').textContent = 'Working';
+    if (!toolRows.has(key)) toolRows.set(key, activityRow(label + ' · running')); return;
+  }
+  const row = toolRows.get(key) || activityRow(label); toolRows.set(key, row);
+  const success = event.result?.success === true;
+  let response; try { const text = event.result?.contentItems?.find(item => item.type === 'inputText')?.text; if (typeof text === 'string' && text.length < 2000000) response = JSON.parse(text); } catch { /* Only structured evidence is summarized. */ }
+  const revision = Number.isSafeInteger(response?.revision) ? ` · revision ${response.revision}` : '';
+  row.textContent = label + (success ? ' · completed' : ' · failed') + revision; row.dataset.status = success ? 'completed' : 'failed';
+  if (!success) $('agent-stop-reason').textContent = 'A tool failed. The turn may continue; wait for its final status.';
+}
+function notificationActivity(method, params) {
+  if (params.threadId && acceptedThreadId && params.threadId !== acceptedThreadId) return;
+  const turnId = params.turnId || params.turn?.id;
+  if (turnId && (retiredTurns.has(turnId) || (currentTurnId && turnId !== currentTurnId))) return;
+  if (method === 'turn/started' && turnId) currentTurnId = turnId;
+  if (method === 'turn/started') { $('activity-state').textContent = 'Working'; $('agent-stop-reason').textContent = 'Turn in progress.'; }
+  // Show an explicit user-facing plan, never reasoning or reasoning-summary events.
+  if (method === 'turn/plan/updated' && Array.isArray(params.plan)) {
+    $('agent-plan').replaceChildren();
+    for (const step of params.plan.slice(0, 12)) { if (typeof step.step !== 'string') continue; const row = document.createElement('li'); row.textContent = step.step.slice(0, 500) + (['pending', 'inProgress', 'completed'].includes(step.status) ? ` (${step.status})` : ''); $('agent-plan').append(row); }
+    $('agent-plan').hidden = !$('agent-plan').children.length;
+  }
+  if (['item/started', 'item/completed'].includes(method)) {
+    const item = params.item, names = { commandExecution: 'Local command', fileChange: 'Workspace file changes', webSearch: 'Web search' };
+    const name = names[item?.type];
+    if (name && item.id) {
+      if (method === 'item/started') { $('agent-intent').textContent = name + ' requested.'; itemRows.set(item.id, activityRow(name + ' · running')); }
+      else {
+        const row = itemRows.get(item.id) || activityRow(name);
+        const failed = item.status === 'failed' || item.status === 'declined' || (Number.isInteger(item.exitCode) && item.exitCode !== 0);
+        row.dataset.status = failed ? 'failed' : 'completed'; row.textContent = name + (failed ? ' · failed or declined' : ' · completed') + (Number.isInteger(item.exitCode) ? ` · exit ${item.exitCode}` : '');
+      }
+    }
+  }
+  if (method === 'turn/completed') {
+    const status = params.turn?.status;
+    const failed = status === 'failed' || Boolean(params.turn?.error);
+    $('activity-state').textContent = failed ? 'Failed' : status === 'interrupted' ? 'Stopped' : status === 'completed' ? 'Completed' : 'Ended';
+    $('agent-stop-reason').textContent = failed ? 'Stopped with an error reported by Codex.' : status === 'interrupted' ? (stopRequested ? 'Stopped at your request; completed actions remain in the world.' : 'Codex reported that the turn was interrupted.') : status === 'completed' ? 'Codex reported the turn complete. This does not mean code changes were deployed.' : 'Turn ended; Codex did not provide a recognized completion status.';
+    $('agent-intent').textContent = 'No action currently running.';
+  }
+}
 let streamMessage = null;
-$('chat-form').addEventListener('submit', async event => { event.preventDefault(); const text = $('prompt').value.trim(); if (!text || !connected || busy) return; busy = true; updateChatControls(); addMessage(text, 'user'); $('prompt').value = ''; streamMessage = null; try { await bridge.sendPrompt(text); } catch (error) { addMessage(error.message, 'error'); busy = false; updateChatControls(); } });
-$('interrupt').addEventListener('click', async () => { $('interrupt').disabled = true; try { await bridge.interrupt(); } catch (error) { addMessage(error.message, 'error'); $('interrupt').disabled = !busy; } });
+$('chat-form').addEventListener('submit', async event => { event.preventDefault(); const text = $('prompt').value.trim(); if (!text || !connected || busy) return; busy = true; startActivity(); updateChatControls(); addMessage(text, 'user'); $('prompt').value = ''; streamMessage = null; try { await bridge.sendPrompt(text); } catch (error) { addMessage(error.message, 'error'); $('activity-state').textContent = 'Error'; $('agent-stop-reason').textContent = 'Request could not be confirmed: ' + error.message; busy = false; updateChatControls(); } });
+$('interrupt').addEventListener('click', async () => { $('interrupt').disabled = true; try { stopRequested = true; $('activity-state').textContent = 'Stopping'; $('agent-stop-reason').textContent = 'Stop requested; waiting for Codex to confirm interruption.'; await bridge.interrupt(); } catch (error) { addMessage(error.message, 'error'); $('interrupt').disabled = !busy; } });
 function codexEvent(event) {
-  if (event.type === 'connected') { connected = true; settings.threadId = event.threadId; $('agent-status').textContent = 'Ready · responds only when asked'; }
+  if (event.type === 'tool-start' || event.type === 'tool-result') toolActivity(event);
+  if (event.type === 'connected') { activityThread(event.threadId); connected = true; settings.threadId = event.threadId; $('agent-status').textContent = 'Ready · responds only when asked'; }
   if (event.type === 'error') addMessage(event.message || 'Codex reported an error.', 'error');
-  if (event.type === 'disconnected') { connected = false; busy = false; $('agent-status').textContent = 'Codex disconnected'; addMessage(event.message || 'Codex disconnected.', 'error'); }
+  if (event.type === 'disconnected') { $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; busy = false; $('agent-status').textContent = 'Codex disconnected'; addMessage(event.message || 'Codex disconnected.', 'error'); }
   if (event.type === 'approval') {
+    $('activity-state').textContent = 'Needs decision'; $('agent-stop-reason').textContent = 'Waiting for your response to an approval request; no approval has been granted.';
     const entry = addMessage(`Codex requests approval: ${event.method}. This preview cannot grant elevated permissions.`, 'system');
     const denial = ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(event.method) ? { decision: 'decline' } : event.method === 'item/permissions/requestApproval' ? { permissions: {}, scope: 'turn' } : null;
     if (denial) {
@@ -217,6 +294,7 @@ function codexEvent(event) {
   }
   if (event.type === 'notification') {
     const p = event.params || {};
+    notificationActivity(event.method, p);
     if (event.method === 'turn/started') { busy = true; $('agent-status').textContent = 'Working on your request…'; }
     if (event.method === 'item/agentMessage/delta') { if (!streamMessage) streamMessage = addMessage('', 'assistant'); streamMessage.textContent += p.delta || ''; $('chat').scrollTop = $('chat').scrollHeight; }
     if (event.method === 'item/completed' && p.item?.type === 'agentMessage') { if (streamMessage) streamMessage.textContent = p.item.text || streamMessage.textContent; else if (p.item.text) addMessage(p.item.text, 'assistant'); streamMessage = null; }

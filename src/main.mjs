@@ -44,8 +44,12 @@ app.whenReady().then(async()=>{
     const currentBridge = bridge;
     const world = {...connectedWorld};
     bridge.on('event',async event=>{
+      if (currentBridge !== bridge) return;
       if(event.type !== 'tool') { win?.webContents.send('codex:event',event); return; }
+      const call = {id:event.id,threadId:event.threadId,turnId:event.turnId,name:event.name,arguments:event.arguments};
+      win?.webContents.send('codex:event',{type:'tool-start',...call});
       const result = await executeGameTool(event,world);
+      if (currentBridge === bridge) win?.webContents.send('codex:event',{type:'tool-result',...call,result});
       try { currentBridge.respond(event.id,result); } catch { /* Turn may have been interrupted. */ }
     });
     bridge.on('error',error=>win?.webContents.send('codex:event',{type:'error',message:error.message}));
