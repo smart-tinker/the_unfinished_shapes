@@ -1,18 +1,16 @@
 {
   "name": "the-unfinished-shapes",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "description": "A shared 3D construction world with your own Codex companion",
   "main": "src/main.mjs",
-  "directories": {
-    "test": "test"
-  },
   "scripts": {
     "start": "electron .",
     "server": "node src/server.mjs",
     "test": "node --test",
     "check": "node --check src/main.mjs && node --check src/renderer.mjs && node --test",
     "package:linux": "electron-packager . TheUnfinishedShapes --platform=linux --arch=x64 --out=dist --overwrite --ignore=^/test --ignore=^/dist",
-    "package:win": "electron-packager . TheUnfinishedShapes --platform=win32 --arch=x64 --out=dist --overwrite --ignore=^/test --ignore=^/dist"
+    "package:win": "electron-packager . TheUnfinishedShapes --platform=win32 --arch=x64 --out=dist --overwrite --ignore=^/test --ignore=^/dist",
+    "installer:win": "electron-builder --prepackaged dist/TheUnfinishedShapes-win32-x64 --win nsis --x64 --config build/installer.json --publish never"
   },
   "repository": {
     "type": "git",
@@ -32,6 +30,7 @@
   "devDependencies": {
     "@electron/packager": "^20.3.0",
     "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
     "playwright-core": "^1.65.0"
   },
   "overrides": {

@@ -15,34 +15,133 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
       - run: npm ci
       - run: npm run check
       - run: xvfb-run --auto-servernum node scripts/electron-smoke.mjs
-  release:
+  windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: npm run check
+      - run: npm run package:win
+      - run: npm run installer:win
+      - name: Verify clean install, RC1 migration, installed runtime and retained data
+        run: node scripts/windows-installer-smoke.mjs
+  release-windows:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: test
+    needs: [test, windows-installer]
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      published: ${{ steps.version.outputs.published }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check immutable release version
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION/-rc./-rc}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" --json isDraft,targetCommitish > release-state.json 2>/dev/null; then
+            if [ "$(node -p "require('./release-state.json').isDraft")" = false ]; then
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              echo "Release $TAG already published. Its files will not be overwritten; bump the version for a new release."
+              exit 0
+            fi
+            node -e "if(require('./release-state.json').targetCommitish!==process.env.GITHUB_SHA) throw Error('Existing draft belongs to another commit; refusing to replace it')"
+          fi
+          rm -f release-state.json
+          echo "published=false" >> "$GITHUB_OUTPUT"
+      - if: steps.version.outputs.published == 'false'
+        run: npm ci
+      - if: steps.version.outputs.published == 'false'
+        run: npm run package:win
+      - if: steps.version.outputs.published == 'false'
+        run: npm run installer:win
+      - name: Test the exact installer that will be uploaded
+        if: steps.version.outputs.published == 'false'
+        run: node scripts/windows-installer-smoke.mjs
+      - name: Archive and hash Windows files
+        if: steps.version.outputs.published == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          Compress-Archive -Path dist/TheUnfinishedShapes-win32-x64 -DestinationPath "dist/TheUnfinishedShapes-$env:VERSION-win32-x64.zip" -Force
+          Copy-Item dist/installer/*.exe dist/
+          $lines = Get-ChildItem dist/*.zip,dist/*.exe | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" }
+          $lines | Set-Content dist/SHA256SUMS-windows -Encoding utf8NoBOM
+      - name: Stage tested Windows files in a private draft
+        if: steps.version.outputs.published == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "The Unfinished Shapes ${VERSION}" --draft --prerelease --notes-file docs/RELEASE-0.1-rc2.md
+          fi
+          gh release view "$TAG" --json isDraft,targetCommitish > release-state.json
+          node -e "const r=require('./release-state.json'); if(!r.isDraft || r.targetCommitish!==process.env.GITHUB_SHA) throw Error('Refusing to overwrite a published release or a draft for another commit')"
+          gh release upload "$TAG" dist/*.zip dist/*.exe dist/SHA256SUMS-windows --clobber
+  release:
+    needs: release-windows
+    if: needs.release-windows.outputs.published == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
       - run: npm ci
-      - run: npm run package:linux && npm run package:win
-      - name: Archive portable clients
-        run: |
-          cd dist
-          tar -czf TheUnfinishedShapes-0.1-rc1-linux-x64.tar.gz TheUnfinishedShapes-linux-x64
-          zip -qr TheUnfinishedShapes-0.1-rc1-win32-x64.zip TheUnfinishedShapes-win32-x64
-          sha256sum *.tar.gz *.zip > SHA256SUMS
-      - name: Publish tested prerelease
+      - run: npm run package:linux
+      - name: Complete and publish tested prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-windows.outputs.tag }}
+          VERSION: ${{ needs.release-windows.outputs.version }}
         run: |
-          gh release create v0.1.0-rc1 dist/*.tar.gz dist/*.zip dist/SHA256SUMS --target "$GITHUB_SHA" --title "The Unfinished Shapes 0.1-rc1" --prerelease --notes-file docs/RELEASE-0.1-rc1.md
+          gh release view "$TAG" --json isDraft,targetCommitish,assets > release-state.json
+          node -e "const r=require('./release-state.json'); if(!r.isDraft || r.targetCommitish!==process.env.GITHUB_SHA) throw Error('Draft does not match this tested commit')"
+          node -e "const r=require('./release-state.json'); for(const name of ['TheUnfinishedShapes-'+process.env.VERSION+'-win32-x64.zip','TheUnfinishedShapes-'+process.env.VERSION+'-Setup-x64.exe']) { const a=r.assets.filter(x=>x.name===name); if(a.length!==1 || a[0].size<1 || a[0].size>536870912) throw Error('Missing, duplicate or oversized expected asset: '+name); }"
+          cd dist
+          tar -czf "TheUnfinishedShapes-${VERSION}-linux-x64.tar.gz" TheUnfinishedShapes-linux-x64
+          gh release download "$TAG" --pattern "TheUnfinishedShapes-${VERSION}-win32-x64.zip" --pattern "TheUnfinishedShapes-${VERSION}-Setup-x64.exe" --dir .
+          sha256sum "TheUnfinishedShapes-${VERSION}-win32-x64.zip" "TheUnfinishedShapes-${VERSION}-Setup-x64.exe" *.tar.gz > SHA256SUMS
+          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
+          gh release upload "$TAG" *.tar.gz SHA256SUMS --clobber
+          gh release edit "$TAG" --draft=false --prerelease

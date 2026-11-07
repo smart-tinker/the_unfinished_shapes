@@ -1,30 +1,36 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mkdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { CodexBridge } from './codex.mjs';
 import { executeGameTool } from './game-tools.mjs';
 import { createWorldServer } from './server.mjs';
-if(process.env.TUS_DATA_DIR) app.setPath('userData',path.resolve(process.env.TUS_DATA_DIR));
+import { DATA_DIRECTORY, loadSettings, saveSettings } from './settings.mjs';
+import { findCodex } from './codex-discovery.mjs';
+const userData = process.env.TUS_DATA_DIR ? path.resolve(process.env.TUS_DATA_DIR) : path.join(app.getPath('appData'),DATA_DIRECTORY);
+mkdirSync(userData,{recursive:true});
+app.setPath('userData',userData);
 const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld;
 if (!app.requestSingleInstanceLock()) app.quit();
-const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
-async function settings() { try { return JSON.parse(await readFile(settingsPath(), 'utf8')); } catch(e) { if(e.code === 'ENOENT') return {}; throw e; } }
+const settings = () => loadSettings(app.getPath('userData'));
 function assertSender(event) { if(event.sender !== win.webContents) throw new Error('Untrusted sender'); }
 function handle(name, fn) { ipcMain.handle(name, (event,...args) => { assertSender(event); return fn(...args); }); }
 function serverUrl(value) { const u = new URL(value); if(!['http:','https:'].includes(u.protocol) || u.username || u.password || u.pathname !== '/' || u.search || u.hash) throw new Error('Use an HTTP(S) server origin without credentials or paths'); return u.origin; }
 app.whenReady().then(async()=>{
   await mkdir(app.getPath('userData'), {recursive:true});
-  const saved = await settings();
+  await settings(); // Validate existing data before starting; never silently reset it.
   // A fresh local token is session-only and never enables LAN access.
   const localToken = randomBytes(32).toString('hex');
   localServer = await createWorldServer({dataPath:path.join(app.getPath('userData'),'world.json'),users:{[localToken]:{id:'local-player',role:'admin'}},host:'127.0.0.1',port:4317});
   await new Promise((resolve,reject)=>localServer.once('error',reject).listen(0,'127.0.0.1',resolve));
   const localUrl = `http://127.0.0.1:${localServer.address().port}`;
-  handle('settings:load', async()=>({...await settings(),serverUrl:saved.serverUrl || localUrl,token:!saved.serverUrl ? localToken : ''}));
-  handle('settings:save', async(s)=>{ const clean={workspacePath:String(s.workspacePath||''),codexPath:String(s.codexPath||''),serverUrl:serverUrl(s.serverUrl||localUrl) === localUrl ? '' : serverUrl(s.serverUrl),threadId:String(s.threadId||'')}; await writeFile(settingsPath(),JSON.stringify(clean,null,2),{mode:0o600}); });
+  handle('settings:load', async()=>{const current=await settings();return {...current,serverUrl:current.serverUrl||localUrl,token:current.serverUrl?'':localToken};});
+  handle('settings:save', async(s)=>{ const clean={workspacePath:String(s.workspacePath||''),codexPath:String(s.codexPath||''),serverUrl:serverUrl(s.serverUrl||localUrl) === localUrl ? '' : serverUrl(s.serverUrl),threadId:String(s.threadId||'')}; await saveSettings(app.getPath('userData'),clean); });
+  handle('codex:find',()=>findCodex());
+  handle('path:choose',async(kind)=>{if(!['workspace','codex'].includes(kind)) throw new Error('Unsupported path choice');const result=await dialog.showOpenDialog(win,{title:kind==='workspace'?'Choose game repository':'Choose Codex executable',properties:[kind==='workspace'?'openDirectory':'openFile']});return result.canceled?null:result.filePaths[0];});
   handle('world:request', async({serverUrl:url,token,method='GET',path:route,body})=>{
     if(!['/state','/command'].includes(route)|| !['GET','POST'].includes(method)) throw new Error('Unsupported world request');
     const response=await fetch(serverUrl(url)+route,{method,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:method==='POST'?JSON.stringify(body):undefined,signal:AbortSignal.timeout(5000),redirect:'error'});
@@ -53,6 +59,6 @@ app.whenReady().then(async()=>{
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',(event)=>event.preventDefault());
   await win.loadFile(path.join(here,'index.html'));
-}).catch(error=>{console.error(error.message);app.quit();});
+}).catch(error=>{dialog.showErrorBox('The Unfinished Shapes could not start',error.message+'\nYour saved settings and world have not been reset.');app.quit();});
 app.on('window-all-closed',()=>app.quit());
 app.on('before-quit',()=>{bridge?.stop();localServer?.close();});

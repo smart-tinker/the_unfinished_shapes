@@ -1,0 +1,19 @@
+{
+  "appId": "com.smarttinker.theunfinishedshapes",
+  "productName": "The Unfinished Shapes",
+  "executableName": "TheUnfinishedShapes",
+  "directories": { "output": "dist/installer" },
+  "artifactName": "TheUnfinishedShapes-${version}-Setup-${arch}.${ext}",
+  "win": { "target": [{ "target": "nsis", "arch": ["x64"] }], "signAndEditExecutable": false },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowElevation": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false,
+    "runAfterFinish": false,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "The Unfinished Shapes"
+  }
+}

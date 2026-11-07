@@ -128,6 +128,17 @@ $('build-form').addEventListener('submit', async event => { event.preventDefault
 $('remove').addEventListener('click', async () => { if (!selectedId) return; const id = selectedId; $('remove').disabled = true; try { await command({ type: 'remove', id }); feedback('Shape removed.'); } catch (error) { feedback(error.message, true); } finally { $('remove').disabled = !selectedId; } });
 window.addEventListener('keydown', event => { if (!['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) keys.add(event.key.toLowerCase()); });
 window.addEventListener('keyup', event => keys.delete(event.key.toLowerCase())); window.addEventListener('blur', () => keys.clear());
+$('find-codex').addEventListener('click', async () => {
+  const button=$('find-codex'),results=$('codex-results');button.disabled=true;results.textContent='Looking in known installation locations…';
+  try {
+    const found=await bridge.findCodex();results.replaceChildren();
+    if(!found.candidates.length){const note=document.createElement('p');note.textContent='No native Codex executable found. You can choose its file manually.';results.append(note);}
+    for(const candidate of found.candidates){const choice=document.createElement('button');choice.type='button';choice.className='codex-candidate';const label=document.createElement('strong');label.textContent=candidate.label;const location=document.createElement('small');location.textContent=candidate.path;choice.append(label,location);choice.addEventListener('click',()=>{$('codex').value=candidate.path;$('settings-message').textContent='Selected '+candidate.label+'. Connect to use it.';});results.append(choice);}
+    for(const tip of found.hints||[]){const note=document.createElement('p');note.className='muted small';note.textContent=tip;results.append(note);}
+    if(found.incomplete){const note=document.createElement('p');note.textContent='Some locations could not be inspected. Manual selection is still available.';results.append(note);}
+  }catch(error){results.textContent=error.message;}finally{button.disabled=false;}
+});
+for(const [button,kind,input] of [['browse-codex','codex','codex'],['browse-workspace','workspace','workspace']])$(button).addEventListener('click',async()=>{try{const selected=await bridge.choosePath(kind);if(selected)$(input).value=selected;}catch(error){$('settings-message').textContent=error.message;}});
 $('settings-open').addEventListener('click', () => $('settings').showModal()); $('settings-close').addEventListener('click', () => $('settings').close());
 function readSettings() { return { ...settings, workspacePath: $('workspace').value.trim(), codexPath: $('codex').value.trim(), serverUrl: $('server-url').value.trim(), token: $('token').value }; }
 async function saveSettings() {
