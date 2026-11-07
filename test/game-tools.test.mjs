@@ -46,3 +46,33 @@ test('flat agent tools preserve server validation and optimistic edit conflicts'
   assert.equal(JSON.parse(state.contentItems[0].text).objects[0].color,'#334455');
  } finally {await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
 });
+
+test('world_build missing, null or extra design fields never fall back to server defaults',async(t)=>{
+ const fetch=t.mock.method(globalThis,'fetch',async()=>{throw new Error('Network must not be reached.');});
+ const design={objectType:'block',position:{x:0,y:0,z:0},size:{x:2,y:2,z:2},color:'#3366cc'};
+ for(const key of Object.keys(design)) {
+  for(const value of [undefined,null]) {
+   const result=await executeGameTool({name:'world_build',arguments:{...design,[key]:value}},{url:'http://127.0.0.1:1',token:'unused'});
+   assert.equal(result.success,false);assert.match(result.contentItems[0].text,/requires exactly/);
+  }
+  const missing={...design};delete missing[key];
+  assert.equal((await executeGameTool({name:'world_build',arguments:missing},{url:'http://127.0.0.1:1',token:'unused'})).success,false);
+ }
+ assert.equal((await executeGameTool({name:'world_build',arguments:{...design,type:'move'}},{url:'http://127.0.0.1:1',token:'unused'})).success,false);
+ assert.equal(fetch.mock.callCount(),0);
+});
+
+test('world_build keeps authoritative validation, roles and explicit nondefault color; legacy build survives',async()=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'tus-build-tool-'));
+ const server=await createWorldServer({dataPath:path.join(dir,'world.json'),users:{'builder-secret-12345':{id:'one',role:'builder'},'viewer-secret-12345':{id:'two',role:'viewer'}}});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));const url=`http://127.0.0.1:${server.address().port}`;
+ const connection={url,token:'builder-secret-12345'};
+ const design={objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#3366cc'};
+ try {
+  const result=await executeGameTool({name:'world_build',arguments:design},connection);assert.equal(result.success,true);
+  const built=JSON.parse(result.contentItems[0].text).object;assert.equal(built.color,'#3366cc');assert.equal(built.ownerId,'one');
+  const denied=await executeGameTool({name:'world_build',arguments:design},{url,token:'viewer-secret-12345'});assert.equal(denied.success,false);
+  for(const invalid of [{...design,objectType:'unknown'},{...design,color:'invalid'},{...design,position:{x:1e9,y:0,z:0}},{...design,size:{x:0,y:2,z:2}}])assert.equal((await executeGameTool({name:'world_build',arguments:invalid},connection)).success,false);
+  const legacy=await executeGameTool({name:'world_command',arguments:{command:{type:'build',objectType:'block',position:{x:0,y:0,z:0}}}},connection);assert.equal(legacy.success,true);assert.equal(JSON.parse(legacy.contentItems[0].text).object.color,'#c8a570');
+ } finally {await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
+});

@@ -218,11 +218,18 @@ function startActivity() {
   stopRequested = false; toolRows.clear(); itemRows.clear(); $('agent-actions').replaceChildren(); $('agent-plan').replaceChildren(); $('agent-plan').hidden = true;
   $('activity-state').textContent = 'Requested'; $('agent-intent').textContent = 'Waiting for Codex to report its next action.'; $('agent-stop-reason').textContent = 'Request submitted; no completion reported yet.';
 }
+function constructionLabel(design, verb = 'Build') {
+  if (!['block', 'bridge', 'port'].includes(design?.objectType || design?.type)) return null;
+  const position = design.position;
+  if (!position || !['x', 'y', 'z'].every(axis => typeof position[axis] === 'number' && Number.isFinite(position[axis]) && Math.abs(position[axis]) <= 1000)) return null;
+  return `${verb} ${design.objectType || design.type} at (${position.x}, ${position.y}, ${position.z})`;
+}
 function toolLabel(event) {
   if (event.name === 'world_state') return 'Read world state';
-  if (event.name !== 'world_command') return 'Requested tool';
+  if (!['world_command', 'world_build'].includes(event.name)) return 'Requested tool';
   let args = event.arguments;
-  if (typeof args === 'string') { try { args = JSON.parse(args); } catch { return 'World command'; } }
+  if (typeof args === 'string') { try { args = JSON.parse(args); } catch { return event.name === 'world_build' ? 'Build shape (invalid design)' : 'World command'; } }
+  if (event.name === 'world_build') return constructionLabel(args) || 'Build shape (invalid design)';
   const labels = { build: 'Build shape', update: 'Edit shape', remove: 'Remove shape', move: 'Move player' };
   return labels[args?.command?.type] || labels[args?.type] || 'World command';
 }
@@ -238,8 +245,15 @@ function toolActivity(event) {
   const row = toolRows.get(key) || activityRow(label); toolRows.set(key, row);
   const success = event.result?.success === true;
   let response; try { const text = event.result?.contentItems?.find(item => item.type === 'inputText')?.text; if (typeof text === 'string' && text.length < 2000000) response = JSON.parse(text); } catch { /* Only structured evidence is summarized. */ }
-  const revision = Number.isSafeInteger(response?.revision) ? ` · revision ${response.revision}` : '';
-  row.textContent = label + (success ? ' · completed' : ' · failed') + revision; row.dataset.status = success ? 'completed' : 'failed';
+  const revision = Number.isSafeInteger(response?.revision) && response.revision >= 0 ? ` · revision ${response.revision}` : '';
+  if (event.name === 'world_build') {
+    const created = response?.object;
+    const confirmedLabel = success && typeof created?.id === 'string' && created.id.length > 0 && revision ? constructionLabel(created, 'Built') : null;
+    row.textContent = confirmedLabel ? confirmedLabel + ' · server confirmed' + revision : label + (success ? ' · construction not confirmed by a created object' : ' · failed');
+    row.dataset.status = confirmedLabel ? 'completed' : success ? 'unconfirmed' : 'failed';
+  } else {
+    row.textContent = label + (success ? ' · completed' : ' · failed') + revision; row.dataset.status = success ? 'completed' : 'failed';
+  }
   if (!success) $('agent-stop-reason').textContent = 'A tool failed. The turn may continue; wait for its final status.';
 }
 function notificationActivity(method, params) {
