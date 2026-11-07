@@ -1,0 +1,47 @@
+name: Exact RC Linux graphics diagnostic
+on:
+  pull_request:
+    paths:
+      - 'tools/linux-graphics-diagnostic.mjs'
+      - '.github/workflows/linux-graphics-diagnostic.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: linux-graphics-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  compare-graphics:
+    if: github.event.repository.private == false
+    # Standard runner, pinned OS matching failed release run; no paid runner.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: diagnostic
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: smart-tinker/the_unfinished_shapes
+          ref: 867b5fa4dfa3d36bfad2abfc13bbfbb35b3fc488
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify immutable candidate
+        working-directory: candidate
+        run: |
+          test "$(git rev-parse HEAD)" = 867b5fa4dfa3d36bfad2abfc13bbfbb35b3fc488
+          test "$(git rev-parse 'HEAD^{tree}')" = e78ce3b60655514fccd8426c0c7b32de710b72be
+      - run: npm ci
+        working-directory: candidate
+      - run: npm run package:linux
+        working-directory: candidate
+      - name: Compare all four modes without publishing
+        env:
+          TUS_DIAGNOSTIC_SOURCE: ${{ github.workspace }}/candidate
+          # Includes early Electron stderr before Playwright returns the app handle.
+          DEBUG: pw:browser
+        run: xvfb-run --auto-servernum node diagnostic/tools/linux-graphics-diagnostic.mjs
