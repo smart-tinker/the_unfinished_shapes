@@ -14,6 +14,7 @@ export const WORLD_TOOLS = [
     type: 'object', properties: { command: { oneOf: [
       { type: 'object', properties: { type: { const: 'move' }, position: positionSchema }, required: ['type', 'position'], additionalProperties: false },
       { type: 'object', properties: { type: { const: 'build' }, objectType: { type: 'string', enum: ['block', 'bridge', 'port'] }, position: positionSchema, size: positionSchema, color: { type: 'string', pattern: '^#[a-fA-F0-9]{6}$' } }, required: ['type', 'objectType', 'position'], additionalProperties: false },
+      { type: 'object', properties: { type: { const: 'update' }, id: { type: 'string' }, position: positionSchema, size: positionSchema, color: { type: 'string', pattern: '^#[a-fA-F0-9]{6}$' }, expected: { type: 'object', description: 'Original values from world_state for exactly the fields being edited. On conflict, refresh and ask rather than overwriting.', properties: { position: positionSchema, size: positionSchema, color: { type: 'string', pattern: '^#[a-fA-F0-9]{6}$' } }, minProperties: 1, additionalProperties: false } }, required: ['type', 'id', 'expected'], anyOf: [{ required: ['position'] }, { required: ['size'] }, { required: ['color'] }], additionalProperties: false },
       { type: 'object', properties: { type: { const: 'remove' }, id: { type: 'string' } }, required: ['type', 'id'], additionalProperties: false },
     ] } }, required: ['command'], additionalProperties: false,
   } },
