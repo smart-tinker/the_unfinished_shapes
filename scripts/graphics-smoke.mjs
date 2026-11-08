@@ -53,7 +53,7 @@ export async function observeGraphics(page, { label = 'launch', log = console.lo
   report('start');
   try {
     await history();
-    await page.evaluate(() => {
+    const initialGL = await page.evaluate(() => {
       window.__smokeContextLost = false;
       window.__smokeGraphicsEvents = [];
       for (const type of ['webglcontextlost', 'webglcontextrestored']) document.addEventListener(type, event => {
@@ -63,7 +63,23 @@ export async function observeGraphics(page, { label = 'launch', log = console.lo
         window.__smokeGraphicsEvents = window.__smokeGraphicsEvents.slice(-20);
         console.warn(`TUS_SMOKE_CONTEXT_EVENT ${JSON.stringify(observed)}`);
       }, true);
+      // Inspect the scene's existing context only; never create a diagnostic canvas.
+      try {
+        const canvas = document.querySelector('#viewport canvas');
+        const gl = canvas?.getContext('webgl2');
+        if (!gl || gl.isContextLost()) return { available: false };
+        const debug = gl.getExtension('WEBGL_debug_renderer_info');
+        return {
+          available: true, renderer: gl.getParameter(gl.RENDERER), vendor: gl.getParameter(gl.VENDOR),
+          version: gl.getParameter(gl.VERSION),
+          unmaskedRenderer: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : null,
+          unmaskedVendor: debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : null,
+          attributes: gl.getContextAttributes(), drawingBuffer: [gl.drawingBufferWidth, gl.drawingBufferHeight],
+          canvasSize: [canvas.width, canvas.height], dpr: window.devicePixelRatio
+        };
+      } catch { return { available: false }; }
     });
+    report('initial-gl', { state: initialGL });
   } catch (error) {
     report('observer-setup-failed', { message: error.message });
     throw error;

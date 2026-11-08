@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
+import { createGpuDiagnostics } from './gpu-smoke.mjs';
 
 // This test intentionally touches the real per-user app directory only on a disposable runner.
 if (process.platform !== 'win32' || process.env.CI !== 'true' || process.env.RUNNER_OS !== 'Windows') {
@@ -34,9 +35,11 @@ const settingsFixture = {
   serverUrl: '', threadId: 'saved-game-thread-fixture', token: 'test-value-that-must-not-be-saved'
 };
 await mkdir(settingsFixture.workspacePath, { recursive: true });
-let instance, graphics;
+let instance, graphics, gpu;
 async function launch(executablePath, label) {
-  instance = await electron.launch({ executablePath, args: ['--no-sandbox'], env: { ...process.env, TUS_DATA_DIR: '' }, timeout: 45000 });
+  gpu = await createGpuDiagnostics(label);
+  instance = await electron.launch({ executablePath, args: ['--no-sandbox', ...gpu.args], env: { ...process.env, TUS_DATA_DIR: '' }, timeout: 45000 });
+  await gpu.attach(instance);
   const page = await instance.firstWindow();
   graphics = await observeGraphics(page, { label });
   graphics.phase('world connection');
@@ -47,9 +50,9 @@ async function launch(executablePath, label) {
   return page;
 }
 async function close(phase) {
-  const closing = instance, observed = graphics;
-  instance = null; graphics = null;
-  await closeSmokeApp(closing, observed, phase);
+  const closing = instance, observed = graphics, diagnostic = gpu;
+  instance = null; graphics = null; gpu = null;
+  await withSmokeCleanup(() => closeSmokeApp(closing, observed, phase), () => diagnostic?.finish());
 }
 async function uninstall() {
   const uninstaller = (await readdir(installDir)).find(name => /^Uninstall.*\.exe$/i.test(name));

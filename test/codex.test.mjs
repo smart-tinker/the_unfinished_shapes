@@ -96,9 +96,11 @@ test('malformed protocol, request timeout and exit reject pending requests and d
   await new Promise(r=>setTimeout(r,10)); malformed.child.stdout.write('not json\n');
   await assert.rejects(p,/malformed/); assert.equal(malformed.child.killed,true);
   const timed=fixture(()=>false,20); await assert.rejects(timed.start(),/timed out/);
-  const exited=fixture(()=>false); const q=exited.start();
-  await new Promise(r=>setTimeout(r,10)); exited.child.emit('exit',1);
-  await assert.rejects(q,/exited/);
+  const exited=fixture(request=>{
+    if(request.method==='initialize') queueMicrotask(()=>exited.child.emit('exit',1));
+    return false;
+  });
+  await assert.rejects(exited.start(),/exited/);
 });
 
 test('invalid paths do not start a process',async()=>{

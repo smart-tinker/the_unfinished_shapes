@@ -4,6 +4,7 @@ import {mkdtemp,rm,mkdir,writeFile,access,realpath} from 'node:fs/promises';
 import os from 'node:os';
 import {observeGraphics,closeSmokeApp,withSmokeCleanup} from './graphics-smoke.mjs';
 import path from 'node:path';
+import {createGpuDiagnostics} from './gpu-smoke.mjs';
 const dir=await mkdtemp(path.join(os.tmpdir(),'tus-desktop-'));
 const fakeBin=path.join(dir,'bin'),fakeCodex=path.join(fakeBin,'codex'),marker=path.join(dir,'unexpected-codex-run');
 await mkdir(fakeBin);await writeFile(fakeCodex,`#!/bin/sh\ntouch '${marker}'\nexit 99\n`,{mode:0o755});
@@ -13,13 +14,18 @@ const packagedExecutable=process.env.TUS_SMOKE_EXECUTABLE;
 // Preserve the existing Linux CI exception only; native macOS uses its normal sandbox.
 const ciFlags=process.platform==='linux'?['--no-sandbox']:[];
 const launchOptions={...(packagedExecutable?{executablePath:path.resolve(packagedExecutable)}:{}),args:[...(packagedExecutable?[]:['.']),...ciFlags],env:testEnv,timeout:30000};
-let app, graphics;
+let app, graphics, gpu;
+async function launch(label) {
+ gpu=await createGpuDiagnostics(label);
+ app=await electron.launch({...launchOptions,args:[...launchOptions.args,...gpu.args]});
+ await gpu.attach(app);
+}
 async function close(phase) {
- const closing=app, observed=graphics;app=null;graphics=null;
- await closeSmokeApp(closing,observed,phase);
+ const closing=app, observed=graphics, diagnostic=gpu;app=null;graphics=null;gpu=null;
+ await withSmokeCleanup(()=>closeSmokeApp(closing,observed,phase),()=>diagnostic?.finish());
 }
 await withSmokeCleanup(async()=>{
- app=await electron.launch(launchOptions);
+ await launch('first launch');
  if(process.platform==='darwin') assert.equal(await app.evaluate(()=>process.argv.includes('--no-sandbox')),false,'native macOS must not disable the sandbox');
  const page=await app.firstWindow();graphics=await observeGraphics(page,{label:'first launch'});
  if(process.platform==='darwin') assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences().sandbox),true,'native macOS renderer sandbox remains enabled');
@@ -48,7 +54,7 @@ await withSmokeCleanup(async()=>{
  graphics.phase('screenshot');
  await mkdir('dist',{recursive:true});await page.screenshot({path:'dist/desktop-smoke.png'});
  await close();
- app=await electron.launch(launchOptions);
+ await launch('restart');
  const reopened=await app.firstWindow();graphics=await observeGraphics(reopened,{label:'restart'});graphics.phase('restart world connection');await reopened.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
  graphics.phase('restart persistence');
  state=await reopened.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});

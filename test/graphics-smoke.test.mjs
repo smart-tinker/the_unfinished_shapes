@@ -10,7 +10,7 @@ function fakePage({ messages = [], errors = [] } = {}) {
   const state = { sceneError: { hidden: true, textContent: '' }, lost: false, hasContext: true };
   document.addEventListener = document.on.bind(document);
   document.querySelector = selector => selector === '#scene-error' ? state.sceneError : {
-    getContext: () => state.hasContext ? { isContextLost: () => state.lost } : null
+    getContext: () => state.hasContext ? { isContextLost: () => state.lost, getExtension: () => null, getParameter: () => 'test-renderer', getContextAttributes: () => ({ alpha: true }), drawingBufferWidth: 640, drawingBufferHeight: 480 } : null
   };
   const context = vm.createContext({ window: {}, document, console: { warn: text => page.emit('console', { text: () => text }) } });
   page.evaluate = async fn => vm.runInContext(`(${fn.toString()})()`, context);
@@ -181,4 +181,18 @@ test('a failed diagnostic logger cannot mask graphics failure or prevent app.clo
     return true;
   });
   assert.equal(closed, true);
+});
+
+
+test('initial GL snapshot is captured while healthy before later loss', async () => {
+  const { page, state } = fakePage(), logs = [];
+  const graphics = await observeGraphics(page, { log: line => logs.push(JSON.parse(line.slice('Graphics smoke '.length))) });
+  const initial = logs.find(line => line.event === 'initial-gl');
+  assert.equal(initial.state.available, true);
+  assert.equal(initial.state.renderer, 'test-renderer');
+  assert.deepEqual(initial.state.drawingBuffer, [640, 480]);
+  assert.deepEqual(initial.state.attributes, { alpha: true });
+  state.lost = true;
+  await assert.rejects(graphics.assertHealthy(), /WebGL context must remain healthy/);
+  assert.equal(initial.state.available, true);
 });
