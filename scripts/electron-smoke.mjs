@@ -2,7 +2,7 @@ import {_electron as electron} from 'playwright-core';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm,mkdir,writeFile,access,realpath} from 'node:fs/promises';
 import os from 'node:os';
-import {observeGraphics} from './graphics-smoke.mjs';
+import {observeGraphics,closeSmokeApp,withSmokeCleanup} from './graphics-smoke.mjs';
 import path from 'node:path';
 const dir=await mkdtemp(path.join(os.tmpdir(),'tus-desktop-'));
 const fakeBin=path.join(dir,'bin'),fakeCodex=path.join(fakeBin,'codex'),marker=path.join(dir,'unexpected-codex-run');
@@ -14,25 +14,26 @@ const packagedExecutable=process.env.TUS_SMOKE_EXECUTABLE;
 const ciFlags=process.platform==='linux'?['--no-sandbox']:[];
 const launchOptions={...(packagedExecutable?{executablePath:path.resolve(packagedExecutable)}:{}),args:[...(packagedExecutable?[]:['.']),...ciFlags],env:testEnv,timeout:30000};
 let app, graphics;
-async function close() {
+async function close(phase) {
  const closing=app, observed=graphics;app=null;graphics=null;
- if(!closing) return;
- try {await observed?.assertHealthy();} finally {await closing.close();}
- observed?.assertNoErrors();
+ await closeSmokeApp(closing,observed,phase);
 }
-try {
+await withSmokeCleanup(async()=>{
  app=await electron.launch(launchOptions);
  if(process.platform==='darwin') assert.equal(await app.evaluate(()=>process.argv.includes('--no-sandbox')),false,'native macOS must not disable the sandbox');
- const page=await app.firstWindow();graphics=await observeGraphics(page);
+ const page=await app.firstWindow();graphics=await observeGraphics(page,{label:'first launch'});
  if(process.platform==='darwin') assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences().sandbox),true,'native macOS renderer sandbox remains enabled');
+ graphics.phase('world connection');
  await page.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
  await graphics.assertHealthy();
+ graphics.phase('construction');
  await page.locator('[data-kind="bridge"]').click(); await page.locator('#build-x').fill('3');
  await page.locator('#build-form button').click();
  await page.waitForFunction(()=>document.querySelector('#world-message')?.textContent.includes('placed'));
  let state=await page.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
  assert.equal(state.objects.length,1);assert.equal(state.objects[0].type,'bridge');
  assert.equal(await page.locator('#send').isDisabled(),true);
+ graphics.phase('settings and Codex discovery');
  await page.locator('#settings-open').click();assert.equal(await page.locator('#settings').isVisible(),true);
  await page.locator('#settings-close').click();assert.equal(await page.locator('#settings').isVisible(),false);
  await page.locator('#settings-open').click();
@@ -44,16 +45,20 @@ try {
  await page.locator('#settings-close').click();
  await page.evaluate(async()=>{const s=await window.tus.loadSettings();await window.tus.saveSettings({...s,threadId:'smoke-preserved-game-thread'});});
  await assert.rejects(access(marker),'search must not execute discovered files');
+ graphics.phase('screenshot');
  await mkdir('dist',{recursive:true});await page.screenshot({path:'dist/desktop-smoke.png'});
  await close();
  app=await electron.launch(launchOptions);
- const reopened=await app.firstWindow();graphics=await observeGraphics(reopened);await reopened.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
+ const reopened=await app.firstWindow();graphics=await observeGraphics(reopened,{label:'restart'});graphics.phase('restart world connection');await reopened.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
+ graphics.phase('restart persistence');
  state=await reopened.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
  assert.equal(state.objects.length,1,'world survives desktop restart');
  const restored=await reopened.evaluate(()=>window.tus.loadSettings());assert.equal(restored.codexPath,expectedCodexPath);assert.equal(restored.workspacePath,dir);assert.equal(restored.threadId,'smoke-preserved-game-thread');
+ graphics.phase('authenticated removal');
  // Removal below exercises the authenticated command API, not canvas selection or the Remove button.
  await reopened.evaluate(async id=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/command',method:'POST',body:{type:'remove',id}});},state.objects[0].id);
  const emptied=await reopened.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});assert.equal(emptied.objects.length,0,'API removal is confirmed by authoritative state read');
  await assert.rejects(access(marker),'restart must not execute a discovered candidate');
- await close();console.log(`${packagedExecutable?'Packaged':'Source'} ${process.platform}/${process.arch} Electron smoke`);console.log('Electron smoke passed: WebGL startup, UI construction, settings repeated/cancel, safe Codex discovery/selection, persisted settings/thread ID/world after restart, authenticated API removal, no unsolicited model call. Canvas selection and graphical removal were not tested.');
-} finally {try {await close();} finally {await rm(dir,{recursive:true,force:true});}}
+ await close();
+},()=>close('final cleanup'),()=>rm(dir,{recursive:true,force:true}));
+console.log(`${packagedExecutable?'Packaged':'Source'} ${process.platform}/${process.arch} Electron smoke`);console.log('Electron smoke passed: WebGL startup, UI construction, settings repeated/cancel, safe Codex discovery/selection, persisted settings/thread ID/world after restart, authenticated API removal, no unsolicited model call. Canvas selection and graphical removal were not tested.');
