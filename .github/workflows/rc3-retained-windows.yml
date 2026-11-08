@@ -1,0 +1,60 @@
+name: Retained RC3 Windows validation
+on:
+  pull_request:
+    branches: [release/0.1.0-rc3]
+    paths:
+      - '.github/workflows/rc3-retained-windows.yml'
+      - 'scripts/retained-windows-*.mjs'
+      - 'scripts/retained-installed-identity.mjs'
+      - 'test/retained-windows.test.mjs'
+      - 'docs/rc3-retained-windows.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: retained-rc3-windows
+  cancel-in-progress: false
+jobs:
+  retained-windows:
+    if: github.repository == 'smart-tinker/the_unfinished_shapes' && github.event.repository.private == false && ((github.event_name == 'pull_request' && github.head_ref == 'recovery/rc3-retained-windows' && github.base_ref == 'release/0.1.0-rc3' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/recovery/rc3-retained-windows'))
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      RETAINED_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+      RETAINED_PR_BASE: ${{ github.event.pull_request.base.sha }}
+      GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: validation
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: smart-tinker/the_unfinished_shapes
+          ref: 867b5fa4dfa3d36bfad2abfc13bbfbb35b3fc488
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: smart-tinker/the_unfinished_shapes
+          ref: dcb8420326eed026a5397ca20690fb0f30886362
+          path: pinned-harness
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Fail early if fixed draft is inaccessible to read-only token
+        run: node validation/scripts/retained-windows-series.mjs --preflight
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Install exact candidate test dependencies without lifecycle scripts
+        working-directory: candidate
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Validate fixed plan and transformations
+        run: node --test validation/test/retained-windows.test.mjs
+      - name: Run five strict and three diagnostic retained-installer cycles
+        run: node validation/scripts/retained-windows-series.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
