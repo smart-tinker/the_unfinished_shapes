@@ -114,8 +114,8 @@ try {
  assert.equal(initialControls.goalSupported,true,'the pinned Codex app-server must expose native Goals');
  assert.equal(initialControls.goal,null,'a new game conversation must start without a Goal');
  const design={objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#3366cc'};
- const objective=`Your first game-tool call must be world_state. Read its successful result and identify the current player and role. Do not call world_build before world_state succeeds. Then call world_build exactly once with these exact JSON arguments: ${JSON.stringify(design)}. Do not call world_command, use shell tools, or change the design.`;
- const createdGoal=await bridge.createGoal({objective,completionCriteria:'The server has persisted exactly one object matching the supplied design; report the result.'});
+ const objective=`Build exactly one block matching this design: ${JSON.stringify(design)}. First call world_state once, then call world_build once with these exact arguments. After the server confirms the build, report briefly.`;
+ const createdGoal=await bridge.createGoal({objective,completionCriteria:'Exactly one object matching the supplied design is persisted and visible to another player.'});
  assert.equal(createdGoal.threadId,initialControls.threadId);
  assert.equal(createdGoal.status,'active');
  assert.ok(createdGoal.objective.includes('The server has persisted exactly one object'));
