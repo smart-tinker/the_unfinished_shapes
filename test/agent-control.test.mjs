@@ -68,7 +68,7 @@ test('creates one real native Goal with the user objective and completion criter
 });
 
 test('does not replace an existing native Goal', async () => {
-  const f = fixture(message => message.method === 'thread/goal/get' ? { goal: { objective: 'Existing', status: 'active' } } : undefined);
+  const f = fixture(message => message.method === 'thread/goal/get' ? { goal: { threadId: 'game-thread', objective: 'Existing', status: 'active' } } : undefined);
   await f.start();
   await assert.rejects(f.bridge.createGoal({ objective: 'New', completionCriteria: 'Done' }), /already exists/i);
   assert.equal(f.requests.some(request => request.method === 'thread/goal/set'), false);
@@ -109,7 +109,7 @@ test('unsupported native Goals are detected by the native method, not experiment
   await f.start();
   const state = await f.bridge.readControlState();
   assert.equal(state.goalSupported, false);
-  assert.equal(state.goalReason, 'This Codex runtime does not expose native Goals.');
+  assert.equal(state.goalReason, 'Native Goals are not supported by this Codex runtime.');
   assert.equal(f.requests.some(request => request.method === 'experimentalFeature/list'), false);
   await assert.rejects(f.bridge.createGoal({ objective: 'Build', completionCriteria: 'Done' }), /not supported/i);
   assert.equal(f.requests.some(request => request.method === 'thread/goal/set'), false);
