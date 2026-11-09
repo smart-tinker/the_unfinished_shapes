@@ -72,7 +72,7 @@ test('an active turn or pending approval requires confirmation', async () => {
 });
 
 test('unknown or disconnected Codex state requires confirmation before app quit', async () => {
-  for (const state of [null, { connected: false }, { ...idle(), thread: { status: { type: 'unknown' } }]) {
+  for (const state of [null, { connected: false }, { ...idle(), thread: { status: { type: 'unknown' } } }]) {
     const h = harness({ state, answer: false });
     assert.equal(await h.requestAppQuit(), true);
     assert.deepEqual(h.counts(), { quitCalls: 0, cleanupCalls: 0 });
