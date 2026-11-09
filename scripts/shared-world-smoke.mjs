@@ -121,19 +121,16 @@ await withSmokeCleanup(async () => {
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < 14.5, 'Alice to walk back from the solid side');
   await alice.page.keyboard.up('a');
   await alice.page.waitForTimeout(300);
-  const jumpMoves = [];
   await alice.page.evaluate(() => {
-    window.__tusJumpKeys = [];
-    window.addEventListener('keydown', event => {
-      if (event.code === 'Space') window.__tusJumpKeys.push({ target: event.target?.tagName, defaultPrevented: event.defaultPrevented });
+    document.activeElement?.blur();
+    window.__tusInputEvents = [];
+    for (const type of ['keydown', 'keyup', 'blur']) window.addEventListener(type, event => {
+      window.__tusInputEvents.push({ type, key: event.key, code: event.code, target: event.target?.tagName, active: document.activeElement?.tagName });
     }, true);
   });
-  alice.page.on('request', request => {
-    if (request.url() === url + '/command' && request.method() === 'POST') {
-      try { const body = request.postDataJSON(); if (body.type === 'move') jumpMoves.push({ jump: body.jump === true, position: body.position }); } catch {}
-    }
-  });
   await alice.page.keyboard.down('Space');
+  await alice.page.waitForTimeout(120);
+  await alice.page.keyboard.up('Space');
   await alice.page.keyboard.down('d');
   const jumpTimeline = [];
   for (let i = 0; i < 6; i++) {
@@ -142,10 +139,9 @@ await withSmokeCleanup(async () => {
     const player = snapshot.players.find(item => item.id === 'alice');
     jumpTimeline.push({ server: player && { position: player.position, velocityY: player.velocityY }, client: await alice.page.locator('#coordinates').textContent() });
   }
-  const jumpKeys = await alice.page.evaluate(() => window.__tusJumpKeys);
-  console.log('Jump probe ' + JSON.stringify({ keys: jumpKeys, moves: jumpMoves.slice(-12), timeline: jumpTimeline }));
+  const inputEvents = await alice.page.evaluate(() => window.__tusInputEvents);
+  console.log('Jump probe ' + JSON.stringify({ inputEvents, timeline: jumpTimeline }));
   await alice.page.keyboard.up('d');
-  await alice.page.keyboard.up('Space');
   const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
