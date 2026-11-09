@@ -137,7 +137,10 @@ await withSmokeCleanup(async () => {
     document.activeElement?.blur();
     window.__tusMovementKeys = [];
     for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
-      if (['Space', 'KeyD'].includes(event.code)) window.__tusMovementKeys.push({ type, code: event.code, target: event.target?.tagName });
+      if (['Space', 'KeyD'].includes(event.code)) window.__tusMovementKeys.push({ type, code: event.code, target: event.target?.tagName, focused: document.hasFocus(), active: document.activeElement?.tagName, at: Math.round(performance.now()) });
+    }, true);
+    for (const type of ['focus', 'blur']) window.addEventListener(type, event => {
+      window.__tusMovementKeys.push({ type, target: event.target?.tagName, focused: document.hasFocus(), at: Math.round(performance.now()) });
     }, true);
   });
   await focus(alice);
@@ -148,7 +151,7 @@ await withSmokeCleanup(async () => {
   for (let i = 0; i < 12; i++) {
     await alice.page.waitForTimeout(100);
     const snapshot = await state(), player = snapshot.players.find(item => item.id === 'alice');
-    jumpTimeline.push({ server: player && { position: player.position, velocityY: player.velocityY }, client: await alice.page.locator('#coordinates').textContent() });
+    jumpTimeline.push({ server: player && { position: player.position, velocityY: player.velocityY }, client: await alice.page.locator('#coordinates').textContent(), focus: await alice.page.evaluate(() => ({ focused: document.hasFocus(), visibility: document.visibilityState, active: document.activeElement?.tagName })) });
     if (player?.position.x > 14.68 && player.position.y > 0) break;
   }
   console.log('Movement probe ' + JSON.stringify({ keys: await alice.page.evaluate(() => window.__tusMovementKeys), timeline: jumpTimeline }));
