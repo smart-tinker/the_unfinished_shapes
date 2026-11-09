@@ -305,13 +305,14 @@ async function saveSettings() {
   if (changed && (connected || settings.threadId)) {
     if (!settings.threadId) throw new Error('Cannot verify the current Codex conversation; reconnect before changing connection settings.');
     const state = await bridge.readAgentControls(settings.threadId);
-    if (!state?.connected || state.threadId !== settings.threadId || state.threadStatus !== 'idle' ||
+    if (!state?.connected || state.threadId !== settings.threadId ||
+        !['idle', 'active', 'systemError', 'unknown'].includes(state.threadStatus) ||
         (state.turnId !== null && typeof state.turnId !== 'string') ||
         !Number.isInteger(state.pendingApprovals) || state.pendingApprovals < 0 ||
-        !Object.hasOwn(state, 'goal')) {
-      throw new Error('Cannot verify that the current Codex conversation is idle; reconnect and check its state before changing connection settings.');
+        !Object.hasOwn(state, 'goal') || state.threadStatus === 'unknown') {
+      throw new Error('Cannot verify the current Codex conversation; reconnect and check its state before changing connection settings.');
     }
-    if (state.turnId || state.pendingApprovals > 0 || state.goal) {
+    if (state.threadStatus !== 'idle' || state.turnId || state.pendingApprovals > 0 || state.goal) {
       throw new Error('Clear the native Goal, resolve pending approvals, and wait for Codex to become idle before changing connection settings.');
     }
   }
