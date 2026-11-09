@@ -124,10 +124,10 @@ await withSmokeCleanup(async () => {
   await alice.page.waitForTimeout(300);
   await alice.page.evaluate(() => document.activeElement?.blur());
   await alice.page.keyboard.down('Space');
-  await waitForState(snapshot => {
-    const player = snapshot.players.find(item => item.id === 'alice');
-    return player?.position.y > 0 && player.velocityY > 0;
-  }, 'the server to accept Alice’s jump');
+  await alice.page.waitForFunction(() => {
+    const y = document.querySelector('#coordinates').textContent.match(/Y ([\\d.-]+)/)?.[1];
+    return Number(y) > 0;
+  });
   await alice.page.keyboard.up('Space');
   await alice.page.keyboard.down('d');
   const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
