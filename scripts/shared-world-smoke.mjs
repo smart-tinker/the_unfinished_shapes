@@ -125,7 +125,7 @@ await withSmokeCleanup(async () => {
   await alice.page.evaluate(() => document.activeElement?.blur());
   await alice.page.keyboard.down('Space');
   await alice.page.waitForFunction(() => {
-    const y = document.querySelector('#coordinates').textContent.match(/Y ([\\d.-]+)/)?.[1];
+    const y = document.querySelector('#coordinates').textContent.match(/Y ([\d.-]+)/)?.[1];
     return Number(y) > 0;
   });
   await alice.page.keyboard.up('Space');
