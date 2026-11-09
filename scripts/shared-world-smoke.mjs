@@ -92,7 +92,7 @@ await withSmokeCleanup(async () => {
   assert.deepEqual(built.position, { x: 3, y: 1, z: 4 });
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, builtState.revision);
   await select(alice, built); await select(bob, built);
-  assert.equal(await bob.page.locator('#edit-fields').isDisabled(), true, 'foreign object is read-only');
+  assert.equal(await bob.page.locator('#edit-apply').isDisabled(), true, 'foreign object is read-only');
   assert.equal(await bob.page.locator('#remove').isDisabled(), true, 'foreign removal is disabled');
   await alice.page.locator('#edit-size-x').fill('5');
   await alice.page.locator('#edit-apply').click();
