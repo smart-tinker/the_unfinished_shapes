@@ -92,12 +92,17 @@ test('draft collision is detected even when the published-tag endpoint returns 4
   await assert.rejects(requireNewRelease(context, request), /existing release/);
 });
 
-test('creation uses the returned draft identity even before it appears in list reads', async () => {
+test('creation uses the returned draft identity without a discovery read', async () => {
   const draft = { id: 42, tag_name: context.tag, target_commitish: context.sourceSha, draft: true, prerelease: true, assets: [] };
-  let reads = 0, writes = 0;
-  const actual = await createDraft(context, async () => { reads++; return { status: 200, data: [] }; },
-    async () => { writes++; return { stdout: JSON.stringify(draft) }; });
+  const calls = [];
+  const actual = await createDraft(context, async args => { calls.push(args); return { stdout: JSON.stringify(draft) }; });
   assert.deepEqual(actual, draft);
-  assert.equal(writes, 1);
-  assert.equal(reads, 0, 'do not discover a just-created draft through a stale list');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(0, 4), ['api', '--method', 'POST', 'repos/owner/repo/releases']);
+  assert.ok(calls[0].includes('draft=true'));
+  for (const change of [{ id: undefined }, { id: -1 }, { tag_name: 'other' }, { target_commitish: 'b'.repeat(40) }, { draft: false }, { assets: [{ id: 1 }] }]) {
+    await assert.rejects(createDraft(context, async () => ({ stdout: JSON.stringify({ ...draft, ...change }) })));
+  }
+  await assert.rejects(createDraft(context, async () => ({ stdout: 'invalid JSON' })));
+  await assert.rejects(createDraft(context, async () => { throw new Error('HTTP 403'); }), /HTTP 403/);
 });
