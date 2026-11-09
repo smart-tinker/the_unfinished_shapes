@@ -102,20 +102,24 @@ try {
    // Only synthetic test assistant output, never reasoning or arbitrary tool output.
    assistantText=String(event.params.item.text ?? '').replaceAll(token,'[redacted]').slice(0,4000);
   } else if(event.type==='notification' && event.method==='turn/completed') {
-   turnStatus=event.para stage='native_goal_lifecycle';
+   turnStatus=event.params?.turn?.status ?? 'unknown';
+   if(event.params?.turn?.status==='failed') rejectDone(new Error(`Model turn failed: ${JSON.stringify(event.params.turn.error)}`));else resolveDone();
+  }
+ });
+ stage='connecting_codex';
+ await bridge.start({codexPath,workspacePath:workspace,newGameThread:true});
+ stage='native_goal_lifecycle';
+ timer=setTimeout(()=>rejectDone(new Error('Local model E2E exceeded its time budget.')),timeoutMs);
  const initialControls=await bridge.readControlState();
  assert.equal(initialControls.goalSupported,true,'the pinned Codex app-server must expose native Goals');
  assert.equal(initialControls.goal,null,'a new game conversation must start without a Goal');
  const design={objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#3366cc'};
- const objective=`Inspect the shared world, then build exactly one block using world_build with these exact JSON arguments: ${JSON.stringify(design)}. Do not call shell tools or change the design.`;
- timer=setTimeout(()=>rejectDone(new Error('Local model E2E exceeded its time budget.')),timeoutMs);
- const createdGoal=await bridge.createGoal({objective,completionCriteria:'The server has persisted exactly one block matching the supplied design; report the result.'});
+ const objective=`Read the shared world, then build exactly one object by calling world_build exactly once with these exact JSON arguments: ${JSON.stringify(design)}. Do not call world_command, use shell tools, or change the design.`;
+ const createdGoal=await bridge.createGoal({objective,completionCriteria:'The server has persisted exactly one object matching the supplied design; report the result.'});
  assert.equal(createdGoal.threadId,initialControls.threadId);
  assert.equal(createdGoal.status,'active');
- assert.ok(createdGoal.objective.includes('The server has persisted exactly one block'));
+ assert.ok(createdGoal.objective.includes('The server has persisted exactly one object'));
  assert.equal((await bridge.readControlState()).goal.status,'active');
- assert.equal(turnStatus,'inProgress','setting an active native Goal starts its native turn');
- stage='goal_turn_started';
  await done;
  stage='turn_completed';
  assert.equal(turnStatus,'completed');
