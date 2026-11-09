@@ -151,10 +151,6 @@ await withSmokeCleanup(async () => {
     const player = snapshot.players.find(item => item.id === 'alice');
     return player?.position.y > 0 && player.velocityY > 0;
   }, 'the server to accept the jump while Alice is ascending');
-  await alice.page.evaluate(() => {
-    const until = performance.now() + 250;
-    while (performance.now() < until) {}
-  });
   const jumpTimeline = [];
   for (let i = 0; i < 12; i++) {
     await alice.page.waitForTimeout(100);
