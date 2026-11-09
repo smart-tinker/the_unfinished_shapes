@@ -85,4 +85,12 @@ test('a confirmed agent move is adopted unless newer keyboard input arrived afte
   h.run('toolActivity(otherResult)');
   assert.equal(h.run('playerPosition.x'), 14);
   assert.equal(h.run('latestStateRevision'), 3);
+
+  h.context.staleStart = { ...h.context.otherStart, id: 'call-3' };
+  h.run('toolActivity(staleStart)');
+  h.run('settingsGeneration++');
+  h.context.staleResult = { ...h.context.staleStart, type: 'tool-result', result: { success: true, contentItems: [{ type: 'inputText', text: '{"revision":4}' }] } };
+  h.run('toolActivity(staleResult)');
+  assert.equal(h.run('playerPosition.x'), 14);
+  assert.equal(h.run('latestStateRevision'), 3);
 });
