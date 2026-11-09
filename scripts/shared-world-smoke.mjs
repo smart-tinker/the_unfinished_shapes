@@ -70,7 +70,7 @@ async function connect(client) {
 }
 async function launch(id) {
   const executable = process.env.TUS_SMOKE_EXECUTABLE;
-  const app = await electron.launch({ ...(executable ? { executablePath: path.resolve(executable) } : {}), args: [...(executable ? [] : ['.']), '--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader'], env: { ...process.env, TUS_DATA_DIR: path.join(dir, id) }, timeout: 30000 });
+  const app = await electron.launch({ ...(executable ? { executablePath: path.resolve(executable) } : {}), args: [...(executable ? [] : ['.']), '--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--tus-smoke-confirm-quit'], env: { ...process.env, TUS_DATA_DIR: path.join(dir, id) }, timeout: 30000 });
   const client = { id, app }; clients.push(client);
   client.page = await app.firstWindow();
   client.graphics = await observeGraphics(client.page, { label: id });
