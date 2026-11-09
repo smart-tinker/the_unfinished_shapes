@@ -54,6 +54,7 @@ await withSmokeCleanup(async()=>{
  await page.waitForFunction(()=>document.querySelector('#settings-message')?.textContent.includes('saved'));
  await page.locator('#settings-close').click();
  await page.evaluate(async()=>{const s=await window.tus.loadSettings();await window.tus.saveSettings({...s,threadId:'smoke-preserved-game-thread'});});
+ await page.evaluate(async()=>{const s=await window.tus.loadSettings();await window.tus.saveSettings({...s,agentControlThreadId:s.threadId,agentModelId:'qwen3-local-cpu',agentEffort:'medium'});});
  await assert.rejects(access(marker),'search must not execute discovered files');
  graphics.phase('screenshot');
  await mkdir('dist',{recursive:true});await page.screenshot({path:'dist/desktop-smoke.png'});
@@ -63,7 +64,7 @@ await withSmokeCleanup(async()=>{
  graphics.phase('restart persistence');
  state=await reopened.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
  assert.equal(state.objects.length,1,'world survives desktop restart');
- const restored=await reopened.evaluate(()=>window.tus.loadSettings());assert.equal(restored.codexPath,expectedCodexPath);assert.equal(restored.workspacePath,dir);assert.equal(restored.threadId,'smoke-preserved-game-thread');
+ const restored=await reopened.evaluate(()=>window.tus.loadSettings());assert.equal(restored.codexPath,expectedCodexPath);assert.equal(restored.workspacePath,dir);assert.equal(restored.threadId,'smoke-preserved-game-thread');assert.equal(restored.agentControlThreadId,'smoke-preserved-game-thread');assert.equal(restored.agentModelId,'qwen3-local-cpu');assert.equal(restored.agentEffort,'medium');
  graphics.phase('authenticated removal');
  // Removal below exercises the authenticated command API, not canvas selection or the Remove button.
  await reopened.evaluate(async id=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/command',method:'POST',body:{type:'remove',id}});},state.objects[0].id);
