@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 
 export async function selectObject(page, object) {
+  // Wait for scene transforms to reach a rendered frame before raycasting the fixture.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   // A real pointer click at the fixture's projection in the initial camera.
   const point = await page.evaluate(async position => {
     const THREE = await import('three');
@@ -27,6 +29,7 @@ export async function manualEditing(page) {
   assert.equal(built.objects.length, before.objects.length + 1);
   const object = built.objects.find(o => !before.objects.some(old => old.id === o.id));
   assert.ok(object); assert.equal(object.ownerId, built.me.id);
+  await page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, built.revision);
   await selectObject(page, object);
   await page.locator('#edit-size-x').fill('5');
   await page.locator('#edit-apply').click();
