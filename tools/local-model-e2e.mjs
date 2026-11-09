@@ -39,7 +39,7 @@ const cpuEvidence=createCpuEvidence();
 const diagnostics=createModelDiagnostics();
 let proxy,stage='initializing';
 const events=[];const started=Date.now();let failure;
-let assistantText='',turnStatus='not_started';
+let assistantText='',turnStatus='not_started',goalAcceptance=null;
 try {
  modelProcess=spawn(llamaPath,['--model',modelPath,'--alias',model,'--host','127.0.0.1','--port','11445','--n-gpu-layers','0','--ctx-size','16384','--threads','4','--parallel','1','--jinja','--reasoning-budget','0','--temp','0','--seed','42','--log-verbosity','4','--log-colors','off'],{stdio:['ignore','pipe','pipe']});
  let modelExit;
@@ -106,6 +106,23 @@ try {
  });
  stage='connecting_codex';
  await bridge.start({codexPath,workspacePath:workspace,newGameThread:true});
+ stage='native_goal_lifecycle';
+ const initialControls=await bridge.readControlState();
+ assert.equal(initialControls.goalSupported,true,'the pinned Codex app-server must expose native Goals');
+ assert.equal(initialControls.goal,null,'a new game conversation must start without a Goal');
+ const createdGoal=await bridge.createGoal({objective:'Build a shared bridge',completionCriteria:'Two players can cross it.'});
+ assert.equal(createdGoal.threadId,initialControls.threadId);
+ assert.equal(createdGoal.status,'active');
+ assert.match(createdGoal.objective,/Two players can cross it\\./);
+ assert.equal((await bridge.readControlState()).goal.status,'active');
+ await bridge.pauseGoal();
+ assert.equal((await bridge.readControlState()).goal.status,'paused');
+ await bridge.resumeGoal();
+ assert.equal((await bridge.readControlState()).goal.status,'active');
+ await bridge.clearGoal();
+ assert.equal((await bridge.readControlState()).goal,null);
+ assert.equal(turnStatus,'not_started','native Goal controls must not start a model turn');
+ goalAcceptance={supported:true,lifecycle:['created','read','paused','resumed','cleared'],modelTurnStarted:false,runtime:initialControls.runtime};
  stage='codex_connected';
  timer=setTimeout(()=>rejectDone(new Error('Local model E2E exceeded its time budget.')),timeoutMs);
  const design={objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#3366cc'};
@@ -126,7 +143,7 @@ try {
  assert.equal(observerState.me.id,'other-player');
  assert.deepEqual(observerState.objects,state.objects,'independent player sees the real agent construction');
  assert.equal(cpuEvidence.result().cpuOnly,true,'Positive CPU allocation was not observed, or GPU allocation contradicts CPU-only execution.');
- const evidence={status:'passed',acceptance,transport:'real Codex app-server → local llama.cpp Responses API → world dynamic tool → persisted server state',model,modelDigest,cpuOnly:cpuEvidence.result().cpuOnly,requestedGpuLayers:0,cpuEvidence:cpuEvidence.result(),elapsedMs:Date.now()-started,toolCalls:events,turnStatus,stage,diagnostics:diagnostics.result(),assistantText,worldRevision:state.revision,object:{type:state.objects[0].type,position:state.objects[0].position,ownerId:state.objects[0].ownerId}};
+ const evidence={status:'passed',acceptance,nativeGoal:goalAcceptance,transport:'real Codex app-server → local llama.cpp Responses API → world dynamic tool → persisted server state',model,modelDigest,cpuOnly:cpuEvidence.result().cpuOnly,requestedGpuLayers:0,cpuEvidence:cpuEvidence.result(),elapsedMs:Date.now()-started,toolCalls:events,turnStatus,stage,diagnostics:diagnostics.result(),assistantText,worldRevision:state.revision,object:{type:state.objects[0].type,position:state.objects[0].position,ownerId:state.objects[0].ownerId}};
  console.log(JSON.stringify(evidence,null,2));
  if(process.env.TUS_TEST_REPORT) await writeFile(path.resolve(process.env.TUS_TEST_REPORT),JSON.stringify(evidence,null,2)+'\n');
 } catch(error) {
