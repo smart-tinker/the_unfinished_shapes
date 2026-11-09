@@ -180,7 +180,10 @@ $('edit-form').addEventListener('submit', async event => {
     if (JSON.stringify(value) !== JSON.stringify(baseline[field])) body[field] = value;
   }
   if ($('edit-color').value !== baseline.color) body.color = $('edit-color').value;
-  for (const field of ['blocksMovement','supportsPlayer']) if ($(`edit-${field}`).checked !== baseline[field]) body[field] = $(`edit-${field}`).checked;
+  for (const [field, input] of [['blocksMovement', 'edit-blocks-movement'], ['supportsPlayer', 'edit-supports-player']]) {
+    const checked = $(input).checked;
+    if (checked !== baseline[field]) body[field] = checked;
+  }
   const fields = Object.keys(body).filter(key => !['type', 'id'].includes(key));
   if (!fields.length) { $('edit-message').textContent = 'No changes to apply.'; return; }
   if (!current || fields.some(field => JSON.stringify(current[field]) !== JSON.stringify(baseline[field]))) { $('edit-message').textContent = 'A field you edited also changed on the server. Reset to reload it before applying.'; return; }
