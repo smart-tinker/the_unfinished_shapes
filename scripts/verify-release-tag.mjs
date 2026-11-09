@@ -29,7 +29,7 @@ export function ghRequest(run = execute) {
       try {
         return await ghResponse(['api', '--method', 'GET', '--include', endpoint], run);
       } catch (error) {
-        if (attempt >= 2 || !/GitHub tag request (?:failed without an HTTP response|returned an invalid HTTP response)\\.$/.test(error.message)) throw error;
+        if (attempt >= 2 || !/GitHub tag request (?:failed without an HTTP response|returned an invalid HTTP response)\.$/.test(error.message)) throw error;
         await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
       }
     }
