@@ -144,3 +144,33 @@ test('a second client renders the latest server position of the moved player', (
   h.run('renderWorld(observer)');
   assert.equal(h.context.otherPlayers.get('alice').position.x, 13);
 });
+
+test('a poll received during an older move request is adopted after that request settles', async () => {
+  const h = syncHarness();
+  h.context.initial = state(10, 0);
+  h.run('renderWorld(initial)');
+  h.run('playerPosition.x = 2; localMovementVersion++');
+  let resolveOldMove;
+  const moveRequests = [];
+  h.context.request = (...args) => {
+    if (args[0] === '/command') {
+      moveRequests.push(args);
+      if (moveRequests.length === 1) return new Promise(resolve => { resolveOldMove = resolve; });
+      return Promise.resolve({ revision: 13 });
+    }
+    return Promise.resolve(state(12, 12));
+  };
+
+  const pendingMove = h.run('syncPosition()');
+  await h.run('poll()');
+  assert.equal(h.run('latestStateRevision'), 12);
+  assert.equal(h.run('playerPosition.x'), 2);
+
+  resolveOldMove({ revision: 11 });
+  await pendingMove;
+  await h.run('syncPosition()');
+  await h.run('poll()');
+
+  assert.equal(moveRequests.length, 1, 'the stale local position is not sent again');
+  assert.equal(h.run('playerPosition.x'), 12, 'the latest server snapshot replaces the superseded local position');
+});
