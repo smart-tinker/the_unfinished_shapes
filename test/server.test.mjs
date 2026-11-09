@@ -58,7 +58,7 @@ test('storage failure does not publish an in-memory change',async t=>{
  const state=await (await fetch(f.url+'/state',{headers:{Authorization:`Bearer ${token}`}})).json();assert.equal(state.revision,0);assert.equal(state.objects.length,0);
 });
 test('HTTP update persists edits visible to other clients, denial leaves state unchanged',async t=>{
- const f=await fixture(t);const built=await (await f.send(command)).json();const edit={type:'update',id:built.object.id,position:{x:10,y:2,z:9},size:{x:4,y:2,z:7},color:'#aabbcc'};
+ const f=await fixture(t);const built=await (await f.send(command)).json();const edit={type:'update',id:built.object.id,position:{x:10,y:2,z:9},size:{x:4,y:2,z:7},color:'#aabbcc',blocksMovement:false,supportsPlayer:false,expected:{position:built.object.position,size:built.object.size,color:built.object.color,blocksMovement:true,supportsPlayer:true}};
  assert.equal((await f.send(edit,'test-only-bob-token')).status,403);
  assert.equal((await f.send({...edit,color:'invalid'})).status,400);
  const changed=await (await f.send(edit)).json();assert.equal(changed.revision,2);
@@ -72,4 +72,22 @@ test('two clients racing edits cannot overwrite stale fields',async t=>{
  assert.deepEqual(responses.map(r=>r.status).sort(),[200,409]);
  const saved=JSON.parse(await readFile(f.dataPath,'utf8'));assert.equal(saved.revision,2);
  const conflict=responses.find(r=>r.status===409);assert.equal((await conflict.json()).error,'conflict');
+});
+
+
+test('HTTP movement enforces collision and server-owned height for every caller',async t=>{
+ const f=await fixture(t);
+ const built=await (await f.send({type:'build',objectType:'block',position:{x:3,y:1,z:0},size:{x:2,y:2,z:2}})).json();
+ const spawn=await (await f.send({type:'move',position:{x:0,y:999,z:0}})).json();
+ assert.deepEqual(spawn.position,{x:0,y:0,z:0});
+ const hit=await (await f.send({type:'move',position:{x:10,y:999,z:0}})).json();
+ assert.ok(hit.position.x<1.7,JSON.stringify(hit.position));
+ assert.equal(hit.position.y,0);
+ assert.equal(hit.velocityY,0);
+ const saved=JSON.parse(await readFile(f.dataPath,'utf8'));
+ assert.deepEqual(saved.players.find(player=>player.id==='alice').position,hit.position);
+ const invalid=await f.send({type:'move',position:{x:0,y:0,z:0},jump:'true'});
+ assert.equal(invalid.status,400);
+ assert.equal((await invalid.json()).error,'invalid_command');
+ assert.equal(JSON.parse(await readFile(f.dataPath,'utf8')).revision,hit.revision);
 });
