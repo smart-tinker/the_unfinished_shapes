@@ -19,6 +19,7 @@ export async function createWorldServer({dataPath, users, host = '127.0.0.1', po
   catch (error) { if (error.code === 'ENOENT') state = emptyWorld(); else throw error; }
   let queue = Promise.resolve();
   const limits = new Map();
+  // shortcut: gravity advances on move requests only; add a server tick if falling must continue while disconnected or during server downtime.
   const movementTimes = new Map();
   async function save(next) {
     await mkdir(path.dirname(dataPath),{recursive:true});
