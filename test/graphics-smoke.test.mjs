@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import vm from 'node:vm';
-import { isGraphicsFailure, observeGraphics, closeSmokeApp, withSmokeCleanup } from '../scripts/graphics-smoke.mjs';
+import { isGraphicsFailure, observeGraphics, closeSmokeApp, withSmokeCleanup, acceptQuitPromptForSmoke } from '../scripts/graphics-smoke.mjs';
 
 function fakePage({ messages = [], errors = [] } = {}) {
   const page = new EventEmitter();
@@ -195,4 +195,15 @@ test('initial GL snapshot is captured while healthy before later loss', async ()
   state.lost = true;
   await assert.rejects(graphics.assertHealthy(), /WebGL context must remain healthy/);
   assert.equal(initial.state.available, true);
+});
+
+
+test('smoke confirmation accepts only the Codex quit warning once', async () => {
+  const calls = [];
+  const dialog = { showMessageBox: async (...args) => { calls.push(args); return { response: 0 }; } };
+  const app = { evaluate: fn => fn({ dialog }) };
+  await acceptQuitPromptForSmoke(app);
+  assert.deepEqual(await dialog.showMessageBox(null, { title: 'Codex activity may continue' }), { response: 1 });
+  assert.deepEqual(await dialog.showMessageBox(null, { title: 'Other warning' }), { response: 0 });
+  assert.deepEqual(calls, [[null, { title: 'Other warning' }]]);
 });
