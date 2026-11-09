@@ -42,7 +42,7 @@ let instance, graphics, gpu;
 async function launch(executablePath, label) {
   gpu = await createGpuDiagnostics(label);
   // Use an explicit software renderer on the GPU-less runner, as in Linux CI.
-  instance = await electron.launch({ executablePath, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', ...gpu.args], env: { ...process.env, TUS_DATA_DIR: '' }, timeout: 45000 });
+  instance = await electron.launch({ executablePath, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--tus-smoke-confirm-quit', ...gpu.args], env: { ...process.env, TUS_DATA_DIR: '' }, timeout: 45000 });
   await gpu.attach(instance);
   const page = await instance.firstWindow();
   graphics = await observeGraphics(page, { label });

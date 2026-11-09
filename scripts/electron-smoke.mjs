@@ -15,7 +15,7 @@ const packagedExecutable=process.env.TUS_SMOKE_EXECUTABLE;
 // Headless Linux runners use explicit SwiftShader to avoid unstable automatic fallback.
 // These flags apply only to smoke launches, never to normal application startup.
 const ciFlags=process.platform==='linux'?['--no-sandbox','--use-gl=angle','--use-angle=swiftshader']:[];
-const launchOptions={...(packagedExecutable?{executablePath:path.resolve(packagedExecutable)}:{}),args:[...(packagedExecutable?[]:['.']),...ciFlags],env:testEnv,timeout:30000};
+const launchOptions={...(packagedExecutable?{executablePath:path.resolve(packagedExecutable)}:{}),args:[...(packagedExecutable?[]:['.']),...ciFlags,'--tus-smoke-confirm-quit'],env:testEnv,timeout:30000};
 let app, graphics, gpu;
 async function launch(label) {
  gpu=await createGpuDiagnostics(label);

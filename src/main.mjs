@@ -9,7 +9,7 @@ import { executeGameTool } from './game-tools.mjs';
 import { createWorldServer } from './server.mjs';
 import { DATA_DIRECTORY, loadSettings, saveSettings, agentModelForThread } from './settings.mjs';
 import { findCodex } from './codex-discovery.mjs';
-import { installQuitGuard } from './quit-guard.mjs';
+import { installQuitGuard, isSmokeAutoConfirmQuit } from './quit-guard.mjs';
 const userData = process.env.TUS_DATA_DIR ? path.resolve(process.env.TUS_DATA_DIR) : path.join(app.getPath('appData'),DATA_DIRECTORY);
 mkdirSync(userData,{recursive:true});
 app.setPath('userData',userData);
@@ -32,6 +32,7 @@ const attachQuitGuard = installQuitGuard({
     };
   },
   confirm: async state => {
+    if (isSmokeAutoConfirmQuit(process.env, process.argv)) return true;
     const known = state?.connected === true;
     const goalStatus = state?.goal?.status;
     const detail = known

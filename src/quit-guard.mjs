@@ -1,3 +1,7 @@
+export function isSmokeAutoConfirmQuit(env = process.env, argv = process.argv) {
+  return env.CI === 'true' && argv.includes('--tus-smoke-confirm-quit');
+}
+
 export async function confirmQuitIfUnsafe(state, confirm) {
   const safe = state?.connected === true &&
     state.thread?.status?.type === 'idle' &&
