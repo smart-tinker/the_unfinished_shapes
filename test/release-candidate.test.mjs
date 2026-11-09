@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { assetNames, candidateContext, findRelease, recordManifest, requireDraft, requireNewRelease, requireStagingAttempt, validateManifest, verifyFiles, verifyRun } from '../scripts/release-candidate.mjs';
+import { assetNames, candidateContext, createDraft, findRelease, recordManifest, requireDraft, requireNewRelease, requireStagingAttempt, validateManifest, verifyFiles, verifyRun } from '../scripts/release-candidate.mjs';
 
 const env = { GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/release/0.1.0-rc3', GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1' };
 const context = candidateContext('0.1.0-rc.3', env);
@@ -90,4 +90,19 @@ test('draft collision is detected even when the published-tag endpoint returns 4
     ? { status: 404, data: {} }
     : { status: 200, data: [{ id: 99, tag_name: context.tag, draft: true }] };
   await assert.rejects(requireNewRelease(context, request), /existing release/);
+});
+
+test('creation uses the returned draft identity without a discovery read', async () => {
+  const draft = { id: 42, tag_name: context.tag, target_commitish: context.sourceSha, draft: true, prerelease: true, assets: [] };
+  const calls = [];
+  const actual = await createDraft(context, async args => { calls.push(args); return { stdout: JSON.stringify(draft) }; });
+  assert.deepEqual(actual, draft);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(0, 4), ['api', '--method', 'POST', 'repos/owner/repo/releases']);
+  assert.ok(calls[0].includes('draft=true'));
+  for (const change of [{ id: undefined }, { id: -1 }, { tag_name: 'other' }, { target_commitish: 'b'.repeat(40) }, { draft: false }, { assets: [{ id: 1 }] }]) {
+    await assert.rejects(createDraft(context, async () => ({ stdout: JSON.stringify({ ...draft, ...change }) })));
+  }
+  await assert.rejects(createDraft(context, async () => ({ stdout: 'invalid JSON' })));
+  await assert.rejects(createDraft(context, async () => { throw new Error('HTTP 403'); }), /HTTP 403/);
 });
