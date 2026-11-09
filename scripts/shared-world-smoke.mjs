@@ -101,8 +101,10 @@ await withSmokeCleanup(async () => {
   assert.ok(observedMove.position.x > 12, 'the second client sees Alice beyond the agent destination');
   assert.ok(Number((await alice.page.locator('#coordinates').textContent()).match(/X ([\d.-]+)/)?.[1]) > 12, 'the local GUI displays movement continuing from the agent destination');
   alice.graphics.phase('manual shared construction');
-  await worldCommand('alice', { type: 'move', position: { x: 0, y: 999, z: 0 } });
-  await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.startsWith('X 0.0'));
+  await alice.page.keyboard.down('a');
+  await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < .5, 'Alice to return to the open side before building');
+  await alice.page.keyboard.up('a');
+  await alice.page.waitForTimeout(300);
   await alice.page.locator('#build-x').fill('3');
   await alice.page.locator('#build-z').fill('0');
   await alice.page.locator('#build-form button').click();
@@ -116,9 +118,11 @@ await withSmokeCleanup(async () => {
   assert.ok(blocked.position.x < 1.7, 'the server stops Alice at the solid side');
   assert.equal(blocked.position.y, 0, 'client coordinates cannot grant unsupported height');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= blocked.revision, blocked.revision);
-  await worldCommand('alice', { type: 'move', position: { x: 0, y: 0, z: 0 } });
-  await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.startsWith('X 0.0'));
-  await new Promise(resolve => setTimeout(resolve, 300));
+  await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('X 1.7'));
+  await alice.page.keyboard.down('a');
+  await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < .5, 'Alice to walk back from the solid side');
+  await alice.page.keyboard.up('a');
+  await alice.page.waitForTimeout(300);
   await alice.page.keyboard.down('Space');
   await alice.page.keyboard.down('d');
   await alice.page.waitForTimeout(500);
