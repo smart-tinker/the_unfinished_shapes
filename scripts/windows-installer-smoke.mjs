@@ -2,6 +2,7 @@ import { _electron as electron } from 'playwright-core';
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { observeGraphics, closeSmokeApp, withSmokeCleanup } from './graphics-smoke.mjs';
+import { waitForUninstall } from './windows-uninstall.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
@@ -61,13 +62,7 @@ async function uninstall() {
   const uninstaller = (await readdir(installDir)).find(name => /^Uninstall.*\.exe$/i.test(name));
   assert.ok(uninstaller, 'uninstaller exists');
   await run(path.join(installDir, uninstaller), ['/S'], { timeout: 180000 });
-  // NSIS may hand off to a temporary copy of itself before the original exits.
-  for (let attempt = 0; attempt < 60; attempt++) {
-    try { await access(path.join(installDir, 'TheUnfinishedShapes.exe')); }
-    catch (error) { if (error.code === 'ENOENT') return; throw error; }
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-  throw new Error('Uninstaller did not remove the installed executable.');
+  await waitForUninstall(() => access(path.join(installDir, 'TheUnfinishedShapes.exe')));
 }
 async function verifyRestored(page) {
   graphics.phase('verify retained settings and world');
