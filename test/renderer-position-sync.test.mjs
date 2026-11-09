@@ -14,7 +14,7 @@ function syncHarness() {
   const sent = [];
   Object.assign(h.context, {
     scene: {}, bridge: {}, playerPosition: { x: 0, y: 1, z: 0 }, meId: null,
-    settingsGeneration: 0, pollRunning: false, moveRunning: false, localMovementVersion: 0, worldRevision: -1, objectSnapshot: '[]',
+    settingsGeneration: 0, pollRunning: false, moveRunning: false, localMovementVersion: 0, latestStateRevision: -1, worldRevision: -1, objectSnapshot: '[]',
     role: 'viewer', objectData: new Map(), meshes: new Map(), otherPlayers: new Map(),
     sceneRoot: {}, sent,
     request: async (...args) => { sent.push(args); return { revision: 10 }; },
@@ -74,8 +74,10 @@ test('a confirmed agent move is adopted unless newer keyboard input arrived afte
   const h = activityHarness();
   h.context.start = { type: 'tool-start', threadId: 'thread-1', turnId: 'turn-1', id: 'call-1', name: 'world_command', arguments: { command: { type: 'move', position: { x: 12, y: 1, z: 0 } } } };
   h.run('toolActivity(start)');
+  assert.equal(h.run('moveStarts.size'), 1);
   h.context.result = { ...h.context.start, type: 'tool-result', result: { success: true, contentItems: [{ type: 'inputText', text: '{"revision":2}' }] } };
   h.run('toolActivity(result)');
+  assert.equal(h.run('latestStateRevision'), 2);
   assert.equal(h.run('playerPosition.x'), 12);
 
   h.context.otherStart = { ...h.context.start, id: 'call-2', turnId: 'turn-2' };
