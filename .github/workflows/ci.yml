@@ -12,7 +12,8 @@ concurrency:
 jobs:
   test:
     if: github.event.repository.private == false
-    runs-on: ubuntu-latest
+    # Pin the verified graphics environment instead of a moving Ubuntu image.
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +25,11 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: xvfb-run --auto-servernum node scripts/electron-smoke.mjs
+      - run: npm run package:linux
+      - name: Launch the packaged Linux application
+        env:
+          TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes
+        run: xvfb-run --auto-servernum node scripts/electron-smoke.mjs
   macos-native:
     if: github.event.repository.private == false
     # Standard public runner: Apple Silicon, not a paid -large/-xlarge label.

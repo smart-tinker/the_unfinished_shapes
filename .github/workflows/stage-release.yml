@@ -139,7 +139,8 @@ jobs:
         run: node scripts/release-candidate.mjs stage macos dist/candidate "$RELEASE_ID"
   linux:
     needs: [preflight, create-draft]
-    runs-on: ubuntu-latest
+    # Same verified graphics environment as CI.
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     permissions:
       contents: write
