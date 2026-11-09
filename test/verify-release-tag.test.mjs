@@ -86,7 +86,7 @@ test('read-only GET retries a missing HTTP response once but not a valid HTTP er
   const request = ghRequest(async () => {
     calls++;
     if (calls === 1) throw { stdout: '', stderr: 'temporary transport failure' };
-    return { stdout: 'HTTP/2.0 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n{"ref":"refs/tags/test"}\\n' };
+    return { stdout: 'HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n{"ref":"refs/tags/test"}\n' };
   });
   assert.equal((await request(refPath)).status, 200);
   assert.equal(calls, 2);
@@ -94,7 +94,7 @@ test('read-only GET retries a missing HTTP response once but not a valid HTTP er
   calls = 0;
   const denied = ghRequest(async () => {
     calls++;
-    throw { stdout: 'HTTP/2.0 403 Forbidden\\r\\nContent-Type: application/json\\r\\n\\r\\n{"message":"Forbidden"}' };
+    throw { stdout: 'HTTP/2.0 403 Forbidden\r\nContent-Type: application/json\r\n\r\n{"message":"Forbidden"}' };
   });
   assert.equal((await denied(refPath)).status, 403);
   assert.equal(calls, 1);
