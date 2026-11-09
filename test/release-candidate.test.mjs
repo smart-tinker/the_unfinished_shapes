@@ -70,3 +70,10 @@ test('publication requires this staging workflow and exact completed successful 
   verifyRun(run, context, '123', '1');
   for (const change of [{ id: 124 }, { run_attempt: 2 }, { path: '.github/workflows/local-cpu-model.yml' }, { event: 'pull_request' }, { head_branch: 'main' }, { head_sha: 'b'.repeat(40) }, { status: 'in_progress' }, { conclusion: 'failure' }, { conclusion: 'cancelled' }]) assert.throws(() => verifyRun({ ...run, ...change }, context, '123', '1'));
 });
+
+test('draft collision is detected even when the published-tag endpoint returns 404', async () => {
+  const request = async endpoint => endpoint.includes('/releases/tags/')
+    ? { status: 404, data: {} }
+    : { status: 200, data: [{ id: 99, tag_name: context.tag, draft: true }] };
+  await assert.rejects(requireNewRelease(context, request), /existing release/);
+});
