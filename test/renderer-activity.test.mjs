@@ -171,3 +171,17 @@ test('a completed native Goal no longer tags later assistant messages as Goal up
   })`);
   assert.equal(h.run('goalMessageContextId'), null);
 });
+
+function goalNotificationRendererHarness() {
+  const h = rendererHarness();
+  h.run("let settings = { threadId: 'saved' }, agentControlState = { goal: { id: 'goal-1', status: 'active' } }, goalMessageContextId = 'goal-1'; function addMessage() {} function refreshAgentControls() {} function notificationActivity() {} function updateChatControls() {}");
+  h.load('function codexEvent(event) {', 'try { initScene(); }');
+  return h;
+}
+test('a completed Goal notification immediately clears Goal message context', () => {
+  const h = goalNotificationRendererHarness();
+  h.run(`codexEvent({ type: 'notification', method: 'thread/goal/updated', params: {
+    threadId: 'saved', goal: { id: 'goal-1', status: 'completed' },
+  } })`);
+  assert.equal(h.run('goalMessageContextId'), null);
+});
