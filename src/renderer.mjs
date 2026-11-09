@@ -7,6 +7,7 @@ const bridge = window.tus;
 let settings = { serverUrl: 'http://127.0.0.1:4317', token: '' };
 let selectedKind = 'block', selectedId = null, worldRevision = -1, connected = false, busy = false;
 let settingsGeneration = 0;
+let agentControlState = null, agentControlRead = 0, agentControlLoading = false, agentControlBusy = false, goalMessageContextId = null;
 let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 0, z: 0 }, playerVelocityY = 0, jumpRequested = false, meId = null, localMovementVersion = 0, latestStateRevision = -1;
 let worldState = { objects: [] };
 let scene, renderer, camera, controls, player, companion, selectionBox;
@@ -19,11 +20,92 @@ const clock = new THREE.Clock();
 const feedback = (text, error = false) => { $('world-message').textContent = text; $('world-message').classList.toggle('error', error); };
 function addMessage(text, kind = 'system') {
   const article = document.createElement('article'); article.className = `chat-message ${kind}`;
-  article.textContent = text; $('chat').append(article); $('chat').scrollTop = $('chat').scrollHeight; return article;
+  if (kind === 'goal') { const label = document.createElement('small'); label.className = 'goal-message-label'; label.textContent = 'Goal update'; const body = document.createElement('span'); body.className = 'chat-message-body'; body.textContent = text; article.append(label, body); }
+  else article.textContent = text;
+  $('chat').append(article); $('chat').scrollTop = $('chat').scrollHeight; return article;
 }
 function updateChatControls() {
   $('send').disabled = !connected || busy; $('prompt').disabled = !connected;
   $('interrupt').disabled = !connected || !busy;
+}
+function updateAgentControlButtons() {
+  const state = agentControlState, live = connected && state?.connected === true && state.threadId === settings.threadId;
+  const goal = state?.goal, canChangeGoal = live && state.goalSupported === true && !agentControlBusy && !agentControlLoading;
+  $('goal-create').disabled = !canChangeGoal || Boolean(goal) || !$('goal-objective-input').value.trim() || !$('goal-criteria-input').value.trim() || !$('goal-confirm-start').checked;
+  $('goal-pause').disabled = !canChangeGoal || goal?.status !== 'active';
+  $('goal-resume').disabled = !canChangeGoal || goal?.status !== 'paused';
+  $('goal-clear').disabled = !canChangeGoal || !goal;
+  $('goal-stop-turn').disabled = !live || !state.turnId;
+  const hasModels = live && state.models.length > 0;
+  $('agent-model').disabled = !hasModels || agentControlBusy || agentControlLoading;
+  $('agent-effort').disabled = !hasModels || !$('agent-model').value || agentControlBusy || agentControlLoading;
+  $('agent-model-save').disabled = !hasModels || agentControlBusy || agentControlLoading;
+}
+function populateAgentEfforts(modelId, selected = '') {
+  const model = agentControlState?.models.find(item => item.id === modelId);
+  const select = $('agent-effort'); select.replaceChildren();
+  const defaultOption = document.createElement('option'); defaultOption.value = ''; defaultOption.textContent = 'Codex default'; select.append(defaultOption);
+  for (const effort of model?.efforts ?? []) { const option = document.createElement('option'); option.value = effort; option.textContent = effort; select.append(option); }
+  select.value = (model?.efforts ?? []).includes(selected) ? selected : '';
+}
+function renderAgentControls(state) {
+  agentControlState = state;
+  const goal = state.goal;
+  $('agent-controls-context').textContent = `World: ${$('connection').textContent.trim()} · ${$('role').textContent} · Codex conversation ${state.threadId}`;
+  $('agent-controls-status').textContent = state.pendingApprovals ? 'Waiting for an approval decision.' : state.turnId || state.threadStatus === 'active' ? 'Codex is working in this conversation.' : state.threadStatus === 'idle' ? 'Codex is idle.' : state.threadStatus === 'systemError' ? 'Codex reported a conversation error.' : 'Codex status is unknown.';
+  $('agent-controls-runtime').textContent = state.runtime ? `${state.runtime.name || 'Codex'} ${state.runtime.version || 'version unknown'}` : 'Runtime version unknown';
+  $('agent-controls-thread').textContent = state.threadId;
+  $('agent-controls-turn').textContent = state.pendingApprovals ? 'Approval pending' : state.turnId ? 'Running' : state.threadStatus === 'idle' ? 'Idle' : state.threadStatus === 'active' ? 'Active; turn not identified' : 'Unknown';
+  $('agent-controls-current-model').textContent = state.currentModel ? `${state.currentModel}${state.currentEffort ? ' · ' + state.currentEffort : ''}` : 'Codex did not report it';
+  $('goal-support-status').textContent = state.goalSupported === true ? 'Native Goals are supported by this Codex conversation.' : state.goalSupported === false ? state.goalReason : 'Native Goal support could not be confirmed; actions are disabled.';
+  $('active-goal').hidden = !goal; $('goal-status').textContent = goal ? `Native Goal · ${goal.status}` : ''; $('goal-objective').textContent = goal?.objective ?? '';
+  $('agent-goal-summary').hidden = !goal || goal.status !== 'active'; $('agent-goal-summary-status').textContent = goal ? `Native Goal · ${goal.status}` : ''; $('agent-goal-summary-text').textContent = goal?.objective ?? '';
+  if (goal?.status === 'active') goalMessageContextId = goal.id || state.threadId;
+  else if (!goal || goal.status === 'paused') goalMessageContextId = null;
+  const models = state.models;
+  $('agent-model').replaceChildren();
+  const defaultModel = document.createElement('option'); defaultModel.value = ''; defaultModel.textContent = 'Use Codex default'; $('agent-model').append(defaultModel);
+  for (const model of models) { const option = document.createElement('option'); option.value = model.id; option.textContent = model.name; $('agent-model').append(option); }
+  const savedModel = settings.agentControlThreadId === state.threadId ? settings.agentModelId : '';
+  $('agent-model').value = models.some(model => model.id === savedModel) ? savedModel : '';
+  populateAgentEfforts($('agent-model').value, settings.agentControlThreadId === state.threadId ? settings.agentEffort : '');
+  updateAgentControlButtons();
+}
+async function refreshAgentControls() {
+  const requestId = ++agentControlRead, threadId = settings.threadId;
+  if (!connected || !threadId) {
+    agentControlState = null; $('agent-controls-status').textContent = 'Codex is disconnected.';
+    $('agent-controls-context').textContent = `World: ${$('connection').textContent.trim()} · ${$('role').textContent} · No Codex conversation`;
+    $('agent-controls-runtime').textContent = 'Unknown'; $('agent-controls-thread').textContent = 'Unknown'; $('agent-controls-turn').textContent = 'Unknown'; $('agent-controls-current-model').textContent = 'Unknown';
+    $('goal-support-status').textContent = 'Connect Codex to check native Goal support.';
+    $('active-goal').hidden = true; $('agent-goal-summary').hidden = true; $('agent-goal-summary-text').textContent = ''; $('agent-model').replaceChildren(); const option = document.createElement('option'); option.value = ''; option.textContent = 'Connect Codex to load models'; $('agent-model').append(option); populateAgentEfforts('', '');
+    updateAgentControlButtons(); return;
+  }
+  agentControlLoading = true; $('agent-controls-status').textContent = 'Reading current Codex state…'; updateAgentControlButtons();
+  try {
+    const state = await bridge.readAgentControls(threadId);
+    if (requestId !== agentControlRead || !connected || settings.threadId !== threadId) return;
+    if (!state?.connected || state.threadId !== threadId) throw new Error('Codex conversation changed; refresh agent controls.');
+    renderAgentControls(state);
+  } catch (error) {
+    if (requestId !== agentControlRead || !connected || settings.threadId !== threadId) return;
+    agentControlState = null; $('agent-controls-status').textContent = 'Codex is connected, but its current state is unknown.';
+    $('goal-support-status').textContent = error.message; updateAgentControlButtons();
+  } finally {
+    if (requestId === agentControlRead) { agentControlLoading = false; updateAgentControlButtons(); }
+  }
+}
+async function runGoalAction(action, acceptedMessage) {
+  const threadId = settings.threadId;
+  if (!connected || !threadId || agentControlBusy) return;
+  agentControlBusy = true; $('agent-controls-message').textContent = ''; updateAgentControlButtons();
+  try {
+    const result = await action(threadId);
+    if (!connected || settings.threadId !== threadId) throw new Error('Codex conversation changed; refresh agent controls.');
+    $('agent-controls-message').textContent = result ? acceptedMessage : 'Codex accepted the command without returning Goal state; checking the conversation.';
+    await refreshAgentControls();
+  } catch (error) { $('agent-controls-message').textContent = error.message; }
+  finally { agentControlBusy = false; updateAgentControlButtons(); }
 }
 function request(path, method = 'GET', body) {
   return bridge.request({ serverUrl: settings.serverUrl, token: settings.token, path, method, body });
@@ -59,7 +141,7 @@ function initScene() {
   });
   window.addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
   renderer.setAnimationLoop(() => {
-    const dt = Math.min(clock.getDelta(), .25), typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName) || $('settings').open;
+    const dt = Math.min(clock.getDelta(), .25), typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || Boolean(document.querySelector('dialog[open]'));
     let x = typing ? 0 : Number(keys.has('d')) - Number(keys.has('a'));
     let z = typing ? 0 : Number(keys.has('s')) - Number(keys.has('w'));
     const length = Math.hypot(x, z);
@@ -199,7 +281,7 @@ $('edit-form').addEventListener('submit', async event => {
   finally { editing = false; const object = objectData.get(selectedId); $('edit-fields').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId)); }
 });
 window.addEventListener('keydown', event => {
-  if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName) || $('settings').open) return;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || document.querySelector('dialog[open]')) return;
   if (event.code === 'Space') { event.preventDefault(); if (!event.repeat) jumpRequested = true; return; }
   keys.add(event.key.toLowerCase());
 });
@@ -232,7 +314,7 @@ async function saveSettings() {
   await poll();
 }
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('settings-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('settings-message').textContent = error.message; } });
-$('settings-form').addEventListener('submit', async event => { event.preventDefault(); $('connect').disabled = true; $('settings-message').textContent = 'Connecting to your Codex app-server…'; try { await saveSettings(); const result = await bridge.connectCodex({ ...settings, newGameThread: $('new-game-thread').checked }); settings.threadId = result.threadId; $('new-game-thread').checked = false; const { token, ...persisted } = settings; await bridge.saveSettings(persisted); connected = true; $('agent-status').textContent = 'Ready · responds only when asked'; updateChatControls(); $('settings').close(); addMessage(result.resumed ? 'Resumed your saved Codex conversation. It retains the tools registered when it was created. To use updated game commands, open Settings and explicitly select “Create a new game conversation”, then Connect. Your old conversation and its history are preserved. No request has been sent.' : 'Connected to your Codex workspace. No request has been sent.'); } catch (error) { $('settings-message').textContent = error.message; } finally { $('connect').disabled = false; } });
+$('settings-form').addEventListener('submit', async event => { event.preventDefault(); $('connect').disabled = true; $('settings-message').textContent = 'Connecting to your Codex app-server…'; try { await saveSettings(); const result = await bridge.connectCodex({ ...settings, newGameThread: $('new-game-thread').checked }); settings.threadId = result.threadId; $('new-game-thread').checked = false; const { token, ...persisted } = settings; await bridge.saveSettings(persisted); connected = true; $('agent-status').textContent = 'Ready · responds only when asked'; updateChatControls(); $('settings').close(); if ($('agent-controls').open) void refreshAgentControls(); addMessage(result.resumed ? 'Resumed your saved Codex conversation. It retains the tools registered when it was created. To use updated game commands, open Settings and explicitly select “Create a new game conversation”, then Connect. Your old conversation and its history are preserved. No request has been sent.' : 'Connected to your Codex workspace. No request has been sent.'); } catch (error) { $('settings-message').textContent = error.message; } finally { $('connect').disabled = false; } });
 const toolRows = new Map(), itemRows = new Map(), moveStarts = new Map();
 let stopRequested = false, acceptedThreadId = null, currentTurnId = null;
 const retiredTurns = new Set();
@@ -337,15 +419,41 @@ function notificationActivity(method, params) {
     $('agent-intent').textContent = 'No action currently running.';
   }
 }
+function openAgentControls() { keys.clear(); jumpRequested = false; $('agent-controls').showModal(); void refreshAgentControls(); }
+$('agent-controls-open').addEventListener('click', openAgentControls);
+$('agent-goal-manage').addEventListener('click', openAgentControls);
+$('agent-controls-close').addEventListener('click', () => $('agent-controls').close());
+for (const id of ['goal-objective-input', 'goal-criteria-input', 'goal-confirm-start']) $(id).addEventListener('input', updateAgentControlButtons);
+$('goal-confirm-start').addEventListener('change', updateAgentControlButtons);
+$('agent-model').addEventListener('change', () => { populateAgentEfforts($('agent-model').value); updateAgentControlButtons(); });
+$('goal-create').addEventListener('click', () => runGoalAction(threadId => bridge.createAgentGoal(threadId, { objective: $('goal-objective-input').value, completionCriteria: $('goal-criteria-input').value }), 'Native Goal creation was accepted; checking its current state.'));
+$('goal-pause').addEventListener('click', () => runGoalAction(threadId => bridge.pauseAgentGoal(threadId), 'Pause request accepted; confirming native Goal state.'));
+$('goal-resume').addEventListener('click', () => runGoalAction(threadId => bridge.resumeAgentGoal(threadId), 'Resume request accepted; confirming native Goal state.'));
+$('goal-clear').addEventListener('click', () => { if (window.confirm('Clear the native Goal from this Codex conversation?')) void runGoalAction(threadId => bridge.clearAgentGoal(threadId), 'Clear request accepted; confirming native Goal state.'); });
+$('goal-stop-turn').addEventListener('click', async () => { $('goal-stop-turn').disabled = true; $('agent-controls-message').textContent = 'Stop requested for the current turn; waiting for Codex to confirm.'; try { await bridge.interrupt(); } catch (error) { $('agent-controls-message').textContent = error.message; } finally { if ($('agent-controls').open) void refreshAgentControls(); } });
+$('agent-model-save').addEventListener('click', async () => {
+  const threadId = settings.threadId, modelId = $('agent-model').value || null, effort = $('agent-effort').value;
+  if (!connected || !threadId || agentControlBusy) return;
+  agentControlBusy = true; updateAgentControlButtons(); $('agent-controls-message').textContent = '';
+  try {
+    const saved = await bridge.saveAgentModel({ threadId, modelId, effort });
+    if (!connected || settings.threadId !== threadId) throw new Error('Codex conversation changed; refresh agent controls.');
+    settings = { ...settings, agentControlThreadId: saved.modelId ? threadId : '', agentModelId: saved.modelId, agentEffort: saved.effort };
+    $('agent-controls-message').textContent = 'Saved for future explicit chat requests. Provider access is not guaranteed by the catalog, and an active Goal was not restarted.';
+    renderAgentControls(agentControlState);
+  } catch (error) { $('agent-controls-message').textContent = error.message; }
+  finally { agentControlBusy = false; updateAgentControlButtons(); }
+});
 let streamMessage = null;
 $('chat-form').addEventListener('submit', async event => { event.preventDefault(); const text = $('prompt').value.trim(); if (!text || !connected || busy) return; busy = true; startActivity(); updateChatControls(); addMessage(text, 'user'); $('prompt').value = ''; streamMessage = null; try { await bridge.sendPrompt(text); } catch (error) { addMessage(error.message, 'error'); $('activity-state').textContent = 'Error'; $('agent-stop-reason').textContent = 'Request could not be confirmed: ' + error.message; busy = false; updateChatControls(); } });
 $('interrupt').addEventListener('click', async () => { $('interrupt').disabled = true; try { stopRequested = true; $('activity-state').textContent = 'Stopping'; $('agent-stop-reason').textContent = 'Stop requested; waiting for Codex to confirm interruption.'; await bridge.interrupt(); } catch (error) { addMessage(error.message, 'error'); $('interrupt').disabled = !busy; } });
 function codexEvent(event) {
   if (event.type === 'tool-start' || event.type === 'tool-result') toolActivity(event);
-  if (event.type === 'connected') { activityThread(event.threadId); connected = true; settings.threadId = event.threadId; $('agent-status').textContent = 'Ready · responds only when asked'; }
+  if (event.type === 'connected') { activityThread(event.threadId); connected = true; settings.threadId = event.threadId; $('agent-status').textContent = 'Ready · responds only when asked'; void refreshAgentControls(); }
   if (event.type === 'error') addMessage(event.message || 'Codex reported an error.', 'error');
-  if (event.type === 'disconnected') { $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; busy = false; $('agent-status').textContent = 'Codex disconnected'; addMessage(event.message || 'Codex disconnected.', 'error'); }
+  if (event.type === 'disconnected') { agentControlRead++; agentControlState = null; $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; busy = false; $('agent-status').textContent = 'Codex disconnected'; $('agent-goal-summary').hidden = true; addMessage(event.message || 'Codex disconnected.', 'error'); if ($('agent-controls').open) void refreshAgentControls(); }
   if (event.type === 'approval') {
+    if ($('agent-controls').open) void refreshAgentControls();
     $('activity-state').textContent = 'Needs decision'; $('agent-stop-reason').textContent = 'Waiting for your response to an approval request; no approval has been granted.';
     const entry = addMessage(`Codex requests approval: ${event.method}. This preview cannot grant elevated permissions.`, 'system');
     const denial = ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(event.method) ? { decision: 'decline' } : event.method === 'item/permissions/requestApproval' ? { permissions: {}, scope: 'turn' } : null;
@@ -357,11 +465,24 @@ function codexEvent(event) {
   }
   if (event.type === 'notification') {
     const p = event.params || {};
+    if (p.threadId && settings.threadId && p.threadId !== settings.threadId) return;
+    if (event.method === 'thread/goal/updated' && p.goal) {
+      const goal = p.goal; agentControlState = agentControlState ? { ...agentControlState, goal } : agentControlState;
+      if (goal.status === 'active') goalMessageContextId = goal.id || settings.threadId;
+      if (goal.status === 'paused') goalMessageContextId = null;
+      addMessage(`Native Goal status: ${typeof goal.status === 'string' ? goal.status : 'updated'}.`, 'system');
+      void refreshAgentControls();
+    }
+    if (event.method === 'thread/goal/cleared') {
+      if (agentControlState) agentControlState = { ...agentControlState, goal: null };
+      goalMessageContextId = null; addMessage('Native Goal cleared.', 'system');
+      void refreshAgentControls();
+    }
     notificationActivity(event.method, p);
     if (event.method === 'turn/started') { busy = true; $('agent-status').textContent = 'Working on your request…'; }
-    if (event.method === 'item/agentMessage/delta') { if (!streamMessage) streamMessage = addMessage('', 'assistant'); streamMessage.textContent += p.delta || ''; $('chat').scrollTop = $('chat').scrollHeight; }
-    if (event.method === 'item/completed' && p.item?.type === 'agentMessage') { if (streamMessage) streamMessage.textContent = p.item.text || streamMessage.textContent; else if (p.item.text) addMessage(p.item.text, 'assistant'); streamMessage = null; }
-    if (event.method === 'turn/completed') { busy = false; $('agent-status').textContent = 'Ready · responds only when asked'; if (p.turn?.error?.message) addMessage(p.turn.error.message, 'error'); }
+    if (event.method === 'item/agentMessage/delta') { if (!streamMessage) streamMessage = addMessage('', goalMessageContextId ? 'goal' : 'assistant'); const body = streamMessage.querySelector('.chat-message-body'); if (body) body.textContent += p.delta || ''; else streamMessage.textContent += p.delta || ''; $('chat').scrollTop = $('chat').scrollHeight; }
+    if (event.method === 'item/completed' && p.item?.type === 'agentMessage') { if (streamMessage) { const body = streamMessage.querySelector('.chat-message-body'); if (body) body.textContent = p.item.text || body.textContent; else streamMessage.textContent = p.item.text || streamMessage.textContent; } else if (p.item.text) addMessage(p.item.text, goalMessageContextId ? 'goal' : 'assistant'); streamMessage = null; }
+    if (event.method === 'turn/completed') { busy = false; $('agent-status').textContent = 'Ready · responds only when asked'; if (p.turn?.error?.message) addMessage(p.turn.error.message, 'error'); if (goalMessageContextId && agentControlState?.goal?.status !== 'active') goalMessageContextId = null; if ($('agent-controls').open) void refreshAgentControls(); }
     if (event.method === 'error') addMessage(p.error?.message || p.message || 'Codex reported an error.', 'error');
   }
   updateChatControls();
