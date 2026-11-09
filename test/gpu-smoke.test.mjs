@@ -175,3 +175,17 @@ test('modern Chromium source:line and legacy source(line) yield equivalent priva
   assert.deepEqual(evidence[1], { source: 'viz_main_impl.cc', line: 201, signals: ['Exiting GPU process'] });
   assert.doesNotMatch(JSON.stringify(evidence), /private|token|https|network|ipc|invalid/);
 });
+
+test('unrecognized graphics warnings retain only source location', () => {
+  const evidence = gpuLogEvidence([
+    '[1:ERROR:gpu_channel_manager.cc:42] unfamiliar message token=private /home/private',
+    '[WARNING:gl_context.cc(9)] unfamiliar warning https://private',
+    '[INFO:gl_context.cc(10)] ordinary message',
+    '[ERROR:network_service.cc:11] private'
+  ].join('\n'));
+  assert.deepEqual(evidence, [
+    { source: 'gpu_channel_manager.cc', line: 42, signals: [] },
+    { source: 'gl_context.cc', line: 9, signals: [] }
+  ]);
+  assert.doesNotMatch(JSON.stringify(evidence), /private|token|https|home|unfamiliar/);
+});

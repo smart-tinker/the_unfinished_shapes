@@ -9,7 +9,8 @@ export function gpuLogEvidence(text) {
     const source = line.match(/\b([a-z0-9_]*(?:gpu|gl_|egl|gles2|angle|command_buffer|shared_image|vulkan|d3d|viz_main_impl)[a-z0-9_]*\.cc)(?:\((\d+)\)|:(\d+)\])/i);
     if (!source) continue;
     const signals = line.slice(source.index + source[0].length).match(/context lost|context reset|GPU process exited|Exiting GPU process|GPU process launch failed|GPU process isn't usable|Failed to create|Failed to initialize|out of memory|device removed|device hung|device reset|DXGI_ERROR_[A-Z_]+|EGL_[A-Z_]+|GL_[A-Z_]+|error_code[=: ]+-?\d+|exit_code[=: ]+-?\d+|0x[0-9a-f]{4,16}/gi) || [];
-    if (!signals.length) continue;
+    // Keep source locations for unfamiliar warnings without exposing their message.
+    if (!signals.length && !/\b(?:WARNING|ERROR|FATAL):/.test(line.slice(0, source.index))) continue;
     const prefix = line.match(/^\[(\d+):(?:(\d+):)?(\d{4}\/\d{6}\.\d{3,6}):/);
     result.push({ ...(prefix ? { pid: Number(prefix[1]), ...(prefix[2] ? { tid: Number(prefix[2]) } : {}), nativeTimestamp: prefix[3] } : {}), source: source[1], line: Number(source[2] ?? source[3]), signals: signals.slice(0, 12) });
     if (result.length > 60) result.shift();
