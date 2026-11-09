@@ -161,7 +161,7 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('d');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
-  assert.ok((await alice.page.locator('#coordinates').textContent()).includes('Y 2.0'), 'the local HUD displays the accepted height');
+  await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('Y 2.0'), undefined, { timeout: 5000 });
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, builtState.revision);
   await select(alice, built); await select(bob, built);
   assert.equal(await bob.page.locator('#edit-apply').isDisabled(), true, 'foreign object is read-only');
