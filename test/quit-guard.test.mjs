@@ -50,6 +50,13 @@ test('an idle conversation with no Goal or approvals closes without a prompt', a
   assert.equal(h.confirmations.length, 0);
 });
 
+test('a fresh app with no Codex conversation closes without a prompt', async () => {
+  const h = harness({ state: { connected: false, threadId: null } });
+  assert.equal(await h.closeWindow(), true);
+  assert.deepEqual(h.counts(), { quitCalls: 1, cleanupCalls: 1 });
+  assert.equal(h.confirmations.length, 0);
+});
+
 test('an idle conversation can close when native Goals are confirmed unsupported', async () => {
   const h = harness({ state: { ...idle(), goalSupported: false } });
   assert.equal(await h.closeWindow(), true);
