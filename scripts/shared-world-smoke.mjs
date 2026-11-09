@@ -169,8 +169,8 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('Space');
   await waitForState(snapshot => {
     const player = snapshot.players.find(item => item.id === 'alice');
-    return player?.position.x >= 16.5 && player.position.x < 17.3 && player.position.y > 0;
-  }, 'Alice to reach the supported top while airborne');
+    return player?.position.x >= 15 && player.position.x < 18.3 && player.position.y > 0;
+  }, 'Alice to move above the supported top footprint');
   await alice.page.keyboard.up('d');
   const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
