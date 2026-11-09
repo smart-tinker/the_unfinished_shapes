@@ -77,6 +77,11 @@ async function launch(id) {
   await connect(client);
   return client;
 }
+async function focus(client) {
+  await client.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
+  await client.page.evaluate(() => document.activeElement?.blur());
+  await client.page.waitForFunction(() => document.hasFocus() && !document.querySelector('#settings').open);
+}
 async function select(client, object) { await selectObject(client.page, object); }
 async function close(client) {
   if (!client.app) return;
@@ -86,7 +91,7 @@ async function close(client) {
 await withSmokeCleanup(async () => {
   await startServer();
   const alice = await launch('alice'), bob = await launch('bob');
-  await alice.page.bringToFront();
+  await focus(alice);
   const ready = await waitForState(snapshot => ['alice', 'bob'].every(id => snapshot.players.some(player => player.id === id)), 'both clients to publish their initial position');
   await Promise.all(clients.map(client => client.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, ready.revision)));
 
@@ -96,6 +101,7 @@ await withSmokeCleanup(async () => {
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, agentMove.revision);
   const acceptedAgentPosition = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x === 12, 'the agent move to be visible in the shared state');
 
+  await focus(alice);
   await alice.page.keyboard.down('d');
   await alice.page.waitForTimeout(400);
   await alice.page.keyboard.up('d');
@@ -119,6 +125,7 @@ await withSmokeCleanup(async () => {
   assert.equal(blocked.position.y, 0, 'client coordinates cannot grant unsupported height');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, blocked.revision);
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('X 14.7'));
+  await focus(alice);
   await alice.page.keyboard.down('a');
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < 14.5, 'Alice to walk back from the solid side');
   await alice.page.keyboard.up('a');
@@ -130,6 +137,7 @@ await withSmokeCleanup(async () => {
       if (['Space', 'KeyD'].includes(event.code)) window.__tusMovementKeys.push({ type, code: event.code, target: event.target?.tagName });
     }, true);
   });
+  await focus(alice);
   await alice.page.keyboard.down('d');
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 14.68, 'Alice to reach the solid face');
   await alice.page.keyboard.down('Space');
