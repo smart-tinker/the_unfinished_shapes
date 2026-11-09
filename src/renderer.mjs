@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { movePlayer } from './movement.mjs';
 
 const $ = id => document.getElementById(id);
 const bridge = window.tus;
 let settings = { serverUrl: 'http://127.0.0.1:4317', token: '' };
 let selectedKind = 'block', selectedId = null, worldRevision = -1, connected = false, busy = false;
 let settingsGeneration = 0;
-let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 1, z: 0 }, meId = null, localMovementVersion = 0, latestStateRevision = -1;
+let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 0, z: 0 }, playerVelocityY = 0, jumpRequested = false, meId = null, localMovementVersion = 0, latestStateRevision = -1;
+let worldState = { objects: [] };
 let scene, renderer, camera, controls, player, companion, selectionBox;
 let objectSnapshot = '';
 let inspectorBase = null, inspectorDirty = false, editing = false, role = 'viewer';
@@ -58,13 +60,22 @@ function initScene() {
   window.addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
   renderer.setAnimationLoop(() => {
     const dt = Math.min(clock.getDelta(), .05), typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName) || $('settings').open;
-    if (!typing) {
-      let x = Number(keys.has('d')) - Number(keys.has('a')), z = Number(keys.has('s')) - Number(keys.has('w'));
-      const length = Math.hypot(x, z); if (length) { x /= length; z /= length; const nextX = Math.max(-99, Math.min(99, playerPosition.x + x * dt * 5)), nextZ = Math.max(-99, Math.min(99, playerPosition.z + z * dt * 5)); if (nextX !== playerPosition.x || nextZ !== playerPosition.z) { playerPosition.x = nextX; playerPosition.z = nextZ; localMovementVersion++; } }
+    let x = typing ? 0 : Number(keys.has('d')) - Number(keys.has('a'));
+    let z = typing ? 0 : Number(keys.has('s')) - Number(keys.has('w'));
+    const length = Math.hypot(x, z);
+    if (length) { x /= length; z /= length; }
+    const target = {
+      x: Math.max(-99, Math.min(99, playerPosition.x + x * dt * 5)),
+      y: playerPosition.y,
+      z: Math.max(-99, Math.min(99, playerPosition.z + z * dt * 5)),
+    };
+    const moved = movePlayer(worldState,{position:playerPosition,velocityY:playerVelocityY},{position:target,jump:jumpRequested},dt);
+    if (moved.position.x !== playerPosition.x || moved.position.y !== playerPosition.y || moved.position.z !== playerPosition.z || moved.velocityY !== playerVelocityY) {
+      playerPosition = moved.position; playerVelocityY = moved.velocityY; localMovementVersion++;
     }
-    player.position.set(playerPosition.x, 0, playerPosition.z);
-    companion.position.lerp(new THREE.Vector3(playerPosition.x + 1.5, 1.7 + Math.sin(performance.now() / 700) * .12, playerPosition.z + 1.2), .05); companion.rotation.y += dt * .4;
-    $('coordinates').textContent = `X ${playerPosition.x.toFixed(1)} · Z ${playerPosition.z.toFixed(1)}`;
+    player.position.set(playerPosition.x, playerPosition.y, playerPosition.z);
+    companion.position.lerp(new THREE.Vector3(playerPosition.x + 1.5, playerPosition.y + 1.7 + Math.sin(performance.now() / 700) * .12, playerPosition.z + 1.2), .05); companion.rotation.y += dt * .4;
+    $('coordinates').textContent = `X ${playerPosition.x.toFixed(1)} · Y ${playerPosition.y.toFixed(1)} · Z ${playerPosition.z.toFixed(1)}`;
     controls.update(); renderer.render(scene, camera);
   });
 }
@@ -92,6 +103,8 @@ function fillInspector(object) {
   if (!object) return;
   for (const field of ['position', 'size']) for (const axis of ['x', 'y', 'z']) $(`edit-${field}-${axis}`).value = object[field][axis];
   $('edit-color').value = object.color;
+  $('edit-blocks-movement').checked = object.blocksMovement;
+  $('edit-supports-player').checked = object.supportsPlayer;
   const canEdit = role === 'admin' || (role === 'builder' && object.ownerId === meId);
   $('edit-fields').disabled = editing || !canEdit;
   $('edit-message').textContent = !canEdit ? 'Read-only: you do not have permission to edit this shape.' : 'Changes are checked by the world server.';
@@ -109,9 +122,9 @@ function selectObject(id, fromPoll = false) {
 }
 function renderWorld(state, movementVersion = localMovementVersion) {
   if (state.revision < latestStateRevision) return;
-  latestStateRevision = state.revision;
+  latestStateRevision = state.revision; worldState = state;
   const firstState = meId !== state.me.id, savedPlayer = state.players.find(p => p.id === state.me.id);
-  if (savedPlayer && movementVersion === localMovementVersion && !moveRunning && (firstState || positionKey(playerPosition) === lastPosition)) { playerPosition = { ...savedPlayer.position }; lastPosition = positionKey(savedPlayer.position); }
+  if (savedPlayer && movementVersion === localMovementVersion && !moveRunning && (firstState || positionKey(playerPosition) === lastPosition)) { playerPosition = { ...savedPlayer.position }; playerVelocityY = savedPlayer.velocityY ?? 0; lastPosition = positionKey(savedPlayer.position); }
   meId = state.me.id; role = state.me.role; $('role').textContent = `Role: ${state.me.role}`; $('revision').textContent = `REV ${state.revision}`;
   const nextSnapshot = JSON.stringify(state.objects);
   if (objectSnapshot !== nextSnapshot) {
@@ -124,7 +137,7 @@ function renderWorld(state, movementVersion = localMovementVersion) {
   for (const remote of state.players) {
     if (remote.id === meId) continue; live.add(remote.id);
     if (!otherPlayers.has(remote.id)) { const mesh = avatar('#8ba5c0'); otherPlayers.set(remote.id, mesh); scene.add(mesh); }
-    otherPlayers.get(remote.id).position.set(remote.position.x, 0, remote.position.z);
+    otherPlayers.get(remote.id).position.set(remote.position.x, remote.position.y, remote.position.z);
   }
   for (const [id, mesh] of otherPlayers) if (!live.has(id)) { scene.remove(mesh); disposeGroup(mesh); otherPlayers.delete(id); }
 }
@@ -135,17 +148,18 @@ async function poll() {
   catch (error) { if (generation !== settingsGeneration) return; $('connection').textContent = '○ World offline'; $('connection').classList.add('offline'); feedback(error.message, true); }
   finally { pollRunning = false; }
 }
-function positionKey(position) { return `${position.x.toFixed(2)},${position.z.toFixed(2)}`; }
+function positionKey(position) { return `${position.x.toFixed(2)},${position.y.toFixed(2)},${position.z.toFixed(2)}`; }
 let lastPosition = '';
 async function syncPosition() {
-  const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration, movementVersion = localMovementVersion;
-  if (moveRunning || key === lastPosition || !meId || !bridge) return; moveRunning = true;
+  const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration, movementVersion = localMovementVersion, jump = jumpRequested;
+  if (moveRunning || (key === lastPosition && !jump && playerVelocityY === 0) || !meId || !bridge) return; moveRunning = true;
   try {
-    const result = await request('/command', 'POST', { type: 'move', position });
+    const result = await request('/command', 'POST', { type: 'move', position, jump });
     if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && result.revision >= latestStateRevision) {
       latestStateRevision = result.revision;
-      if (movementVersion === localMovementVersion) playerPosition = position;
-      lastPosition = key;
+      if (movementVersion === localMovementVersion && result.position) { playerPosition = result.position; playerVelocityY = result.velocityY ?? 0; }
+      if (jump) jumpRequested = false;
+      lastPosition = positionKey(result.position ?? position);
     } else if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && movementVersion === localMovementVersion) {
       lastPosition = positionKey(playerPosition);
     }
@@ -166,6 +180,10 @@ $('edit-form').addEventListener('submit', async event => {
     if (JSON.stringify(value) !== JSON.stringify(baseline[field])) body[field] = value;
   }
   if ($('edit-color').value !== baseline.color) body.color = $('edit-color').value;
+  for (const [field, input] of [['blocksMovement', 'edit-blocks-movement'], ['supportsPlayer', 'edit-supports-player']]) {
+    const checked = $(input).checked;
+    if (checked !== baseline[field]) body[field] = checked;
+  }
   const fields = Object.keys(body).filter(key => !['type', 'id'].includes(key));
   if (!fields.length) { $('edit-message').textContent = 'No changes to apply.'; return; }
   if (!current || fields.some(field => JSON.stringify(current[field]) !== JSON.stringify(baseline[field]))) { $('edit-message').textContent = 'A field you edited also changed on the server. Reset to reload it before applying.'; return; }
@@ -180,7 +198,11 @@ $('edit-form').addEventListener('submit', async event => {
   } catch (error) { if (generation === settingsGeneration) { await poll(); if (generation !== settingsGeneration) return; if (selectedId === id) $('edit-message').textContent = error.message + ' Your unapplied values are preserved. Reset to reload the server values.'; feedback(error.message, true); } }
   finally { editing = false; const object = objectData.get(selectedId); $('edit-fields').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId)); }
 });
-window.addEventListener('keydown', event => { if (!['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) keys.add(event.key.toLowerCase()); });
+window.addEventListener('keydown', event => {
+  if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName) || $('settings').open) return;
+  if (event.code === 'Space') { event.preventDefault(); if (!event.repeat) jumpRequested = true; return; }
+  keys.add(event.key.toLowerCase());
+});
 window.addEventListener('keyup', event => keys.delete(event.key.toLowerCase())); window.addEventListener('blur', () => keys.clear());
 $('find-codex').addEventListener('click', async () => {
   const button=$('find-codex'),results=$('codex-results');button.disabled=true;results.textContent='Looking in known installation locations…';
@@ -205,7 +227,7 @@ async function saveSettings() {
   }
   settings = next; settingsGeneration++;
   const { token, ...persisted } = settings; await bridge.saveSettings(persisted);
-  worldRevision = -1; objectSnapshot = ''; meId = null; lastPosition = ''; latestStateRevision = -1; localMovementVersion++; moveStarts.clear();
+  worldRevision = -1; objectSnapshot = ''; worldState = { objects: [] }; meId = null; playerPosition = { x: 0, y: 0, z: 0 }; playerVelocityY = 0; jumpRequested = false; lastPosition = ''; latestStateRevision = -1; localMovementVersion++; moveStarts.clear();
   if (scene) { selectObject(null, true); objectData.clear(); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
   await poll();
 }
@@ -268,8 +290,8 @@ function toolActivity(event) {
     const started = moveStarts.get(key); moveStarts.delete(key);
     if (started && started.generation === settingsGeneration && success && Number.isSafeInteger(response?.revision) && response.revision >= latestStateRevision) {
       latestStateRevision = response.revision;
-      const position = started.position;
-      if (started.version === localMovementVersion && position && ['x', 'y', 'z'].every(axis => Number.isFinite(position[axis]) && Math.abs(position[axis]) <= 1000)) { playerPosition = { x: position.x, y: position.y, z: position.z }; lastPosition = positionKey(playerPosition); }
+      const position = response?.position ?? started.position;
+      if (started.version === localMovementVersion && position && ['x', 'y', 'z'].every(axis => Number.isFinite(position[axis]) && Math.abs(position[axis]) <= 1000)) { playerPosition = { x: position.x, y: position.y, z: position.z }; playerVelocityY = response?.velocityY ?? 0; lastPosition = positionKey(playerPosition); }
     }
   }
   const revision = Number.isSafeInteger(response?.revision) && response.revision >= 0 ? ` · revision ${response.revision}` : '';

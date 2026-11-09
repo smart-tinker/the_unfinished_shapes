@@ -26,9 +26,9 @@ npm start
 The desktop client starts a private loopback world, persists it under Electron's application user-data directory, and creates a fresh in-memory local session token. No model is required to build manually. In Settings, choose the **absolute paths** to this repository and the Codex executable, then connect. On Windows choose the actual `codex.exe`, not a shell `.cmd` wrapper.
 
 - Build blocks, bridges and ports using the palette.
-- Select an existing object to edit position, size and color. Stale edits are rejected by the server rather than silently overwriting another change.
+- Select an existing object to edit position, size, color, solid-side collision and whether its top supports players. Stale edits are rejected by the server rather than silently overwriting another change.
 - Inspect agent activity for requested actions, confirmed results and stop reasons, without private model reasoning.
-- Move with WASD and navigate the camera with the mouse.
+- Move with WASD, jump with Space, and navigate the camera with the mouse. The server resolves solid sides and walkable tops.
 - Ask Codex for an existing construction using app-server game tools.
 - Ask for an unknown mechanic to develop it in the local repository. It does **not** become server code automatically.
 

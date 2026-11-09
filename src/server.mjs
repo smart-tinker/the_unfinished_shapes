@@ -19,6 +19,8 @@ export async function createWorldServer({dataPath, users, host = '127.0.0.1', po
   catch (error) { if (error.code === 'ENOENT') state = emptyWorld(); else throw error; }
   let queue = Promise.resolve();
   const limits = new Map();
+  // shortcut: gravity advances on move requests only; add a server tick if falling must continue while disconnected or during server downtime.
+  const movementTimes = new Map();
   async function save(next) {
     await mkdir(path.dirname(dataPath),{recursive:true});
     const temporary = `${dataPath}.${randomUUID()}.tmp`;
@@ -53,9 +55,12 @@ export async function createWorldServer({dataPath, users, host = '127.0.0.1', po
       try { command=JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { throw new WorldError('invalid_json','Malformed JSON.'); }
       const operation = queue.then(async()=>{
-        const update = applyCommand(state,actor,command);
+        const movedAt=Date.now(), previousMove=movementTimes.get(actor.id);
+        const deltaSeconds=command?.type==='move'&&previousMove!==undefined ? Math.min(.25,Math.max(0,(movedAt-previousMove)/1000)) : 0;
+        const update = applyCommand(state,actor,command,deltaSeconds);
         await save(update.state);
         state=update.state;
+        if(command?.type==='move')movementTimes.set(actor.id,movedAt);
         return update.result;
       });
       queue = operation.catch(()=>{});

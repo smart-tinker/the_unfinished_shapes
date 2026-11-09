@@ -14,7 +14,7 @@ function editingHarness() {
     }`);
   h.load('function fillInspector(', 'function renderWorld(');
   h.load("$('edit-form').addEventListener('input'", "window.addEventListener('keydown'");
-  h.context.objectFixture = { id: 'shape-1', type: 'block', ownerId: 'alice', position: { x: 0, y: 1, z: 0 }, size: { x: 2, y: 2, z: 2 }, color: '#c8a570' };
+  h.context.objectFixture = { id: 'shape-1', type: 'block', ownerId: 'alice', position: { x: 0, y: 1, z: 0 }, size: { x: 2, y: 2, z: 2 }, color: '#c8a570', blocksMovement: true, supportsPlayer: true };
   h.run('objectData.set(selectedId,structuredClone(objectFixture));fillInspector(objectFixture)');
   h.submit = () => h.element('edit-form').listeners.submit({ preventDefault() {} });
   return h;
@@ -25,6 +25,8 @@ test('inspector hydrates selected shape, and role/ownership determines editing c
   assert.equal(h.element('edit-position-y').value, 1);
   assert.equal(h.element('edit-size-z').value, 2);
   assert.equal(h.element('edit-color').value, '#c8a570');
+  assert.equal(h.element('edit-blocks-movement').checked, true);
+  assert.equal(h.element('edit-supports-player').checked, true);
   assert.equal(h.element('edit-fields').disabled, false);
   h.run("role='viewer';fillInspector(objectFixture)"); assert.equal(h.element('edit-fields').disabled, true);
   h.run("role='builder';meId='bob';fillInspector(objectFixture)"); assert.equal(h.element('edit-fields').disabled, true);
@@ -32,10 +34,12 @@ test('inspector hydrates selected shape, and role/ownership determines editing c
 });
 
 test('apply sends changed fields only and hydrates confirmed server response', async () => {
-  const h = editingHarness(); h.element('edit-position-x').value = '5';
+  const h = editingHarness(); h.element('edit-position-x').value = '5'; h.element('edit-blocks-movement').checked = false; h.element('edit-supports-player').checked = false;
   await h.submit();
-  assert.deepEqual(JSON.parse(h.run('JSON.stringify(sends)')), [{ type: 'update', id: 'shape-1', position: { x: 5, y: 1, z: 0 }, expected: { position: { x: 0, y: 1, z: 0 } } }]);
+  assert.deepEqual(JSON.parse(h.run('JSON.stringify(sends)')), [{ type: 'update', id: 'shape-1', position: { x: 5, y: 1, z: 0 }, blocksMovement: false, supportsPlayer: false, expected: { position: { x: 0, y: 1, z: 0 }, blocksMovement: true, supportsPlayer: true } }]);
   assert.equal(h.element('edit-position-x').value, 5);
+  assert.equal(h.element('edit-blocks-movement').checked, false);
+  assert.equal(h.element('edit-supports-player').checked, false);
   assert.equal(h.element('edit-message').textContent, 'Changes saved on the server.');
   assert.equal(h.run('inspectorDirty'), false);
   assert.equal(h.element('edit-fields').disabled, false);

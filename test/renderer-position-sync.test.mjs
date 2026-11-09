@@ -5,7 +5,7 @@ import { rendererHarness } from './support/renderer-harness.mjs';
 const state = (revision, x) => ({
   revision,
   objects: [],
-  players: [{ id: 'alice', position: { x, y: 1, z: 0 } }],
+  players: [{ id: 'alice', position: { x, y: 0, z: 0 } }],
   me: { id: 'alice', role: 'builder' },
 });
 
@@ -13,8 +13,8 @@ function syncHarness() {
   const h = rendererHarness();
   const sent = [];
   Object.assign(h.context, {
-    scene: {}, bridge: {}, playerPosition: { x: 0, y: 1, z: 0 }, meId: null,
-    settingsGeneration: 0, pollRunning: false, moveRunning: false, localMovementVersion: 0, latestStateRevision: -1, worldRevision: -1, objectSnapshot: '[]',
+    scene: {}, bridge: {}, playerPosition: { x: 0, y: 0, z: 0 }, meId: null,
+    settingsGeneration: 0, pollRunning: false, moveRunning: false, jumpRequested: false, playerVelocityY: 0, localMovementVersion: 0, latestStateRevision: -1, worldRevision: -1, objectSnapshot: '[]',
     role: 'viewer', objectData: new Map(), meshes: new Map(), otherPlayers: new Map(),
     sceneRoot: {}, sent,
     request: async (...args) => { sent.push(args); return { revision: 10 }; },
@@ -35,7 +35,7 @@ test('a newer server position for the same player is adopted and the next manual
   h.run('playerPosition.x += 0.25; localMovementVersion++');
   await h.run('syncPosition()');
   const sent = JSON.parse(h.run('JSON.stringify(sent)'));
-  assert.deepEqual(sent[0][2], { type: 'move', position: { x: 12.25, y: 1, z: 0 } });
+  assert.deepEqual(sent[0][2], { type: 'move', position: { x: 12.25, y: 0, z: 0 }, jump: false });
 });
 
 test('a delayed older world snapshot cannot undo a newer accepted position', () => {
@@ -73,7 +73,7 @@ function activityHarness() {
 
 test('a confirmed agent move is adopted unless newer keyboard input arrived after it started', () => {
   const h = activityHarness();
-  h.context.start = { type: 'tool-start', threadId: 'thread-1', turnId: 'turn-1', id: 'call-1', name: 'world_command', arguments: { command: { type: 'move', position: { x: 12, y: 1, z: 0 } } } };
+  h.context.start = { type: 'tool-start', threadId: 'thread-1', turnId: 'turn-1', id: 'call-1', name: 'world_command', arguments: { command: { type: 'move', position: { x: 12, y: 0, z: 0 } } } };
   h.run('toolActivity(start)');
   assert.equal(h.run('moveStarts.size'), 1);
   h.context.result = { ...h.context.start, type: 'tool-result', result: { success: true, contentItems: [{ type: 'inputText', text: '{"revision":2}' }] } };
@@ -107,12 +107,12 @@ test('the latest server-accepted move wins when an earlier manual request replie
   let resolveMove;
   h.context.request = (...args) => new Promise(resolve => { h.context.manualRequest = args; resolveMove = resolve; });
   const pending = h.run('syncPosition()');
-  h.context.start = { type: 'tool-start', threadId: 'thread-1', turnId: 'turn-1', id: 'agent-move', name: 'world_command', arguments: { command: { type: 'move', position: { x: 12, y: 1, z: 0 } } } };
+  h.context.start = { type: 'tool-start', threadId: 'thread-1', turnId: 'turn-1', id: 'agent-move', name: 'world_command', arguments: { command: { type: 'move', position: { x: 12, y: 0, z: 0 } } } };
   h.run('toolActivity(start)');
   h.context.result = { ...h.context.start, type: 'tool-result', result: { success: true, contentItems: [{ type: 'inputText', text: '{"revision":2}' }] } };
   h.run('toolActivity(result)');
   assert.equal(h.run('playerPosition.x'), 12);
-  resolveMove({ revision: 3 });
+  resolveMove({ revision: 3, position: { x: 2, y: 0, z: 0 }, velocityY: 0 });
   await pending;
   assert.equal(h.run('playerPosition.x'), 2);
 });
@@ -125,8 +125,8 @@ test('a second client renders the latest server position of the moved player', (
     revision: 3,
     objects: [],
     players: [
-      { id: 'bob', position: { x: 0, y: 1, z: 0 } },
-      { id: 'alice', position: { x: 12, y: 1, z: 0 } },
+      { id: 'bob', position: { x: 0, y: 0, z: 0 } },
+      { id: 'alice', position: { x: 12, y: 0, z: 0 } },
     ],
     me: { id: 'bob', role: 'builder' },
   };
@@ -137,12 +137,13 @@ test('a second client renders the latest server position of the moved player', (
     ...h.context.observer,
     revision: 4,
     players: [
-      { id: 'bob', position: { x: 0, y: 1, z: 0 } },
-      { id: 'alice', position: { x: 13, y: 1, z: 0 } },
+      { id: 'bob', position: { x: 0, y: 0, z: 0 } },
+      { id: 'alice', position: { x: 13, y: 2, z: 0 } },
     ],
   };
   h.run('renderWorld(observer)');
   assert.equal(h.context.otherPlayers.get('alice').position.x, 13);
+  assert.equal(h.context.otherPlayers.get('alice').position.y, 2, 'the second client renders the accepted height');
 });
 
 test('a poll received during an older move request is adopted after that request settles', async () => {

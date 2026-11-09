@@ -47,12 +47,14 @@ async function worldCommand(id, command) {
 }
 async function waitForState(predicate, description) {
   const deadline = Date.now() + 10000;
+  let last;
   while (Date.now() < deadline) {
     const snapshot = await state();
     if (predicate(snapshot)) return snapshot;
+    last = snapshot.players.map(({ id, position, velocityY }) => ({ id, position, velocityY }));
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error('Timed out waiting for ' + description);
+  throw new Error('Timed out waiting for ' + description + '; players=' + JSON.stringify(last));
 }
 async function connect(client) {
   const page = client.page;
@@ -63,6 +65,7 @@ async function connect(client) {
   await page.waitForFunction(() => document.querySelector('#settings-message').textContent.includes('saved'));
   await page.locator('#settings-close').click();
   await page.waitForFunction(() => document.querySelector('#connection').textContent.includes('World connected'));
+  await page.evaluate(() => document.activeElement?.blur());
   assert.equal(await page.locator('#role').textContent(), 'Role: builder');
 }
 async function launch(id) {
@@ -88,7 +91,7 @@ await withSmokeCleanup(async () => {
 
   alice.graphics.phase('agent movement observed by both clients');
   const agentMove = await worldCommand('alice', { type: 'move', position: { x: 12, y: 1, z: 0 } });
-  await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent === 'X 12.0 · Z 0.0');
+  await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent === 'X 12.0 · Y 0.0 · Z 0.0');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, agentMove.revision);
   const acceptedAgentPosition = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x === 12, 'the agent move to be visible in the shared state');
 
@@ -101,13 +104,52 @@ await withSmokeCleanup(async () => {
   assert.ok(observedMove.position.x > 12, 'the second client sees Alice beyond the agent destination');
   assert.ok(Number((await alice.page.locator('#coordinates').textContent()).match(/X ([\d.-]+)/)?.[1]) > 12, 'the local GUI displays movement continuing from the agent destination');
   alice.graphics.phase('manual shared construction');
-  await alice.page.locator('#build-x').fill('3');
-  await alice.page.locator('#build-z').fill('4');
+  await alice.page.locator('#build-x').fill('16');
+  await alice.page.locator('#build-z').fill('0');
   await alice.page.locator('#build-form button').click();
   await alice.page.waitForFunction(() => document.querySelector('#world-message').textContent.includes('placed'));
   const builtState = await state(), built = builtState.objects[0];
   assert.equal(built.ownerId, 'alice');
-  assert.deepEqual(built.position, { x: 3, y: 1, z: 4 });
+  assert.deepEqual(built.position, { x: 16, y: 1, z: 0 });
+
+  alice.graphics.phase('collision and jump onto a walkable top');
+  const blocked = await worldCommand('alice', { type: 'move', position: { x: 30, y: 999, z: 0 } });
+  assert.ok(blocked.position.x < 14.7, 'the server stops Alice at the solid side');
+  assert.equal(blocked.position.y, 0, 'client coordinates cannot grant unsupported height');
+  await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, blocked.revision);
+  await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('X 14.7'));
+  await alice.page.keyboard.down('a');
+  await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < 14.5, 'Alice to walk back from the solid side');
+  await alice.page.keyboard.up('a');
+  await alice.page.waitForTimeout(300);
+  await alice.page.evaluate(() => {
+    document.activeElement?.blur();
+    window.__tusMovementKeys = [];
+    for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
+      if (['Space', 'KeyD'].includes(event.code)) window.__tusMovementKeys.push({ type, code: event.code, target: event.target?.tagName });
+    }, true);
+  });
+  await alice.page.keyboard.down('d');
+  await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 14.68, 'Alice to reach the solid face');
+  await alice.page.keyboard.down('Space');
+  const jumpTimeline = [];
+  for (let i = 0; i < 12; i++) {
+    await alice.page.waitForTimeout(100);
+    const snapshot = await state(), player = snapshot.players.find(item => item.id === 'alice');
+    jumpTimeline.push({ server: player && { position: player.position, velocityY: player.velocityY }, client: await alice.page.locator('#coordinates').textContent() });
+    if (player?.position.x > 14.68 && player.position.y > 0) break;
+  }
+  console.log('Movement probe ' + JSON.stringify({ keys: await alice.page.evaluate(() => window.__tusMovementKeys), timeline: jumpTimeline }));
+  await alice.page.keyboard.up('Space');
+  await waitForState(snapshot => {
+    const player = snapshot.players.find(item => item.id === 'alice');
+    return player?.position.x > 14.68 && player.position.y > 0;
+  }, 'Alice to steer over the supported edge while airborne');
+  const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
+  await alice.page.keyboard.up('d');
+  await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
+  assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
+  assert.ok((await alice.page.locator('#coordinates').textContent()).includes('Y 2.0'), 'the local HUD displays the accepted height');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, builtState.revision);
   await select(alice, built); await select(bob, built);
   assert.equal(await bob.page.locator('#edit-apply').isDisabled(), true, 'foreign object is read-only');
@@ -128,6 +170,7 @@ await withSmokeCleanup(async () => {
   for (const client of clients) await client.page.waitForFunction(() => document.querySelector('#connection').textContent.includes('World connected'));
   const restored = await state('bob');
   assert.equal(restored.objects[0].id, built.id); assert.equal(restored.objects[0].size.x, 5);
+  assert.equal(restored.players.find(player => player.id === 'alice').position.y, 2, 'server restart preserves the landing surface position');
   assert.deepEqual(restored.players.map(p => p.id).sort(), ['alice', 'bob']);
   await close(bob);
   const returning = await launch('bob');
