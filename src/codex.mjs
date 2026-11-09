@@ -142,8 +142,10 @@ export class CodexBridge extends EventEmitter {
     if (this.turnId || this.sending) throw new Error('A turn is already running.');
     this.sending = true;
     try {
+      const context = this.controlContext();
       if (model !== undefined) {
         const catalog = await this.request('model/list', {});
+        this.assertControlContext(context);
         const selected = Array.isArray(catalog.data) ? catalog.data.find(item => item.id === model) : null;
         if (!selected) throw new Error('The selected model is not available in the current Codex model catalog.');
         if (effort !== undefined) {
@@ -151,7 +153,7 @@ export class CodexBridge extends EventEmitter {
           if (!supported.includes(effort)) throw new Error('The selected reasoning effort is not supported by this model.');
         }
       }
-      const context = { generation: this.generation, process: this.process, threadId: this.threadId };
+      this.assertControlContext(context);
       const result = await this.request('turn/start', {
         threadId: context.threadId, input: [{ type: 'text', text, text_elements: [] }],
         ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}),
@@ -254,7 +256,7 @@ export class CodexBridge extends EventEmitter {
   async clearGoal() {
     return this.withGoalOperation(async (context, goal) => {
       if (!goal) throw new Error('There is no native Goal for this conversation.');
-      const result = await this.request('thread/goal/clear', { threadId: context.threadId });
+      const result = await this.request('thread/goal/clear', { threadId: context.threadId, origin: 'user' });
       this.assertControlContext(context);
       return result;
     });
