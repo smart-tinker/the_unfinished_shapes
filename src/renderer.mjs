@@ -420,6 +420,8 @@ function notificationActivity(method, params) {
   }
 }
 function openAgentControls() { keys.clear(); jumpRequested = false; $('agent-controls').showModal(); void refreshAgentControls(); }
+
+let streamMessage = null;
 $('agent-controls-open').addEventListener('click', openAgentControls);
 $('agent-goal-manage').addEventListener('click', openAgentControls);
 $('agent-controls-close').addEventListener('click', () => $('agent-controls').close());
@@ -444,7 +446,6 @@ $('agent-model-save').addEventListener('click', async () => {
   } catch (error) { $('agent-controls-message').textContent = error.message; }
   finally { agentControlBusy = false; updateAgentControlButtons(); }
 });
-let streamMessage = null;
 $('chat-form').addEventListener('submit', async event => { event.preventDefault(); const text = $('prompt').value.trim(); if (!text || !connected || busy) return; busy = true; startActivity(); updateChatControls(); addMessage(text, 'user'); $('prompt').value = ''; streamMessage = null; try { await bridge.sendPrompt(text); } catch (error) { addMessage(error.message, 'error'); $('activity-state').textContent = 'Error'; $('agent-stop-reason').textContent = 'Request could not be confirmed: ' + error.message; busy = false; updateChatControls(); } });
 $('interrupt').addEventListener('click', async () => { $('interrupt').disabled = true; try { stopRequested = true; $('activity-state').textContent = 'Stopping'; $('agent-stop-reason').textContent = 'Stop requested; waiting for Codex to confirm interruption.'; await bridge.interrupt(); } catch (error) { addMessage(error.message, 'error'); $('interrupt').disabled = !busy; } });
 function codexEvent(event) {
