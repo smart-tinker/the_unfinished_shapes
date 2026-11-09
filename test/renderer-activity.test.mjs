@@ -7,6 +7,28 @@ function activityHarness() {
   h.notify = (method, params) => { Object.assign(h.context, { method, params }); h.run('notificationActivity(method,params)'); };
   return h;
 }
+function historyRendererHarness() {
+  const h = rendererHarness();
+  h.run("let settings = { threadId: 'saved' }; let connected = true; let busy = false;");
+  h.load('function addMessage(text, kind = \'system\') {', 'function updateAgentControlButtons() {');
+  h.load('function codexEvent(event) {', 'try { initScene(); }');
+  return h;
+}
+test('restores only matching user-facing chat history from a resumed conversation', () => {
+  const h = historyRendererHarness();
+  h.run(`codexEvent({type:'history',threadId:'saved',available:true,messages:[
+    {role:'user',text:'Build the bridge'},
+    {role:'assistant',text:'The bridge is ready.'},
+    {role:'reasoning',text:'Never display private reasoning'},
+  ]})`);
+  assert.deepEqual(h.element('chat').children.map(message => [message.className, message.textContent]), [
+    ['chat-message user', 'Build the bridge'],
+    ['chat-message assistant', 'The bridge is ready.'],
+  ]);
+  h.run(`codexEvent({type:'history',threadId:'stale',available:true,messages:[{role:'assistant',text:'Stale conversation'}]})`);
+  assert.equal(h.element('chat').children.length, 2, 'history from another conversation cannot replace the current chat');
+});
+
 test('activity shows requested command intent and only structured result evidence', () => {
   const h = activityHarness();
   h.tool({ type: 'tool-start', name: 'world_command', arguments: { command: { type: 'update', secret: 'SECRET' } } });
