@@ -61,3 +61,28 @@ test('a poll that began before new local input does not overwrite that input', a
   await pending;
   assert.equal(h.run('playerPosition.x'), 2);
 });
+
+
+function activityHarness() {
+  const h = syncHarness();
+  Object.assign(h.context, { busy: true, acceptedThreadId: 'thread-1', currentTurnId: null, latestStateRevision: 1 });
+  h.load('const toolRows = new Map()', 'function notificationActivity(');
+  return h;
+}
+
+test('a confirmed agent move is adopted unless newer keyboard input arrived after it started', () => {
+  const h = activityHarness();
+  h.context.start = { type: 'tool-start', threadId: 'thread-1', turnId: 'turn-1', id: 'call-1', name: 'world_command', arguments: { command: { type: 'move', position: { x: 12, y: 1, z: 0 } } } };
+  h.run('toolActivity(start)');
+  h.context.result = { ...h.context.start, type: 'tool-result', result: { success: true, contentItems: [{ type: 'inputText', text: '{"revision":2}' }] } };
+  h.run('toolActivity(result)');
+  assert.equal(h.run('playerPosition.x'), 12);
+
+  h.context.otherStart = { ...h.context.start, id: 'call-2', turnId: 'turn-2' };
+  h.run('currentTurnId=null; toolActivity(otherStart)');
+  h.run('playerPosition.x=14; localMovementVersion++');
+  h.context.otherResult = { ...h.context.otherStart, type: 'tool-result', result: { success: true, contentItems: [{ type: 'inputText', text: '{"revision":3}' }] } };
+  h.run('toolActivity(otherResult)');
+  assert.equal(h.run('playerPosition.x'), 14);
+  assert.equal(h.run('latestStateRevision'), 3);
+});
