@@ -24,6 +24,16 @@ function landingAt(objects, x, z, fromY, toY) {
   }
   return landing;
 }
+function ceilingAt(objects, x, z, fromY, toY) {
+  let ceiling = null;
+  for (const object of objects) {
+    const bottom = object.position.y - object.size.y / 2;
+    if (object.blocksMovement && overlapsTop(object, x, z) && fromY + PLAYER_HEIGHT <= bottom + EPSILON && toY + PLAYER_HEIGHT >= bottom - EPSILON) {
+      ceiling = Math.min(ceiling ?? Infinity, bottom - PLAYER_HEIGHT);
+    }
+  }
+  return ceiling;
+}
 function intersectsVertically(object, y) {
   const bottom = object.position.y - object.size.y / 2;
   const top = object.position.y + object.size.y / 2;
@@ -72,6 +82,10 @@ export function movePlayer(world, current, command, deltaSeconds = 0.25) {
     const fromY = position.y;
     velocityY -= GRAVITY * step;
     const toY = fromY + velocityY * step;
+    if (velocityY > 0) {
+      const ceiling = ceilingAt(objects, position.x, position.z, fromY, toY);
+      if (ceiling !== null) { position.y = ceiling; velocityY = 0; continue; }
+    }
     if (velocityY <= 0) {
       const landing = landingAt(objects, position.x, position.z, fromY, toY);
       if (landing !== null) { position.y = landing; velocityY = 0; continue; }
