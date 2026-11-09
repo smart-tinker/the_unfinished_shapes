@@ -26,10 +26,7 @@ const attachQuitGuard = installQuitGuard({
       return { ...state, pendingApprovals: bridge.approvals.size };
     }
     const saved = await settings();
-    return saved.threadId ? null : {
-      connected: true, thread: { status: { type: 'idle' } },
-      turnId: null, pendingApprovals: 0, goal: null,
-    };
+    return saved.threadId ? null : { connected: false, threadId: null };
   },
   confirm: async state => {
     if (isSmokeAutoConfirmQuit(process.env, process.argv)) return true;
