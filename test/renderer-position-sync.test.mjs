@@ -138,11 +138,12 @@ test('a second client renders the latest server position of the moved player', (
     revision: 4,
     players: [
       { id: 'bob', position: { x: 0, y: 0, z: 0 } },
-      { id: 'alice', position: { x: 13, y: 0, z: 0 } },
+      { id: 'alice', position: { x: 13, y: 2, z: 0 } },
     ],
   };
   h.run('renderWorld(observer)');
   assert.equal(h.context.otherPlayers.get('alice').position.x, 13);
+  assert.equal(h.context.otherPlayers.get('alice').position.y, 2, 'the second client renders the accepted height');
 });
 
 test('a poll received during an older move request is adopted after that request settles', async () => {
