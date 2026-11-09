@@ -9,6 +9,7 @@ import { executeGameTool } from './game-tools.mjs';
 import { createWorldServer } from './server.mjs';
 import { DATA_DIRECTORY, loadSettings, saveSettings, agentModelForThread } from './settings.mjs';
 import { findCodex } from './codex-discovery.mjs';
+import { installQuitGuard } from './quit-guard.mjs';
 const userData = process.env.TUS_DATA_DIR ? path.resolve(process.env.TUS_DATA_DIR) : path.join(app.getPath('appData'),DATA_DIRECTORY);
 mkdirSync(userData,{recursive:true});
 app.setPath('userData',userData);
@@ -16,6 +17,35 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld;
 if (!app.requestSingleInstanceLock()) app.quit();
 const settings = () => loadSettings(app.getPath('userData'));
+const attachQuitGuard = installQuitGuard({
+  app,
+  getWindow: () => win && !win.isDestroyed() ? win : null,
+  readState: async () => {
+    if (bridge) {
+      const state = await bridge.readControlState();
+      return { ...state, pendingApprovals: bridge.approvals.size };
+    }
+    const saved = await settings();
+    return saved.threadId ? null : {
+      connected: true, thread: { status: { type: 'idle' } },
+      turnId: null, pendingApprovals: 0, goal: null,
+    };
+  },
+  confirm: async state => {
+    const known = state?.connected === true;
+    const goalStatus = state?.goal?.status;
+    const detail = known
+      ? `${goalStatus ? `Native Goal status: ${goalStatus}. ` : ''}Quitting TUS closes its Codex connection but does not confirm that a Goal or turn stopped. Keep the game open to pause or clear the Goal, or quit anyway.`
+      : 'Codex state could not be confirmed. Keep the game open and reconnect to check the conversation, or quit anyway.';
+    const result = await dialog.showMessageBox(getWindow(), {
+      type: 'warning', title: 'Codex activity may continue',
+      message: known ? 'Codex may still be working in this conversation.' : 'The current Codex activity is unknown.',
+      detail, buttons: ['Keep the game open', 'Quit anyway'], defaultId: 0, cancelId: 0,
+    });
+    return result.response === 1;
+  },
+  cleanup: () => { bridge?.stop(); localServer?.close(); },
+});
 function assertSender(event) { if(event.sender !== win.webContents) throw new Error('Untrusted sender'); }
 function handle(name, fn) { ipcMain.handle(name, (event,...args) => { assertSender(event); return fn(...args); }); }
 function serverUrl(value) { const u = new URL(value); if(!['http:','https:'].includes(u.protocol) || u.username || u.password || u.pathname !== '/' || u.search || u.hash) throw new Error('Use an HTTP(S) server origin without credentials or paths'); return u.origin; }
@@ -130,9 +160,10 @@ app.whenReady().then(async()=>{
   handle('codex:interrupt',()=>bridge?.interrupt());
   handle('codex:respond',(id,result)=>bridge?.respond(id,result));
   win=new BrowserWindow({width:1440,height:940,minWidth:1000,minHeight:700,backgroundColor:'#131c24',webPreferences:{preload:path.join(here,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  attachQuitGuard(win);
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',(event)=>event.preventDefault());
   await win.loadFile(path.join(here,'index.html'));
 }).catch(error=>{dialog.showErrorBox('The Unfinished Shapes could not start',error.message+'\nYour saved settings and world have not been reset.');app.quit();});
 app.on('window-all-closed',()=>app.quit());
-app.on('before-quit',()=>{bridge?.stop();localServer?.close();});
+
