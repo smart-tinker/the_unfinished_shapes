@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { confirmQuitIfUnsafe, installQuitGuard } from '../src/quit-guard.mjs';
+import { confirmQuitIfUnsafe, installQuitGuard, isSmokeAutoConfirmQuit } from '../src/quit-guard.mjs';
 
 const idle = () => ({
   connected: true,
@@ -99,4 +99,11 @@ test('unsafe state and unreadable state both require an explicit decision', asyn
   assert.equal(unknown, false);
   assert.equal(blocked, false);
   assert.equal(accepted, true);
+});
+
+
+test('automatic quit confirmation is limited to an explicit CI smoke launch', () => {
+  assert.equal(isSmokeAutoConfirmQuit({ CI: 'true' }, ['electron', '--tus-smoke-confirm-quit']), true);
+  assert.equal(isSmokeAutoConfirmQuit({ CI: 'false' }, ['electron', '--tus-smoke-confirm-quit']), false);
+  assert.equal(isSmokeAutoConfirmQuit({ CI: 'true' }, ['electron']), false);
 });
