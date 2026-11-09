@@ -110,6 +110,24 @@ test('resuming a game conversation restores only user-facing history in chronolo
   f.bridge.stop();
 });
 
+test('a history API error keeps the saved conversation connected and reports history unavailable', async () => {
+  const f = fixture((message, reply) => {
+    if (message.method === 'thread/items/list') {
+      queueMicrotask(() => reply({ id: message.id, error: { code: -32601, message: 'Method not found' } }));
+      return false;
+    }
+  });
+  const events = [];
+  f.bridge.on('event', event => events.push(event));
+  const result = await f.start({ threadId: 'saved' });
+  assert.equal(result.threadId, 'saved');
+  assert.ok(f.bridge.process, 'history failure must not disconnect the conversation');
+  assert.deepEqual(events.map(event => event.type), ['connected', 'history']);
+  assert.deepEqual(events[1], { type: 'history', threadId: 'saved', available: false, messages: [] });
+  assert.equal(f.requests.some(request => request.method === 'turn/start'), false);
+  f.bridge.stop();
+});
+
 test('explicit send, duplicate send protection, interrupt, completion',async()=>{
   const f=fixture(); await f.start();
   await f.bridge.send('Build a bridge');
