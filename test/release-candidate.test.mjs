@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { assetNames, candidateContext, findRelease, recordManifest, requireDraft, requireNewRelease, requireStagingAttempt, validateManifest, verifyFiles, verifyRun } from '../scripts/release-candidate.mjs';
+import { assetNames, candidateContext, createDraft, findRelease, recordManifest, requireDraft, requireNewRelease, requireStagingAttempt, validateManifest, verifyFiles, verifyRun } from '../scripts/release-candidate.mjs';
 
 const env = { GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/release/0.1.0-rc3', GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1' };
 const context = candidateContext('0.1.0-rc.3', env);
@@ -90,4 +90,14 @@ test('draft collision is detected even when the published-tag endpoint returns 4
     ? { status: 404, data: {} }
     : { status: 200, data: [{ id: 99, tag_name: context.tag, draft: true }] };
   await assert.rejects(requireNewRelease(context, request), /existing release/);
+});
+
+test('creation uses the returned draft identity even before it appears in list reads', async () => {
+  const draft = { id: 42, tag_name: context.tag, target_commitish: context.sourceSha, draft: true, prerelease: true, assets: [] };
+  let reads = 0, writes = 0;
+  const actual = await createDraft(context, async () => { reads++; return { status: 200, data: [] }; },
+    async () => { writes++; return { stdout: JSON.stringify(draft) }; });
+  assert.deepEqual(actual, draft);
+  assert.equal(writes, 1);
+  assert.equal(reads, 0, 'do not discover a just-created draft through a stale list');
 });

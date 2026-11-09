@@ -141,6 +141,16 @@ async function output(name, value) {
   if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
 }
 
+export async function createDraft(context, request = ghRequest(), run = gh) {
+  await run(['release', 'create', context.tag, '--repo', context.repository, '--verify-tag', '--target', context.sourceSha,
+    '--title', `The Unfinished Shapes ${context.version}`, '--draft', '--prerelease', '--notes',
+    `Source: ${context.sourceSha}\nCandidate run: https://github.com/${context.repository}/actions/runs/${context.runId}/attempts/${context.runAttempt}\n\nWindows x64 is unsigned. macOS supports Apple Silicon arm64 only, with an ad-hoc signature and no notarization. Linux and Windows CI use explicit SwiftShader with the existing runner-only no-sandbox setting; normal application startup is unchanged. Default Linux automatic graphics and Windows D3D11-WARP context loss remain unresolved. Hardware-GPU and interactive desktop acceptance were not performed. See docs/GRAPHICS.md and README at this source commit for scope and limitations.`]);
+  const release = await findRelease(context, request);
+  requireDraft(release, context);
+  assert.equal(release.assets.length, 0, 'new draft must be empty');
+  return release;
+}
+
 async function main() {
   assert.equal(process.env.GITHUB_EVENT_NAME, 'workflow_dispatch', 'release operations require an explicit manual dispatch');
   const context = candidateContext(JSON.parse(await readFile('package.json', 'utf8')).version, process.env);
@@ -160,12 +170,7 @@ async function main() {
     assert.ok(!platformOrRun);
     await requireNewRelease(context, request);
     if (command === 'create-draft') {
-      await gh(['release', 'create', context.tag, '--repo', context.repository, '--verify-tag', '--target', context.sourceSha,
-        '--title', `The Unfinished Shapes ${context.version}`, '--draft', '--prerelease', '--notes',
-        `Source: ${context.sourceSha}\nCandidate run: https://github.com/${context.repository}/actions/runs/${context.runId}/attempts/${context.runAttempt}\n\nWindows x64 is unsigned. macOS supports Apple Silicon arm64 only, with an ad-hoc signature and no notarization. Linux and Windows CI use explicit SwiftShader with the existing runner-only no-sandbox setting; normal application startup is unchanged. Default Linux automatic graphics and Windows D3D11-WARP context loss remain unresolved. Hardware-GPU and interactive desktop acceptance were not performed. See docs/GRAPHICS.md and README at this source commit for scope and limitations.`]);
-      const release = await findRelease(context, request);
-      requireDraft(release, context);
-      assert.equal(release.assets.length, 0, 'new draft must be empty');
+      const release = await createDraft(context, request);
       await output('release_id', release.id);
       await output('run_attempt', context.runAttempt);
     }
