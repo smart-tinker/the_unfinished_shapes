@@ -20,9 +20,9 @@ test('vectors, colors and corrupt saved data are rejected',()=>{
  assert.throws(()=>applyCommand(emptyWorld(),builder,{...build,color:'red<script>'}));
  assert.throws(()=>validateWorld({version:2,revision:0,objects:[],players:[]}));
 });
-test('move updates only authenticated player',()=>{
+test('move updates only the authenticated player and keeps height server-owned',()=>{
  const state=applyCommand(emptyWorld(),builder,{type:'move',id:'bob',position:{x:1,y:2,z:3}}).state;
- assert.deepEqual(state.players,[{id:'alice',position:{x:1,y:2,z:3}}]);
+ assert.deepEqual(state.players,[{id:'alice',position:{x:1,y:0,z:3},velocityY:0}]);
 });
 test('update changes only supplied fields and preserves object identity',()=>{
  const {state}=applyCommand(emptyWorld(),builder,build), original=state.objects[0];
@@ -40,7 +40,7 @@ test('update checks owner, admin, viewer and missing object',()=>{
 });
 test('update rejects invalid or immutable fields without partial mutation',()=>{
  const {state}=applyCommand(emptyWorld(),builder,build), base={type:'update',id:state.objects[0].id};
- for(const patch of [{},{ownerId:'bob'},{objectType:'port'},{color:'red'},{color:null},{size:{x:0,y:1,z:1}},{position:{x:Infinity,y:1,z:1}},{position:null},{position:{x:2,y:3,z:4},color:'invalid'}]) {
+ for(const patch of [{},{ownerId:'bob'},{objectType:'port'},{color:'red'},{color:null},{size:{x:0,y:1,z:1}},{position:{x:Infinity,y:1,z:1}},{position:null},{position:{x:2,y:3,z:4},color:'invalid'},{blocksMovement:'false'},{supportsPlayer:0}]) {
    const snapshot=structuredClone(state);assert.throws(()=>applyCommand(state,builder,{...base,...patch}));assert.deepEqual(state,snapshot);
  }
 });
@@ -80,6 +80,7 @@ test('legacy saves gain deterministic physics defaults without losing world data
  assert.equal(restored.objects[0].id,'old-block');
  assert.deepEqual({blocksMovement:restored.objects[0].blocksMovement,supportsPlayer:restored.objects[0].supportsPlayer},{blocksMovement:true,supportsPlayer:true});
  assert.equal(restored.players[0].id,'alice');
+ assert.equal(restored.players[0].position.y,0);
  assert.equal(restored.players[0].velocityY,0);
 });
 
