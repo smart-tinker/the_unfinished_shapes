@@ -124,12 +124,14 @@ await withSmokeCleanup(async () => {
   await alice.page.waitForTimeout(300);
   await alice.page.evaluate(() => document.activeElement?.blur());
   await alice.page.keyboard.down('Space');
-  await alice.page.waitForTimeout(120);
+  await waitForState(snapshot => {
+    const player = snapshot.players.find(item => item.id === 'alice');
+    return player?.position.y > 0 && player.velocityY > 0;
+  }, 'the server to accept Alice’s jump');
   await alice.page.keyboard.up('Space');
   await alice.page.keyboard.down('d');
-  await alice.page.waitForTimeout(700);
-  await alice.page.keyboard.up('d');
   const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
+  await alice.page.keyboard.up('d');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
   assert.ok((await alice.page.locator('#coordinates').textContent()).includes('Y 2.0'), 'the local HUD displays the accepted height');
