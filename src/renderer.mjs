@@ -61,7 +61,7 @@ function renderAgentControls(state) {
   $('active-goal').hidden = !goal; $('goal-status').textContent = goal ? `Native Goal · ${goal.status}` : ''; $('goal-objective').textContent = goal?.objective ?? '';
   $('agent-goal-summary').hidden = !goal || goal.status !== 'active'; $('agent-goal-summary-status').textContent = goal ? `Native Goal · ${goal.status}` : ''; $('agent-goal-summary-text').textContent = goal?.objective ?? '';
   if (goal?.status === 'active') goalMessageContextId = goal.id || state.threadId;
-  else if (!goal || goal.status === 'paused') goalMessageContextId = null;
+  else goalMessageContextId = null;
   const models = state.models;
   $('agent-model').replaceChildren();
   const defaultModel = document.createElement('option'); defaultModel.value = ''; defaultModel.textContent = 'Use Codex default'; $('agent-model').append(defaultModel);
@@ -479,7 +479,7 @@ function codexEvent(event) {
     if (event.method === 'thread/goal/updated' && p.goal) {
       const goal = p.goal; agentControlState = agentControlState ? { ...agentControlState, goal } : agentControlState;
       if (goal.status === 'active') goalMessageContextId = goal.id || settings.threadId;
-      if (goal.status === 'paused') goalMessageContextId = null;
+      else goalMessageContextId = null;
       addMessage(`Native Goal status: ${typeof goal.status === 'string' ? goal.status : 'updated'}.`, 'system');
       void refreshAgentControls();
     }
