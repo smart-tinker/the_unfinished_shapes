@@ -40,6 +40,27 @@ test('changing workspace is blocked while a paused Goal still has a running turn
   assert.equal(h.run('settings.workspacePath'), '/old-workspace');
 });
 
+test('changing workspace is blocked while a paused Goal would be orphaned', async () => {
+  const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'idle', turnId: null, pendingApprovals: 0, goal: { id: 'goal-1', status: 'paused' } });
+  await assert.rejects(h.run('saveSettings()'), /Goal|clear|wait/i);
+  assert.equal(h.run('JSON.stringify(calls)'), '["read:game-thread"]');
+  assert.equal(h.run('settings.workspacePath'), '/old-workspace');
+});
+
+test('changing workspace is blocked while Codex has a pending approval', async () => {
+  const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'active', turnId: 'turn-1', pendingApprovals: 1, goal: null });
+  await assert.rejects(h.run('saveSettings()'), /approval|wait|idle/i);
+  assert.equal(h.run('JSON.stringify(calls)'), '["read:game-thread"]');
+  assert.equal(h.run('settings.workspacePath'), '/old-workspace');
+});
+
+test('changing workspace is blocked if native conversation state cannot be confirmed', async () => {
+  const h = settingsHarness({ connected: false, threadId: null });
+  await assert.rejects(h.run('saveSettings()'), /Codex|conversation|confirm|connected/i);
+  assert.equal(h.run('JSON.stringify(calls)'), '["read:game-thread"]');
+  assert.equal(h.run('settings.workspacePath'), '/old-workspace');
+});
+
 test('an idle conversation can disconnect after fresh state confirms no active Goal or turn', async () => {
   const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'idle', pendingApprovals: 0, turnId: null, goal: null });
   await h.run('saveSettings()');
