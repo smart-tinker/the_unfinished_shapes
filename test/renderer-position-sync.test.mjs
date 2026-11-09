@@ -65,8 +65,9 @@ test('a poll that began before new local input does not overwrite that input', a
 
 function activityHarness() {
   const h = syncHarness();
-  Object.assign(h.context, { busy: true, acceptedThreadId: 'thread-1', currentTurnId: null, latestStateRevision: 1 });
+  Object.assign(h.context, { busy: true, latestStateRevision: 1 });
   h.load('const toolRows = new Map()', 'function notificationActivity(');
+  h.run("activityThread('thread-1')");
   return h;
 }
 
