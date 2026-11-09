@@ -6,6 +6,7 @@ import { isAbsolute } from 'node:path';
 
 const MAX_LINE = 8 * 1024 * 1024;
 const active = (thread) => thread?.status?.type === 'active';
+const GAME_DEVELOPER_INSTRUCTIONS = "You are the player's companion in The Unfinished Shapes. For requests about the game world, call world_state before changing the world and use the returned state. Do not use terminal, shell, or file tools for game-world-only requests. Use project-code tools only when the player explicitly asks you to inspect or change project code, and keep the configured approval policy. Report game changes only after successful game-tool results.";
 
 const positionSchema = { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, required: ['x', 'y', 'z'], additionalProperties: false };
 export const WORLD_TOOLS = [
@@ -119,8 +120,8 @@ export class CodexBridge extends EventEmitter {
         if (selected) throw new Error('An existing conversation cannot gain game tools. Select New game conversation explicitly; the original conversation will be preserved.');
       }
       const result = selected
-        ? await this.request('thread/resume', { threadId: selected.id, excludeTurns: true, cwd: this.workspacePath, sandbox: 'workspace-write', approvalPolicy: 'on-request' })
-        : await this.request('thread/start', { dynamicTools: WORLD_TOOLS, cwd: this.workspacePath, sandbox: 'workspace-write', approvalPolicy: 'on-request' });
+        ? await this.request('thread/resume', { threadId: selected.id, excludeTurns: true, cwd: this.workspacePath, sandbox: 'workspace-write', approvalPolicy: 'on-request', developerInstructions: GAME_DEVELOPER_INSTRUCTIONS })
+        : await this.request('thread/start', { dynamicTools: WORLD_TOOLS, cwd: this.workspacePath, sandbox: 'workspace-write', approvalPolicy: 'on-request', developerInstructions: GAME_DEVELOPER_INSTRUCTIONS });
       if (!result.thread?.id) throw new Error('Codex did not return a conversation ID.');
       if (active(result.thread)) throw new Error('Conversation became active; not taking over its turn.');
       this.threadId = result.thread.id;
