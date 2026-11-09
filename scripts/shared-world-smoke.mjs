@@ -137,18 +137,25 @@ await withSmokeCleanup(async () => {
     document.activeElement?.blur();
     window.__tusMovementKeys = [];
     for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
-      if (['Space', 'KeyD'].includes(event.code)) window.__tusMovementKeys.push({ type, code: event.code, target: event.target?.tagName });
+      if (['Space', 'KeyD'].includes(event.code)) window.__tusMovementKeys.push({ type, code: event.code, target: event.target?.tagName, focused: document.hasFocus(), active: document.activeElement?.tagName, at: Math.round(performance.now()) });
+    }, true);
+    for (const type of ['focus', 'blur']) window.addEventListener(type, event => {
+      window.__tusMovementKeys.push({ type, target: event.target?.tagName, focused: document.hasFocus(), at: Math.round(performance.now()) });
     }, true);
   });
   await focus(alice);
   await alice.page.keyboard.down('d');
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 14.68, 'Alice to reach the solid face');
   await alice.page.keyboard.down('Space');
+  await waitForState(snapshot => {
+    const player = snapshot.players.find(item => item.id === 'alice');
+    return player?.position.y > 0 && player.velocityY > 0;
+  }, 'the server to accept the jump while Alice is ascending');
   const jumpTimeline = [];
   for (let i = 0; i < 12; i++) {
     await alice.page.waitForTimeout(100);
     const snapshot = await state(), player = snapshot.players.find(item => item.id === 'alice');
-    jumpTimeline.push({ server: player && { position: player.position, velocityY: player.velocityY }, client: await alice.page.locator('#coordinates').textContent() });
+    jumpTimeline.push({ server: player && { position: player.position, velocityY: player.velocityY }, client: await alice.page.locator('#coordinates').textContent(), focus: await alice.page.evaluate(() => ({ focused: document.hasFocus(), visibility: document.visibilityState, active: document.activeElement?.tagName })) });
     if (player?.position.x > 14.68 && player.position.y > 0) break;
   }
   console.log('Movement probe ' + JSON.stringify({ keys: await alice.page.evaluate(() => window.__tusMovementKeys), timeline: jumpTimeline }));
@@ -161,7 +168,7 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('d');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
-  assert.ok((await alice.page.locator('#coordinates').textContent()).includes('Y 2.0'), 'the local HUD displays the accepted height');
+  await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('Y 2.0'), undefined, { timeout: 5000 });
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, builtState.revision);
   await select(alice, built); await select(bob, built);
   assert.equal(await bob.page.locator('#edit-apply').isDisabled(), true, 'foreign object is read-only');

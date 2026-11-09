@@ -59,7 +59,7 @@ function initScene() {
   });
   window.addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
   renderer.setAnimationLoop(() => {
-    const dt = Math.min(clock.getDelta(), .05), typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName) || $('settings').open;
+    const dt = Math.min(clock.getDelta(), .25), typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName) || $('settings').open;
     let x = typing ? 0 : Number(keys.has('d')) - Number(keys.has('a'));
     let z = typing ? 0 : Number(keys.has('s')) - Number(keys.has('w'));
     const length = Math.hypot(x, z);
