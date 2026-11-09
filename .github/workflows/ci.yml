@@ -94,4 +94,6 @@ jobs:
       - run: npm run package:win
       - run: npm run installer:win
       - name: Verify clean install, current-candidate lifecycle and retained data
+        env:
+          TUS_SMOKE_PORTABLE_EXECUTABLE: dist/TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe
         run: node scripts/windows-installer-smoke.mjs
