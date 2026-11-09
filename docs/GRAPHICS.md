@@ -30,3 +30,11 @@ TheUnfinishedShapes --use-gl=angle --use-angle=swiftshader
 This is an explicit, temporary diagnostic launch, not a change to the default renderer or system configuration. Keep the Chromium warning visible in the test record. Do not add the unsafe opt-in flag suggested by that warning. On a version where the above no longer creates a context, record failure rather than weakening security.
 
 Acceptance steps: verify the scene and player; create and select a shape; edit its position and size and observe both the visual result and server confirmation; remove it; restart and verify persisted state/settings. Separately run the real-model test and platform CI. Record the exact commit/build used; a preview from an uncommitted worktree is not final-release acceptance.
+
+## RC3 automated graphics acceptance
+
+GitHub-hosted Linux and Windows smoke use explicit `--use-gl=angle --use-angle=swiftshader` for Linux source/package launches and the complete Windows installer lifecycle. The existing runner-only `--no-sandbox` flags remain. Normal application startup and native macOS graphics settings are unchanged. No unsafe SwiftShader opt-in is enabled.
+
+The smoke requires a healthy WebGL context throughout construction, settings, restart and persisted-world checks. A successful run establishes this software-rendered headless lifecycle, not default desktop GPU behavior, interactive usability, hardware performance or sandboxed desktop startup. The underlying automatic-renderer/Mesa failures remain environment limitations.
+
+Windows default D3D11-WARP also lost its context after same-installer reinstall in [run 42564975733](https://github.com/smart-tinker/the_unfinished_shapes/actions/runs/42564975733). This remains unresolved: a passing SwiftShader lifecycle does not prove the normal Windows renderer is fixed. macOS uses its native default renderer and sandbox.

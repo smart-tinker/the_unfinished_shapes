@@ -151,7 +151,7 @@ async function main() {
     if (command === 'create-draft') {
       await gh(['release', 'create', context.tag, '--repo', context.repository, '--verify-tag', '--target', context.sourceSha,
         '--title', `The Unfinished Shapes ${context.version}`, '--draft', '--prerelease', '--notes',
-        `Source: ${context.sourceSha}\nCandidate run: https://github.com/${context.repository}/actions/runs/${context.runId}/attempts/${context.runAttempt}\n\nWindows x64 is unsigned. macOS supports Apple Silicon arm64 only, with an ad-hoc signature and no notarization. See the README at this source commit for scope and limitations.`]);
+        `Source: ${context.sourceSha}\nCandidate run: https://github.com/${context.repository}/actions/runs/${context.runId}/attempts/${context.runAttempt}\n\nWindows x64 is unsigned. macOS supports Apple Silicon arm64 only, with an ad-hoc signature and no notarization. Linux and Windows CI use explicit SwiftShader with the existing runner-only no-sandbox setting; normal application startup is unchanged. Default Linux automatic graphics and Windows D3D11-WARP context loss remain unresolved. Hardware-GPU and interactive desktop acceptance were not performed. See docs/GRAPHICS.md and README at this source commit for scope and limitations.`]);
       const release = await lookup(context, `releases/tags/${encodeURIComponent(context.tag)}`, request);
       requireDraft(release, context);
       assert.equal(release.assets.length, 0, 'new draft must be empty');
