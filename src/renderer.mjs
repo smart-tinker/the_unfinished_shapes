@@ -302,6 +302,19 @@ function readSettings() { return { ...settings, workspacePath: $('workspace').va
 async function saveSettings() {
   const next = readSettings();
   const changed = ['workspacePath', 'codexPath', 'serverUrl', 'token'].some(key => next[key] !== settings[key]);
+  if (changed && (connected || settings.threadId)) {
+    if (!settings.threadId) throw new Error('Cannot verify the current Codex conversation; reconnect before changing connection settings.');
+    const state = await bridge.readAgentControls(settings.threadId);
+    if (!state?.connected || state.threadId !== settings.threadId || state.threadStatus !== 'idle' ||
+        (state.turnId !== null && typeof state.turnId !== 'string') ||
+        !Number.isInteger(state.pendingApprovals) || state.pendingApprovals < 0 ||
+        !Object.hasOwn(state, 'goal')) {
+      throw new Error('Cannot verify that the current Codex conversation is idle; reconnect and check its state before changing connection settings.');
+    }
+    if (state.turnId || state.pendingApprovals > 0 || state.goal) {
+      throw new Error('Clear the native Goal, resolve pending approvals, and wait for Codex to become idle before changing connection settings.');
+    }
+  }
   if (next.workspacePath !== settings.workspacePath) next.threadId = '';
   if (changed) {
     await bridge.disconnectCodex(); connected = false; busy = false; updateChatControls();
