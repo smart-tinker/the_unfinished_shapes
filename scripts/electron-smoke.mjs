@@ -65,6 +65,7 @@ await withSmokeCleanup(async()=>{
  state=await reopened.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
  assert.equal(state.objects.length,1,'world survives desktop restart');
  const restored=await reopened.evaluate(()=>window.tus.loadSettings());assert.equal(restored.codexPath,expectedCodexPath);assert.equal(restored.workspacePath,dir);assert.equal(restored.threadId,'smoke-preserved-game-thread');assert.equal(restored.agentControlThreadId,'smoke-preserved-game-thread');assert.equal(restored.agentModelId,'qwen3-local-cpu');assert.equal(restored.agentEffort,'medium');
+ const persisted=JSON.parse(await readFile(path.join(dir,'settings.json'),'utf8'));assert.equal(persisted.agentModelId,'qwen3-local-cpu');assert.equal(persisted.agentEffort,'medium');assert.equal('token' in persisted,false);
  graphics.phase('authenticated removal');
  // Removal below exercises the authenticated command API, not canvas selection or the Remove button.
  await reopened.evaluate(async id=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/command',method:'POST',body:{type:'remove',id}});},state.objects[0].id);
