@@ -133,23 +133,6 @@ await withSmokeCleanup(async () => {
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < 14.5, 'Alice to walk back from the solid side');
   await alice.page.keyboard.up('a');
   await alice.page.waitForTimeout(300);
-  await alice.page.evaluate(() => {
-    document.activeElement?.blur();
-    window.__tusMovementKeys = [];
-    for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
-      if (['Space', 'KeyD'].includes(event.code)) window.__tusMovementKeys.push({ type, code: event.code, target: event.target?.tagName, focused: document.hasFocus(), active: document.activeElement?.tagName, at: Math.round(performance.now()) });
-    }, true);
-    for (const type of ['focus', 'blur']) window.addEventListener(type, event => {
-      window.__tusMovementKeys.push({ type, target: event.target?.tagName, focused: document.hasFocus(), at: Math.round(performance.now()) });
-    }, true);
-    const tracked = new WeakSet(), nativeHas = Set.prototype.has, nativeAdd = Set.prototype.add, nativeDelete = Set.prototype.delete, nativeClear = Set.prototype.clear;
-    let dHeld = false;
-    const setEvents = [];
-    Set.prototype.add = function(value) { if (value === 'd') { tracked.add(this); dHeld = true; setEvents.push({ type: 'add', at: Math.round(performance.now()) }); } return nativeAdd.call(this, value); };
-    Set.prototype.delete = function(value) { if (value === 'd' && tracked.has(this)) { dHeld = false; setEvents.push({ type: 'delete', at: Math.round(performance.now()) }); } return nativeDelete.call(this, value); };
-    Set.prototype.clear = function() { if (tracked.has(this) && nativeHas.call(this, 'd')) { dHeld = false; setEvents.push({ type: 'clear', at: Math.round(performance.now()) }); } return nativeClear.call(this); };
-    window.__tusMovementKeyProbe = () => ({ dHeld, events: [...setEvents] });
-  });
   await focus(alice);
   await alice.page.keyboard.down('d');
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 14.68, 'Alice to reach the solid face');
@@ -158,19 +141,12 @@ await withSmokeCleanup(async () => {
     const player = snapshot.players.find(item => item.id === 'alice');
     return player?.position.y > 0 && player.velocityY > 0;
   }, 'the server to accept the jump while Alice is ascending');
-  const jumpTimeline = [];
-  for (let i = 0; i < 12; i++) {
-    await alice.page.waitForTimeout(100);
-    const snapshot = await state(), player = snapshot.players.find(item => item.id === 'alice');
-    jumpTimeline.push({ server: player && { position: player.position, velocityY: player.velocityY }, client: await alice.page.locator('#coordinates').textContent(), focus: await alice.page.evaluate(() => ({ focused: document.hasFocus(), visibility: document.visibilityState, active: document.activeElement?.tagName })) });
-    if (player?.position.x > 14.68 && player.position.y > 0) break;
-  }
-  console.log('Movement probe ' + JSON.stringify({ keys: await alice.page.evaluate(() => window.__tusMovementKeys), keySet: await alice.page.evaluate(() => window.__tusMovementKeyProbe()), timeline: jumpTimeline }));
   await alice.page.keyboard.up('Space');
-  await waitForState(snapshot => {
-    const player = snapshot.players.find(item => item.id === 'alice');
-    return player?.position.x >= 15 && player.position.x < 18.3 && player.position.y > 0;
-  }, 'Alice to move above the supported top footprint');
+  await alice.page.waitForFunction(() => {
+    const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
+    const x = Number(xPart?.slice(2)), y = Number(yPart?.slice(2));
+    return x >= 15 && x <= 16.2 && y > 0;
+  }, undefined, { polling: 'raf', timeout: 5000 });
   await alice.page.keyboard.up('d');
   const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
