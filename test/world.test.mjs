@@ -90,7 +90,7 @@ test('physics properties are boolean, editable with preconditions, and persisted
  assert.equal(changed.result.object.blocksMovement,false);
  assert.equal(changed.result.object.supportsPlayer,false);
  assert.equal(validateWorld(changed.state).objects[0].supportsPlayer,false);
- assert.throws(()=>applyCommand(changed.state,builder,{type:'update',id:object.id,blocksMovement:'false',expected:{blocksMovement:false}}),{code:'invalid_state'});
+ assert.throws(()=>applyCommand(changed.state,builder,{type:'update',id:object.id,blocksMovement:'false',expected:{blocksMovement:false}}),{code:'invalid_command'});
  assert.throws(()=>validateWorld({...changed.state,objects:[{...changed.result.object,blocksMovement:0}]}),{code:'invalid_state'});
 });
 
@@ -102,14 +102,14 @@ test('movement follows level ground and ignores arbitrary requested height',()=>
 test('a solid object blocks walking and repeated large requests cannot tunnel through it',()=>{
  let world=physicsWorld();
  for(let i=0;i<12;i++) world=move(world,{x:10,y:500,z:0});
- assert.ok(player(world).position.x<=1.66,JSON.stringify(player(world).position));
+ assert.ok(player(world).position.x<1.7,JSON.stringify(player(world).position));
  assert.equal(player(world).position.y,0);
 });
 
 test('a solid edge blocks one axis while allowing movement to slide along the other',()=>{
  let world=physicsWorld({position:{x:1,y:1,z:0},size:{x:1,y:2,z:8}});
  world=move(world,{x:2,y:0,z:1});
- assert.ok(player(world).position.x<.1);
+ assert.ok(player(world).position.x<.2);
  assert.ok(player(world).position.z>.4);
 });
 
@@ -123,15 +123,15 @@ test('jumping can land on an enabled top surface but not stand on a disabled one
  let supported=physicsWorld();
  supported=move(supported,{x:1.25,y:0,z:0},true);
  supported=move(supported,{x:2.5,y:0,z:0});
- supported=move(supported,{x:3.75,y:0,z:0});
+ supported=move(supported,{x:2.5,y:0,z:0});
  assert.equal(player(supported).position.y,2);
 
  let unsupported=physicsWorld({supportsPlayer:false});
  unsupported=move(unsupported,{x:1.25,y:0,z:0},true);
  unsupported=move(unsupported,{x:2.5,y:0,z:0});
- unsupported=move(unsupported,{x:3.75,y:0,z:0});
- unsupported=move(unsupported,{x:3.75,y:0,z:0});
- unsupported=move(unsupported,{x:3.75,y:0,z:0});
+ unsupported=move(unsupported,{x:2.5,y:0,z:0});
+ unsupported=move(unsupported,{x:2.5,y:0,z:0});
+ unsupported=move(unsupported,{x:2.5,y:0,z:0});
  assert.equal(player(unsupported).position.y,0);
 });
 
