@@ -103,9 +103,12 @@ await withSmokeCleanup(async () => {
 
   await focus(alice);
   await alice.page.keyboard.down('d');
-  await alice.page.waitForTimeout(400);
-  await alice.page.keyboard.up('d');
-  const manualMove = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x > acceptedAgentPosition.players.find(player => player.id === 'alice').position.x, 'manual movement to continue from the agent position');
+  let manualMove;
+  try {
+    manualMove = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x > acceptedAgentPosition.players.find(player => player.id === 'alice').position.x, 'manual movement to continue from the agent position');
+  } finally {
+    await alice.page.keyboard.up('d');
+  }
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, manualMove.revision);
   const observedMove = (await state('bob')).players.find(player => player.id === 'alice');
   assert.ok(observedMove.position.x > 12, 'the second client sees Alice beyond the agent destination');
