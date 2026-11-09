@@ -125,12 +125,49 @@ export class CodexBridge extends EventEmitter {
       if (!result.thread?.id) throw new Error('Codex did not return a conversation ID.');
       if (active(result.thread)) throw new Error('Conversation became active; not taking over its turn.');
       this.threadId = result.thread.id;
+      const context = this.controlContext();
+      let history;
+      if (selected) {
+        try { history = await this.readThreadHistory(context); }
+        catch {
+          this.assertControlContext(context);
+          history = null;
+        }
+      }
+      this.assertControlContext(context);
       this.emit('event', { type: 'connected', threadId: this.threadId, workspacePath: this.workspacePath, resumed: Boolean(selected) });
+      if (selected) this.emit('event', { type: 'history', threadId: this.threadId, available: history !== null, messages: history ?? [] });
       return { threadId: this.threadId, workspacePath: this.workspacePath, resumed: Boolean(selected), thread: result.thread };
     } catch (error) {
       this.stop();
       throw error;
     } finally { this.starting = false; }
+  }
+
+  async readThreadHistory(context) {
+    const messages = [], seen = new Set();
+    let cursor = null;
+    do {
+      const page = await this.request('thread/items/list', {
+        threadId: context.threadId, limit: 100, sortDirection: 'asc', ...(cursor ? { cursor } : {}),
+      });
+      this.assertControlContext(context);
+      if (!Array.isArray(page.data)) throw new Error('Codex returned an invalid conversation history page.');
+      for (const row of page.data) {
+        const item = row?.item;
+        if (item?.type === 'userMessage' && Array.isArray(item.content)) {
+          const text = item.content.filter(part => part?.type === 'text' && typeof part.text === 'string').map(part => part.text).join('');
+          if (text.trim()) messages.push({ role: 'user', text });
+        } else if (item?.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim()) {
+          messages.push({ role: 'assistant', text: item.text });
+        }
+      }
+      cursor = page.nextCursor ?? null;
+      if (cursor !== null && typeof cursor !== 'string') throw new Error('Codex returned an invalid conversation history cursor.');
+      if (cursor && seen.has(cursor)) throw new Error('Codex returned a repeating history cursor.');
+      if (cursor) seen.add(cursor);
+    } while (cursor);
+    return messages;
   }
 
   async send(text, options = {}) {
