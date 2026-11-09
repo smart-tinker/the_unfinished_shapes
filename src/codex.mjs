@@ -178,10 +178,21 @@ export class CodexBridge extends EventEmitter {
   }
 
   async goalCapability(context) {
-    const result = await this.request('experimentalFeature/list', {});
-    this.assertControlContext(context);
-    const feature = Array.isArray(result.data) ? result.data.find(item => /goal/i.test(item.name ?? '')) : null;
-    return { feature: feature ?? null, supported: Boolean(feature?.enabled) };
+    try {
+      const result = await this.request('thread/goal/get', { threadId: context.threadId });
+      this.assertControlContext(context);
+      if (!result || !Object.hasOwn(result, 'goal') || (result.goal && result.goal.threadId !== context.threadId)) {
+        throw new Error('Codex returned an invalid Goal response.');
+      }
+      return { supported: true, reason: '', goal: result.goal };
+    } catch (error) {
+      this.assertControlContext(context);
+      if (error.code === -32601) return { supported: false, reason: 'Native Goals are not supported by this Codex runtime.', goal: null };
+      if (/ephemeral thread does not support goals|thread goals require a persisted thread/i.test(error.message)) {
+        return { supported: false, reason: 'This conversation cannot store native Goals.', goal: null };
+      }
+      return { supported: null, reason: 'Could not verify native Goal support.', goal: null };
+    }
   }
 
   async readControlState() {
@@ -192,10 +203,6 @@ export class CodexBridge extends EventEmitter {
       this.goalCapability(context),
     ]);
     this.assertControlContext(context);
-    const goalResult = capability.supported
-      ? await this.request('thread/goal/get', { threadId: context.threadId })
-      : null;
-    this.assertControlContext(context);
     if (!threadResult.thread || threadResult.thread.id !== context.threadId) throw new Error('Codex returned a different conversation.');
     if (!Array.isArray(modelsResult.data)) throw new Error('Codex returned an invalid model catalog.');
     return {
@@ -205,8 +212,8 @@ export class CodexBridge extends EventEmitter {
       thread: threadResult.thread,
       models: modelsResult.data,
       goalSupported: capability.supported,
-      goalFeature: capability.feature,
-      goal: goalResult?.goal ?? null,
+      goalReason: capability.reason,
+      goal: capability.goal,
       turnId: this.turnId,
     };
   }
@@ -217,10 +224,9 @@ export class CodexBridge extends EventEmitter {
     this.goalOperation = true;
     try {
       const capability = await this.goalCapability(context);
-      if (!capability.supported) throw new Error('Native Goals are not supported by this Codex runtime.');
-      const result = await this.request('thread/goal/get', { threadId: context.threadId });
       this.assertControlContext(context);
-      return await action(context, result.goal ?? null);
+      if (capability.supported !== true) throw new Error(capability.reason);
+      return await action(context, capability.goal);
     } finally { this.goalOperation = false; }
   }
 
@@ -325,7 +331,11 @@ export class CodexBridge extends EventEmitter {
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pending.delete(message.id);
-    if (message.error) pending.reject(new Error(`Codex request failed (${message.error.code ?? 'unknown'}): ${message.error.message ?? 'Unknown error'}`));
+    if (message.error) {
+      const error = new Error(`Codex request failed (${message.error.code ?? 'unknown'}): ${message.error.message ?? 'Unknown error'}`);
+      error.code = message.error.code;
+      pending.reject(error);
+    }
     else if ('result' in message) pending.resolve(message.result);
     else pending.reject(new Error('Codex response has no result.'));
   }
