@@ -146,6 +146,8 @@ async function syncPosition() {
       latestStateRevision = result.revision;
       if (movementVersion === localMovementVersion) playerPosition = position;
       lastPosition = key;
+    } else if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && movementVersion === localMovementVersion) {
+      lastPosition = positionKey(playerPosition);
     }
   } catch { /* The status poll reports connectivity failures. */ } finally { moveRunning = false; }
 }
