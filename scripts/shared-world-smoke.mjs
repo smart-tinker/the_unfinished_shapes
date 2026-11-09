@@ -115,7 +115,7 @@ await withSmokeCleanup(async () => {
   const blocked = await worldCommand('alice', { type: 'move', position: { x: 30, y: 999, z: 0 } });
   assert.ok(blocked.position.x < 14.7, 'the server stops Alice at the solid side');
   assert.equal(blocked.position.y, 0, 'client coordinates cannot grant unsupported height');
-  await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= blocked.revision, blocked.revision);
+  await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, blocked.revision);
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('X 14.7'));
   await alice.page.keyboard.down('a');
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < 14.5, 'Alice to walk back from the solid side');
@@ -127,7 +127,7 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('d');
   await alice.page.keyboard.up('Space');
   const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
-  await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= landed.revision, landed.revision);
+  await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
   assert.ok((await alice.page.locator('#coordinates').textContent()).includes('Y 2.0'), 'the local HUD displays the accepted height');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, builtState.revision);
