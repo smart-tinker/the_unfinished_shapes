@@ -28,7 +28,7 @@ app.whenReady().then(async()=>{
   await new Promise((resolve,reject)=>localServer.once('error',reject).listen(0,'127.0.0.1',resolve));
   const localUrl = `http://127.0.0.1:${localServer.address().port}`;
   handle('settings:load', async()=>{const current=await settings();return {...current,serverUrl:current.serverUrl||localUrl,token:current.serverUrl?'':localToken};});
-  handle('settings:save', async(s)=>{ const clean={workspacePath:String(s.workspacePath||''),codexPath:String(s.codexPath||''),serverUrl:serverUrl(s.serverUrl||localUrl) === localUrl ? '' : serverUrl(s.serverUrl),threadId:String(s.threadId||'')}; await saveSettings(app.getPath('userData'),clean); });
+  handle('settings:save', async(s)=>{ const clean={...s,serverUrl:serverUrl(s.serverUrl||localUrl) === localUrl ? '' : serverUrl(s.serverUrl)}; await saveSettings(app.getPath('userData'),clean); });
   handle('codex:find',()=>findCodex());
   handle('path:choose',async(kind)=>{if(!['workspace','codex'].includes(kind)) throw new Error('Unsupported path choice');const result=await dialog.showOpenDialog(win,{title:kind==='workspace'?'Choose game repository':'Choose Codex executable',properties:[kind==='workspace'?'openDirectory':'openFile']});return result.canceled?null:result.filePaths[0];});
   handle('world:request', async({serverUrl:url,token,method='GET',path:route,body})=>{
