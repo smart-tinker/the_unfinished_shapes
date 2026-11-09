@@ -115,10 +115,11 @@ try {
  assert.equal(initialControls.goal,null,'a new game conversation must start without a Goal');
  const design={objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#3366cc'};
  const objective=`Build exactly one block matching this design: ${JSON.stringify(design)}. First call world_state once, then call world_build once with these exact arguments. After the server confirms the build, report briefly.`;
- const createdGoal=await bridge.createGoal({objective,completionCriteria:'Exactly one object matching the supplied design is persisted and visible to another player.'});
+ const completionCriteria='Exactly one object matching the supplied design is persisted and visible to another player.';
+ const createdGoal=await bridge.createGoal({objective,completionCriteria});
  assert.equal(createdGoal.threadId,initialControls.threadId);
  assert.equal(createdGoal.status,'active');
- assert.ok(createdGoal.objective.includes('The server has persisted exactly one object'));
+ assert.ok(createdGoal.objective.includes(`Completion criteria: ${completionCriteria}`));
  assert.equal((await bridge.readControlState()).goal.status,'active');
  await done;
  stage='turn_completed';
