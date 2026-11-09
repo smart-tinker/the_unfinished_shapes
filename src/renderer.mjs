@@ -309,7 +309,7 @@ async function saveSettings() {
         !['idle', 'active', 'systemError', 'unknown'].includes(state.threadStatus) ||
         (state.turnId !== null && typeof state.turnId !== 'string') ||
         !Number.isInteger(state.pendingApprovals) || state.pendingApprovals < 0 ||
-        !Object.hasOwn(state, 'goal') || state.threadStatus === 'unknown') {
+        typeof state.goalSupported !== 'boolean' || !Object.hasOwn(state, 'goal') || state.threadStatus === 'unknown') {
       throw new Error('Cannot verify the current Codex conversation; reconnect and check its state before changing connection settings.');
     }
     if (state.threadStatus !== 'idle' || state.turnId || state.pendingApprovals > 0 || state.goal) {

@@ -4,6 +4,7 @@ export function isSmokeAutoConfirmQuit(env = process.env, argv = process.argv) {
 
 export async function confirmQuitIfUnsafe(state, confirm) {
   const safe = state?.connected === true &&
+    typeof state.goalSupported === 'boolean' &&
     state.thread?.status?.type === 'idle' &&
     state.turnId === null &&
     state.pendingApprovals === 0 &&
