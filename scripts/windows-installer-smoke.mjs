@@ -8,6 +8,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 
+import { manualEditing } from './ui-acceptance.mjs';
+
 // This test intentionally touches the real per-user app directory only on a disposable runner.
 if (process.platform !== 'win32' || process.env.CI !== 'true' || process.env.RUNNER_OS !== 'Windows') {
   throw new Error('Run installer smoke only on a disposable Windows GitHub Actions runner.');
@@ -90,6 +92,8 @@ await withSmokeCleanup(async () => {
   assert.equal(cleanSettings.threadId || '', '');
   const cleanWorld = await page.evaluate(async () => { const s = await window.tus.loadSettings(); return window.tus.request({ ...s, path: '/state' }); });
   assert.equal(cleanWorld.objects.length, 0);
+  graphics.phase('manual UI create, select, edit and remove');
+  await manualEditing(page);
   graphics.phase('create current-candidate fixture');
   // Build the persistence fixture through this candidate, with no earlier release or player data.
   await page.evaluate(async fixture => {

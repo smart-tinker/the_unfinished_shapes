@@ -90,12 +90,24 @@ async function lookup(context, endpoint, request) {
   return response.data;
 }
 
+// The tag endpoint returns published releases only; drafts are listed for writers.
+export async function findRelease(context, request = ghRequest()) {
+  for (let page = 1; ; page++) {
+    const releases = await lookup(context, `releases?per_page=100&page=${page}`, request);
+    assert.ok(Array.isArray(releases), 'invalid releases response');
+    const release = releases.find(item => item.tag_name === context.tag);
+    if (release) return release;
+    if (releases.length < 100) return null;
+  }
+}
 export async function requireNewRelease(context, request = ghRequest()) {
-  const response = await request(`repos/${context.repository}/releases/tags/${encodeURIComponent(context.tag)}`);
-  assert.equal(response.status, 404, `Refusing to reuse an existing release or an uncertain lookup (HTTP ${response.status}). Choose a new candidate version; never overwrite assets.`);
+  assert.equal(await findRelease(context, request), null,
+    'Refusing to reuse an existing release. Choose a new candidate version; never overwrite assets.');
 }
 
 export function requireDraft(release, context, releaseId) {
+  assert.ok(release, 'release draft not found');
+  assert.ok(Number.isSafeInteger(release.id) && release.id > 0, 'invalid release ID');
   if (releaseId) assert.equal(String(release.id), releaseId, 'draft ID changed');
   assert.equal(release.draft, true, 'release must still be a draft');
   assert.equal(release.prerelease, true, 'only prereleases are supported');
@@ -130,6 +142,17 @@ async function output(name, value) {
   if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
 }
 
+export async function createDraft(context, run = gh) {
+  const response = await run(['api', '--method', 'POST', `repos/${context.repository}/releases`,
+    '-f', `tag_name=${context.tag}`, '-f', `target_commitish=${context.sourceSha}`,
+    '-f', `name=The Unfinished Shapes ${context.version}`, '-F', 'draft=true', '-F', 'prerelease=true', '-f',
+    `body=Source: ${context.sourceSha}\nCandidate run: https://github.com/${context.repository}/actions/runs/${context.runId}/attempts/${context.runAttempt}\n\nWindows x64 is unsigned. macOS supports Apple Silicon arm64 only, with an ad-hoc signature and no notarization. Linux and Windows CI use explicit SwiftShader with the existing runner-only no-sandbox setting; normal application startup is unchanged. Default Linux automatic graphics and Windows D3D11-WARP context loss remain unresolved. Hardware-GPU and interactive desktop acceptance were not performed. See docs/GRAPHICS.md and README at this source commit for scope and limitations.`]);
+  const release = JSON.parse(response.stdout);
+  requireDraft(release, context);
+  assert.equal(release.assets.length, 0, 'new draft must be empty');
+  return release;
+}
+
 async function main() {
   assert.equal(process.env.GITHUB_EVENT_NAME, 'workflow_dispatch', 'release operations require an explicit manual dispatch');
   const context = candidateContext(JSON.parse(await readFile('package.json', 'utf8')).version, process.env);
@@ -149,12 +172,7 @@ async function main() {
     assert.ok(!platformOrRun);
     await requireNewRelease(context, request);
     if (command === 'create-draft') {
-      await gh(['release', 'create', context.tag, '--repo', context.repository, '--verify-tag', '--target', context.sourceSha,
-        '--title', `The Unfinished Shapes ${context.version}`, '--draft', '--prerelease', '--notes',
-        `Source: ${context.sourceSha}\nCandidate run: https://github.com/${context.repository}/actions/runs/${context.runId}/attempts/${context.runAttempt}\n\nWindows x64 is unsigned. macOS supports Apple Silicon arm64 only, with an ad-hoc signature and no notarization. Linux and Windows CI use explicit SwiftShader with the existing runner-only no-sandbox setting; normal application startup is unchanged. Default Linux automatic graphics and Windows D3D11-WARP context loss remain unresolved. Hardware-GPU and interactive desktop acceptance were not performed. See docs/GRAPHICS.md and README at this source commit for scope and limitations.`]);
-      const release = await lookup(context, `releases/tags/${encodeURIComponent(context.tag)}`, request);
-      requireDraft(release, context);
-      assert.equal(release.assets.length, 0, 'new draft must be empty');
+      const release = await createDraft(context);
       await output('release_id', release.id);
       await output('run_attempt', context.runAttempt);
     }
@@ -181,7 +199,7 @@ async function main() {
   assert.ok(!directory && !releaseId);
   const runId = platformOrRun;
   assert.match(runId || '', /^[1-9]\d*$/);
-  const release = await lookup(context, `releases/tags/${encodeURIComponent(context.tag)}`, request);
+  const release = await findRelease(context, request);
   requireDraft(release, context);
   const names = platforms.flatMap(platform => [...assetNames(context.version, platform), manifestName(platform)]);
   assert.deepEqual(release.assets.map(asset => asset.name).sort(), names.sort(), 'draft must contain exactly this complete candidate');

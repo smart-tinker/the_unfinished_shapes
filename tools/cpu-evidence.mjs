@@ -23,7 +23,7 @@ export function createCpuEvidence() {
   }
   function result() {
     const positive=allocations.filter(a=>a.mib>0);
-    const cpuOnly=positive.length>0 && positive.every(a=>a.backend==='CPU'||a.backend==='CPU_Mapped'||a.backend==='CPU_REPACK') && !gpuOffloads.some(g=>g.layers>0);
+    const cpuOnly=positive.length>0 && positive.every(a=>a.backend==='CPU'||a.backend==='CPU_Mapped'||a.backend==='CPU_REPACK'||a.backend==='AMX') && !gpuOffloads.some(g=>g.layers>0);
     return {cpuOnly,allocations:[...allocations],gpuOffloads:[...gpuOffloads]};
   }
   return {stream,result};

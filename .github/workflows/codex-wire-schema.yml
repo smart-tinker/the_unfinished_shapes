@@ -1,11 +1,6 @@
 name: Observe Codex emitted tool schema
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'tools/inspect-codex-wire-schema.mjs'
-      - 'src/codex.mjs'
-      - '.github/workflows/codex-wire-schema.yml'
 permissions:
   contents: read
 jobs:

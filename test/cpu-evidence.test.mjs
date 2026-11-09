@@ -50,3 +50,17 @@ test('official CPU_REPACK allocations are CPU evidence, unknown CPU-prefixed nam
  log.write('load_tensors: CUDA0 model buffer size = 1.00 MiB\n');
  assert.equal(evidence.result().cpuOnly,false);
 });
+
+test('official AMX allocations on the CPU runner qualify without accepting GPU or unknown backends',()=>{
+ const evidence=createCpuEvidence();const log=evidence.stream();
+ log.write('0.00.342.738 I load_tensors: offloaded 0/29 layers to GPU\n');
+ log.write('0.00.342.743 I load_tensors:          AMX model buffer size =  1140.74 MiB\n');
+ log.write('0.00.342.744 I load_tensors:   CPU_Mapped model buffer size =   166.93 MiB\n');
+ assert.equal(evidence.result().cpuOnly,true);
+ for(const backend of ['AMX_CUDA','GPU_AMX','CUDA0','Vulkan0']) {
+  const mixed=createCpuEvidence();mixed.stream().write(`load_tensors: AMX model buffer size = 1.00 MiB\nload_tensors: ${backend} model buffer size = 1.00 MiB\n`);
+  assert.equal(mixed.result().cpuOnly,false);
+ }
+ log.write('load_tensors: offloaded 1/29 layers to GPU\n');
+ assert.equal(evidence.result().cpuOnly,false);
+});

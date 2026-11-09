@@ -1,22 +1,5 @@
 name: Real local CPU model acceptance
 on:
-  pull_request:
-    paths:
-      - 'tools/local-model-e2e.mjs'
-      - 'tools/build-acceptance.mjs'
-      - 'test/build-acceptance.test.mjs'
-      - 'tools/cpu-evidence.mjs'
-      - 'tools/model-diagnostics.mjs'
-      - 'test/model-diagnostics.test.mjs'
-      - 'test/cpu-evidence.test.mjs'
-      - 'src/codex.mjs'
-      - 'src/game-tools.mjs'
-      - 'src/world.mjs'
-      - 'src/server.mjs'
-      - '.github/workflows/local-cpu-model.yml'
-  push:
-    branches: ['release/**']
-  workflow_dispatch:
   workflow_call:
 permissions:
   contents: read
@@ -42,13 +25,13 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/tus-cpu"
           cd "$RUNNER_TEMP/tus-cpu"
-          curl --fail --location --connect-timeout 20 --max-time 120 --max-filesize 125000000 \
+          curl --fail --location --retry 3 --retry-delay 5 --retry-max-time 90 --connect-timeout 20 --max-time 120 --max-filesize 125000000 \
             https://github.com/openai/codex/releases/download/rust-v0.167.0/codex-x86_64-unknown-linux-musl.tar.gz -o codex.tar.gz
           echo '9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a  codex.tar.gz' | sha256sum --check --strict
-          curl --fail --location --connect-timeout 20 --max-time 120 --max-filesize 25000000 \
+          curl --fail --location --retry 3 --retry-delay 5 --retry-max-time 90 --connect-timeout 20 --max-time 120 --max-filesize 25000000 \
             https://github.com/ggml-org/llama.cpp/releases/download/b12189/llama-b12189-bin-ubuntu-x64.tar.gz -o llama.tar.gz
           echo 'c446a7ba4df3c3b1cc880a734fbff586d6d34b9cebc09e151754813b94ded8c9  llama.tar.gz' | sha256sum --check --strict
-          curl --fail --location --connect-timeout 20 --max-time 180 --max-filesize 1600000000 \
+          curl --fail --location --retry 3 --retry-delay 5 --retry-max-time 90 --connect-timeout 20 --max-time 180 --max-filesize 1600000000 \
             https://registry.ollama.ai/v2/library/qwen3/blobs/sha256:3d0b790534fe4b79525fc3692950408dca41171676ed7e21db57af5c65ef6ab6 -o qwen3-1.7b.gguf
           echo '3d0b790534fe4b79525fc3692950408dca41171676ed7e21db57af5c65ef6ab6  qwen3-1.7b.gguf' | sha256sum --check --strict
           tar -xf codex.tar.gz

@@ -7,10 +7,10 @@ for (const ending of ['LF', 'CRLF']) {
   const normalized = name => read(name).replace(/\r\n/g, '\n').replace(/\n/g, ending === 'CRLF' ? '\r\n' : '\n').replace(/\r\n/g, '\n');
   const ci = normalized('ci'), stage = normalized('stage-release'), publish = normalized('publish-release');
   test(`${ending}: ordinary CI has no publication route or write permission`, () => {
-    assert.match(ci, /branches: \[main, 'release\/\*\*'\]/);
+    assert.doesNotMatch(ci, /^  push:/m, 'PR and push must not duplicate acceptance');
     assert.match(ci, /permissions:\n  contents: read/);
     assert.doesNotMatch(ci, /contents: write|publish_rc|publish\/|gh release|release-windows:/);
-    for (const job of ['test', 'macos-native', 'windows-installer']) assert.ok(ci.includes(`  ${job}:\n`));
+    for (const job of ['test', 'linux-client', 'macos-native', 'windows-installer', 'model']) assert.ok(ci.includes(`  ${job}:\n`));
   });
   test(`${ending}: stage and publish are explicit, matching-release-branch dispatches only`, () => {
     for (const workflow of [stage, publish]) {
@@ -27,8 +27,8 @@ for (const ending of ['LF', 'CRLF']) {
     }
   });
   test(`${ending}: staging tests final archives, same installer and current CPU candidate before upload`, () => {
-    assert.match(stage, /model:\n    needs: preflight[\s\S]*?uses: \.\/\.github\/workflows\/local-cpu-model.yml/);
-    assert.match(stage, /create-draft:\n    needs: \[preflight, model\]/);
+    assert.match(stage, /model:\n    needs: create-draft[\s\S]*?uses: \.\/\.github\/workflows\/local-cpu-model.yml/);
+    assert.match(stage, /create-draft:\n    needs: preflight/);
     assert.match(normalized('local-cpu-model'), /  workflow_call:/);
     for (const platform of ['windows', 'macos', 'linux']) {
       const section = stage.split(`  ${platform}:\n`)[1].split(/^  [a-z-]+:\n/m)[0];

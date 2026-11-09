@@ -5,6 +5,7 @@ import os from 'node:os';
 import {observeGraphics,closeSmokeApp,withSmokeCleanup} from './graphics-smoke.mjs';
 import path from 'node:path';
 import {createGpuDiagnostics} from './gpu-smoke.mjs';
+import {manualEditing} from './ui-acceptance.mjs';
 const dir=await mkdtemp(path.join(os.tmpdir(),'tus-desktop-'));
 const fakeBin=path.join(dir,'bin'),fakeCodex=path.join(fakeBin,'codex'),marker=path.join(dir,'unexpected-codex-run');
 await mkdir(fakeBin);await writeFile(fakeCodex,`#!/bin/sh\ntouch '${marker}'\nexit 99\n`,{mode:0o755});
@@ -33,6 +34,8 @@ await withSmokeCleanup(async()=>{
  graphics.phase('world connection');
  await page.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
  await graphics.assertHealthy();
+ graphics.phase('manual UI create, select, edit and remove');
+ await manualEditing(page);
  graphics.phase('construction');
  await page.locator('[data-kind="bridge"]').click(); await page.locator('#build-x').fill('3');
  await page.locator('#build-form button').click();
@@ -68,4 +71,4 @@ await withSmokeCleanup(async()=>{
  await assert.rejects(access(marker),'restart must not execute a discovered candidate');
  await close();
 },()=>close('final cleanup'),()=>rm(dir,{recursive:true,force:true}));
-console.log(`${packagedExecutable?'Packaged':'Source'} ${process.platform}/${process.arch} Electron smoke`);console.log('Electron smoke passed: WebGL startup, UI construction, settings repeated/cancel, safe Codex discovery/selection, persisted settings/thread ID/world after restart, authenticated API removal, no unsolicited model call. Canvas selection and graphical removal were not tested.');
+console.log(`${packagedExecutable?'Packaged':'Source'} ${process.platform}/${process.arch} Electron smoke`);console.log('Electron smoke passed: WebGL startup, UI construction, settings repeated/cancel, safe Codex discovery/selection, persisted settings/thread ID/world after restart, authenticated API removal, no unsolicited model call. Real canvas selection, UI editing and graphical removal passed before restart.');
