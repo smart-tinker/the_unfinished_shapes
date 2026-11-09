@@ -47,6 +47,7 @@ test('connect initializes, starts workspace without invoking a model, and whitel
   assert.equal(events.at(-1).type,'connected');
   const params=f.requests.find(x=>x.method==='thread/start').params;
   assert.equal(params.sandbox,'workspace-write'); assert.equal(params.approvalPolicy,'on-request');
+  assert.match(params.developerInstructions,/call world_state before changing the world/);
   f.bridge.stop(); assert.equal(f.child.killed,true);
 });
 
@@ -67,7 +68,9 @@ test('saved ID is stable and wrong workspace/active threads fail without fallbac
     assert.equal(f.child.killed,true);
   }
   const f=fixture(); assert.equal((await f.start({threadId:'saved'})).threadId,'saved');
-  assert.equal(f.requests.some(x=>x.method==='thread/list'),false); f.bridge.stop();
+  assert.equal(f.requests.some(x=>x.method==='thread/list'),false);
+  assert.match(f.requests.find(x=>x.method==='thread/resume').params.developerInstructions,/call world_state before changing the world/);
+  f.bridge.stop();
 });
 
 test('explicit send, duplicate send protection, interrupt, completion',async()=>{
