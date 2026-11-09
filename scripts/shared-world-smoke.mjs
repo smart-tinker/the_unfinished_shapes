@@ -132,8 +132,15 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.down('d');
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 14.68, 'Alice to reach the solid face');
   await alice.page.keyboard.down('Space');
+  const jumpTimeline = [];
+  for (let i = 0; i < 12; i++) {
+    await alice.page.waitForTimeout(100);
+    const snapshot = await state(), player = snapshot.players.find(item => item.id === 'alice');
+    jumpTimeline.push({ server: player && { position: player.position, velocityY: player.velocityY }, client: await alice.page.locator('#coordinates').textContent() });
+    if (player?.position.x > 14.68 && player.position.y > 0) break;
+  }
+  console.log('Movement probe ' + JSON.stringify({ keys: await alice.page.evaluate(() => window.__tusMovementKeys), timeline: jumpTimeline }));
   await alice.page.keyboard.up('Space');
-  console.log('Movement key input ' + JSON.stringify(await alice.page.evaluate(() => window.__tusMovementKeys)));
   await waitForState(snapshot => {
     const player = snapshot.players.find(item => item.id === 'alice');
     return player?.position.x > 14.68 && player.position.y > 0;
