@@ -113,7 +113,7 @@ try {
  const createdGoal=await bridge.createGoal({objective:'Build a shared bridge',completionCriteria:'Two players can cross it.'});
  assert.equal(createdGoal.threadId,initialControls.threadId);
  assert.equal(createdGoal.status,'active');
- assert.match(createdGoal.objective,/Two players can cross it\\./);
+ assert.ok(createdGoal.objective.includes('Two players can cross it.'));
  assert.equal((await bridge.readControlState()).goal.status,'active');
  await bridge.pauseGoal();
  assert.equal((await bridge.readControlState()).goal.status,'paused');
