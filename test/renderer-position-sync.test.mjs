@@ -116,3 +116,31 @@ test('the latest server-accepted move wins when an earlier manual request replie
   await pending;
   assert.equal(h.run('playerPosition.x'), 2);
 });
+
+test('a second client renders the latest server position of the moved player', () => {
+  const h = syncHarness();
+  h.context.scene = { add() {}, remove() {} };
+  h.context.avatar = () => ({ position: { x: 0, y: 0, z: 0, set(x, y, z) { Object.assign(this, { x, y, z }); } } });
+  h.context.observer = {
+    revision: 3,
+    objects: [],
+    players: [
+      { id: 'bob', position: { x: 0, y: 1, z: 0 } },
+      { id: 'alice', position: { x: 12, y: 1, z: 0 } },
+    ],
+    me: { id: 'bob', role: 'builder' },
+  };
+  h.run('renderWorld(observer)');
+  assert.equal(h.context.otherPlayers.get('alice').position.x, 12);
+
+  h.context.observer = {
+    ...h.context.observer,
+    revision: 4,
+    players: [
+      { id: 'bob', position: { x: 0, y: 1, z: 0 } },
+      { id: 'alice', position: { x: 13, y: 1, z: 0 } },
+    ],
+  };
+  h.run('renderWorld(observer)');
+  assert.equal(h.context.otherPlayers.get('alice').position.x, 13);
+});
