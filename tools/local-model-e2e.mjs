@@ -39,7 +39,7 @@ const cpuEvidence=createCpuEvidence();
 const diagnostics=createModelDiagnostics();
 let proxy,stage='initializing';
 const events=[];const started=Date.now();let failure;
-let assistantText='',turnStatus='not_started',goalAcceptance=null;
+let assistantText='',turnStatus='not_started',goalAcceptance=null,goalUpdates=[],goalCleared=false;
 try {
  modelProcess=spawn(llamaPath,['--model',modelPath,'--alias',model,'--host','127.0.0.1','--port','11445','--n-gpu-layers','0','--ctx-size','16384','--threads','4','--parallel','1','--jinja','--reasoning-budget','0','--temp','0','--seed','42','--log-verbosity','4','--log-colors','off'],{stdio:['ignore','pipe','pipe']});
  let modelExit;
@@ -95,41 +95,38 @@ try {
   } else if(event.type==='approval') {
    rejectDone(new Error(`Live model requested unexpected approval: ${event.method}`));
   } else if(event.type==='disconnected') rejectDone(new Error(event.message));
+  else if(event.type==='notification' && event.method==='thread/goal/updated') goalUpdates.push({threadId:event.params?.threadId,status:event.params?.goal?.status});
+  else if(event.type==='notification' && event.method==='thread/goal/cleared') goalCleared=true;
   else if(event.type==='notification' && event.method==='turn/started') {turnStatus=event.params?.turn?.status ?? 'inProgress';stage='turn_started';}
   else if(event.type==='notification' && event.method==='item/completed' && event.params?.item?.type==='agentMessage') {
    // Only synthetic test assistant output, never reasoning or arbitrary tool output.
    assistantText=String(event.params.item.text ?? '').replaceAll(token,'[redacted]').slice(0,4000);
   } else if(event.type==='notification' && event.method==='turn/completed') {
-   turnStatus=event.params?.turn?.status ?? 'unknown';
-   if(event.params?.turn?.status==='failed') rejectDone(new Error(`Model turn failed: ${JSON.stringify(event.params.turn.error)}`));else resolveDone();
-  }
- });
- stage='connecting_codex';
- await bridge.start({codexPath,workspacePath:workspace,newGameThread:true});
- stage='native_goal_lifecycle';
+   turnStatus=event.para stage='native_goal_lifecycle';
  const initialControls=await bridge.readControlState();
  assert.equal(initialControls.goalSupported,true,'the pinned Codex app-server must expose native Goals');
  assert.equal(initialControls.goal,null,'a new game conversation must start without a Goal');
- const createdGoal=await bridge.createGoal({objective:'Build a shared bridge',completionCriteria:'Two players can cross it.'});
+ const design={objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#3366cc'};
+ const objective=`Inspect the shared world, then build exactly one block using world_build with these exact JSON arguments: ${JSON.stringify(design)}. Do not call shell tools or change the design.`;
+ timer=setTimeout(()=>rejectDone(new Error('Local model E2E exceeded its time budget.')),timeoutMs);
+ const createdGoal=await bridge.createGoal({objective,completionCriteria:'The server has persisted exactly one block matching the supplied design; report the result.'});
  assert.equal(createdGoal.threadId,initialControls.threadId);
  assert.equal(createdGoal.status,'active');
- assert.ok(createdGoal.objective.includes('Two players can cross it.'));
+ assert.ok(createdGoal.objective.includes('The server has persisted exactly one block'));
  assert.equal((await bridge.readControlState()).goal.status,'active');
- await bridge.pauseGoal();
- assert.equal((await bridge.readControlState()).goal.status,'paused');
- await bridge.resumeGoal();
- assert.equal((await bridge.readControlState()).goal.status,'active');
- await bridge.clearGoal();
- assert.equal((await bridge.readControlState()).goal,null);
- assert.equal(turnStatus,'not_started','native Goal controls must not start a model turn');
- goalAcceptance={supported:true,lifecycle:['created','read','paused','resumed','cleared'],modelTurnStarted:false,runtime:initialControls.runtime};
- stage='codex_connected';
- timer=setTimeout(()=>rejectDone(new Error('Local model E2E exceeded its time budget.')),timeoutMs);
- const design={objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#3366cc'};
- await bridge.send(`First call world_state to inspect the shared world. Then build this supplied design in the game. Call world_build exactly once with these exact JSON arguments: ${JSON.stringify(design)}. Use world_build, not world_command; the latter moves players or edits existing objects. Do not call shell tools, write code, or change the design. After world_build succeeds, say done. /no_think`);
- stage='turn_request_accepted';
+ assert.equal(turnStatus,'inProgress','setting an active native Goal starts its native turn');
+ stage='goal_turn_started';
  await done;
  stage='turn_completed';
+ assert.equal(turnStatus,'completed');
+ assert.ok(goalUpdates.some(update=>update.threadId===initialControls.threadId&&update.status==='active'),'native Goal updates must be emitted for the active thread');
+ await bridge.pauseGoal();
+ assert.equal((await bridge.readControlState()).goal.status,'paused');
+ await bridge.clearGoal();
+ assert.equal((await bridge.readControlState()).goal,null);
+ assert.ok(goalUpdates.some(update=>update.status==='paused'),'pausing the Goal must emit its native status update');
+ assert.equal(goalCleared,true,'clearing the Goal must emit the native cleared notification');
+ goalAcceptance={supported:true,lifecycle:['created_active','native_turn_completed','paused','cleared'],modelTurnStarted:true,goalUpdates,runtime:initialControls.runtime};
  let savedWorld;
  try {savedWorld=await readFile(path.join(dir,'world.json'),'utf8');}
  catch(error){if(error.code!=='ENOENT')throw error;}
