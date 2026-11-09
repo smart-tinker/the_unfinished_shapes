@@ -38,7 +38,8 @@ await mkdir(settingsFixture.workspacePath, { recursive: true });
 let instance, graphics, gpu;
 async function launch(executablePath, label) {
   gpu = await createGpuDiagnostics(label);
-  instance = await electron.launch({ executablePath, args: ['--no-sandbox', ...gpu.args], env: { ...process.env, TUS_DATA_DIR: '' }, timeout: 45000 });
+  // Use an explicit software renderer on the GPU-less runner, as in Linux CI.
+  instance = await electron.launch({ executablePath, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', ...gpu.args], env: { ...process.env, TUS_DATA_DIR: '' }, timeout: 45000 });
   await gpu.attach(instance);
   const page = await instance.firstWindow();
   graphics = await observeGraphics(page, { label });
