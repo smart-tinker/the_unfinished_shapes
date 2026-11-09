@@ -24,6 +24,8 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: xvfb-run --auto-servernum node scripts/electron-smoke.mjs
+      - name: Two-client shared world acceptance
+        run: xvfb-run --auto-servernum node scripts/shared-world-smoke.mjs
       - run: npm run package:linux
       - name: Launch the packaged Linux application
         env:
