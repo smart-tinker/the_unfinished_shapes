@@ -81,6 +81,25 @@ test('gh adapter issues GET only with timeout and parses HTTP status instead of 
 });
 
 
+test('read-only GET retries a missing HTTP response once but not a valid HTTP error', async () => {
+  let calls = 0;
+  const request = ghRequest(async () => {
+    calls++;
+    if (calls === 1) throw { stdout: '', stderr: 'temporary transport failure' };
+    return { stdout: 'HTTP/2.0 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n{"ref":"refs/tags/test"}\\n' };
+  });
+  assert.equal((await request(refPath)).status, 200);
+  assert.equal(calls, 2);
+
+  calls = 0;
+  const denied = ghRequest(async () => {
+    calls++;
+    throw { stdout: 'HTTP/2.0 403 Forbidden\\r\\nContent-Type: application/json\\r\\n\\r\\n{"message":"Forbidden"}' };
+  });
+  assert.equal((await denied(refPath)).status, 403);
+  assert.equal(calls, 1);
+});
+
 test('tag creation is 404-only, create-only and always followed by exact-SHA verification', async () => {
   let count = 0; const writes = [];
   const opts = { repository, tag, expectedSha: commit, request: async () => ++count === 1 ? { status: 404, data: {} } : ref({ type: 'commit', sha: commit }) };
