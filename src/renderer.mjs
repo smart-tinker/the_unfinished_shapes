@@ -6,7 +6,7 @@ const bridge = window.tus;
 let settings = { serverUrl: 'http://127.0.0.1:4317', token: '' };
 let selectedKind = 'block', selectedId = null, worldRevision = -1, connected = false, busy = false;
 let settingsGeneration = 0;
-let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 1, z: 0 }, meId = null;
+let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 1, z: 0 }, meId = null, localMovementVersion = 0, latestStateRevision = -1;
 let scene, renderer, camera, controls, player, companion, selectionBox;
 let objectSnapshot = '';
 let inspectorBase = null, inspectorDirty = false, editing = false, role = 'viewer';
@@ -60,7 +60,7 @@ function initScene() {
     const dt = Math.min(clock.getDelta(), .05), typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName) || $('settings').open;
     if (!typing) {
       let x = Number(keys.has('d')) - Number(keys.has('a')), z = Number(keys.has('s')) - Number(keys.has('w'));
-      const length = Math.hypot(x, z); if (length) { x /= length; z /= length; playerPosition.x = Math.max(-99, Math.min(99, playerPosition.x + x * dt * 5)); playerPosition.z = Math.max(-99, Math.min(99, playerPosition.z + z * dt * 5)); }
+      const length = Math.hypot(x, z); if (length) { x /= length; z /= length; const nextX = Math.max(-99, Math.min(99, playerPosition.x + x * dt * 5)), nextZ = Math.max(-99, Math.min(99, playerPosition.z + z * dt * 5)); if (nextX !== playerPosition.x || nextZ !== playerPosition.z) { playerPosition.x = nextX; playerPosition.z = nextZ; localMovementVersion++; } }
     }
     player.position.set(playerPosition.x, 0, playerPosition.z);
     companion.position.lerp(new THREE.Vector3(playerPosition.x + 1.5, 1.7 + Math.sin(performance.now() / 700) * .12, playerPosition.z + 1.2), .05); companion.rotation.y += dt * .4;
@@ -107,8 +107,11 @@ function selectObject(id, fromPoll = false) {
   if (changed || !inspectorDirty || !object) fillInspector(object);
   else if (JSON.stringify(object) !== JSON.stringify(inspectorBase)) $('edit-message').textContent = 'This shape changed on the server. Your unapplied values are preserved; Reset reloads the current shape.';
 }
-function renderWorld(state) {
-  if (meId !== state.me.id) { const savedPlayer = state.players.find(p => p.id === state.me.id); if (savedPlayer) playerPosition = { ...savedPlayer.position }; }
+function renderWorld(state, movementVersion = localMovementVersion) {
+  if (state.revision < latestStateRevision) return;
+  latestStateRevision = state.revision;
+  const firstState = meId !== state.me.id, savedPlayer = state.players.find(p => p.id === state.me.id);
+  if (savedPlayer && movementVersion === localMovementVersion && !moveRunning && (firstState || positionKey(playerPosition) === lastPosition)) { playerPosition = { ...savedPlayer.position }; lastPosition = positionKey(savedPlayer.position); }
   meId = state.me.id; role = state.me.role; $('role').textContent = `Role: ${state.me.role}`; $('revision').textContent = `REV ${state.revision}`;
   const nextSnapshot = JSON.stringify(state.objects);
   if (objectSnapshot !== nextSnapshot) {
@@ -127,17 +130,26 @@ function renderWorld(state) {
 }
 async function poll() {
   if (pollRunning || !bridge) return; pollRunning = true;
-  const generation = settingsGeneration;
-  try { const state = await request('/state'); if (generation !== settingsGeneration) return; if (state.error) throw new Error(state.message || state.error); if (scene) renderWorld(state); $('connection').textContent = '● World connected'; $('connection').classList.remove('offline'); }
+  const generation = settingsGeneration, movementVersion = localMovementVersion;
+  try { const state = await request('/state'); if (generation !== settingsGeneration) return; if (state.error) throw new Error(state.message || state.error); if (scene) renderWorld(state, movementVersion); $('connection').textContent = '● World connected'; $('connection').classList.remove('offline'); }
   catch (error) { if (generation !== settingsGeneration) return; $('connection').textContent = '○ World offline'; $('connection').classList.add('offline'); feedback(error.message, true); }
   finally { pollRunning = false; }
 }
+function positionKey(position) { return `${position.x.toFixed(2)},${position.z.toFixed(2)}`; }
 let lastPosition = '';
 async function syncPosition() {
-  const key = `${playerPosition.x.toFixed(2)},${playerPosition.z.toFixed(2)}`;
+  const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration, movementVersion = localMovementVersion;
   if (moveRunning || key === lastPosition || !meId || !bridge) return; moveRunning = true;
-  try { const result = await request('/command', 'POST', { type: 'move', position: { ...playerPosition } }); if (!result.error) lastPosition = key; }
-  catch { /* The status poll reports connectivity failures. */ } finally { moveRunning = false; }
+  try {
+    const result = await request('/command', 'POST', { type: 'move', position });
+    if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && result.revision >= latestStateRevision) {
+      latestStateRevision = result.revision;
+      if (movementVersion === localMovementVersion) playerPosition = position;
+      lastPosition = key;
+    } else if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && movementVersion === localMovementVersion) {
+      lastPosition = positionKey(playerPosition);
+    }
+  } catch { /* The status poll reports connectivity failures. */ } finally { moveRunning = false; }
 }
 async function command(body) { const result = await request('/command', 'POST', body); if (result.error) throw new Error(result.message || result.error); await poll(); return result; }
 
@@ -193,17 +205,17 @@ async function saveSettings() {
   }
   settings = next; settingsGeneration++;
   const { token, ...persisted } = settings; await bridge.saveSettings(persisted);
-  worldRevision = -1; objectSnapshot = ''; meId = null; lastPosition = '';
+  worldRevision = -1; objectSnapshot = ''; meId = null; lastPosition = ''; latestStateRevision = -1; localMovementVersion++; moveStarts.clear();
   if (scene) { selectObject(null, true); objectData.clear(); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
   await poll();
 }
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('settings-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('settings-message').textContent = error.message; } });
 $('settings-form').addEventListener('submit', async event => { event.preventDefault(); $('connect').disabled = true; $('settings-message').textContent = 'Connecting to your Codex app-server…'; try { await saveSettings(); const result = await bridge.connectCodex({ ...settings, newGameThread: $('new-game-thread').checked }); settings.threadId = result.threadId; $('new-game-thread').checked = false; const { token, ...persisted } = settings; await bridge.saveSettings(persisted); connected = true; $('agent-status').textContent = 'Ready · responds only when asked'; updateChatControls(); $('settings').close(); addMessage(result.resumed ? 'Resumed your saved Codex conversation. It retains the tools registered when it was created. To use updated game commands, open Settings and explicitly select “Create a new game conversation”, then Connect. Your old conversation and its history are preserved. No request has been sent.' : 'Connected to your Codex workspace. No request has been sent.'); } catch (error) { $('settings-message').textContent = error.message; } finally { $('connect').disabled = false; } });
-const toolRows = new Map(), itemRows = new Map();
+const toolRows = new Map(), itemRows = new Map(), moveStarts = new Map();
 let stopRequested = false, acceptedThreadId = null, currentTurnId = null;
 const retiredTurns = new Set();
 function activityThread(threadId) {
-  if (threadId !== acceptedThreadId) { retiredTurns.clear(); currentTurnId = null; }
+  if (threadId !== acceptedThreadId) { retiredTurns.clear(); currentTurnId = null; moveStarts.clear(); }
   acceptedThreadId = threadId;
 }
 function activityRow(text, status = 'running') {
@@ -215,7 +227,7 @@ function startActivity() {
   if (currentTurnId) retiredTurns.add(currentTurnId);
   if (retiredTurns.size > 100) retiredTurns.delete(retiredTurns.values().next().value);
   currentTurnId = null;
-  stopRequested = false; toolRows.clear(); itemRows.clear(); $('agent-actions').replaceChildren(); $('agent-plan').replaceChildren(); $('agent-plan').hidden = true;
+  stopRequested = false; toolRows.clear(); itemRows.clear(); moveStarts.clear(); $('agent-actions').replaceChildren(); $('agent-plan').replaceChildren(); $('agent-plan').hidden = true;
   $('activity-state').textContent = 'Requested'; $('agent-intent').textContent = 'Waiting for Codex to report its next action.'; $('agent-stop-reason').textContent = 'Request submitted; no completion reported yet.';
 }
 function constructionLabel(design, verb = 'Build') {
@@ -224,11 +236,16 @@ function constructionLabel(design, verb = 'Build') {
   if (!position || !['x', 'y', 'z'].every(axis => typeof position[axis] === 'number' && Number.isFinite(position[axis]) && Math.abs(position[axis]) <= 1000)) return null;
   return `${verb} ${design.objectType || design.type} at (${position.x}, ${position.y}, ${position.z})`;
 }
+function toolArguments(event) {
+  let args = event.arguments;
+  if (typeof args === 'string') { try { args = JSON.parse(args); } catch { return null; } }
+  return args && typeof args === 'object' && !Array.isArray(args) ? args : null;
+}
 function toolLabel(event) {
   if (event.name === 'world_state') return 'Read world state';
   if (!['world_command', 'world_build'].includes(event.name)) return 'Requested tool';
-  let args = event.arguments;
-  if (typeof args === 'string') { try { args = JSON.parse(args); } catch { return event.name === 'world_build' ? 'Build shape (invalid design)' : 'World command'; } }
+  const args = toolArguments(event);
+  if (!args) return event.name === 'world_build' ? 'Build shape (invalid design)' : 'World command';
   if (event.name === 'world_build') return constructionLabel(args) || 'Build shape (invalid design)';
   const labels = { build: 'Build shape', update: 'Edit shape', remove: 'Remove shape', move: 'Move player' };
   return labels[args?.command?.type] || labels[args?.type] || 'World command';
@@ -239,12 +256,22 @@ function toolActivity(event) {
   if (event.turnId !== currentTurnId) return;
   const label = toolLabel(event), key = JSON.stringify([event.threadId, event.turnId, event.id]);
   if (event.type === 'tool-start') {
+    const command = toolArguments(event)?.command;
+    if (event.name === 'world_command' && command?.type === 'move') moveStarts.set(key, { position: command.position, version: localMovementVersion, generation: settingsGeneration });
     $('agent-intent').textContent = label + ' requested.'; $('activity-state').textContent = 'Working';
     if (!toolRows.has(key)) toolRows.set(key, activityRow(label + ' · running')); return;
   }
   const row = toolRows.get(key) || activityRow(label); toolRows.set(key, row);
   const success = event.result?.success === true;
   let response; try { const text = event.result?.contentItems?.find(item => item.type === 'inputText')?.text; if (typeof text === 'string' && text.length < 2000000) response = JSON.parse(text); } catch { /* Only structured evidence is summarized. */ }
+  if (event.name === 'world_command') {
+    const started = moveStarts.get(key); moveStarts.delete(key);
+    if (started && started.generation === settingsGeneration && success && Number.isSafeInteger(response?.revision) && response.revision >= latestStateRevision) {
+      latestStateRevision = response.revision;
+      const position = started.position;
+      if (started.version === localMovementVersion && position && ['x', 'y', 'z'].every(axis => Number.isFinite(position[axis]) && Math.abs(position[axis]) <= 1000)) { playerPosition = { x: position.x, y: position.y, z: position.z }; lastPosition = positionKey(playerPosition); }
+    }
+  }
   const revision = Number.isSafeInteger(response?.revision) && response.revision >= 0 ? ` · revision ${response.revision}` : '';
   if (event.name === 'world_build') {
     const created = response?.object;
