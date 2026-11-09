@@ -47,12 +47,14 @@ async function worldCommand(id, command) {
 }
 async function waitForState(predicate, description) {
   const deadline = Date.now() + 10000;
+  let last;
   while (Date.now() < deadline) {
     const snapshot = await state();
     if (predicate(snapshot)) return snapshot;
+    last = snapshot.players.map(({ id, position, velocityY }) => ({ id, position, velocityY }));
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error('Timed out waiting for ' + description);
+  throw new Error('Timed out waiting for ' + description + '; players=' + JSON.stringify(last));
 }
 async function connect(client) {
   const page = client.page;
