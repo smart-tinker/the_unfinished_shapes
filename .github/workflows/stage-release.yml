@@ -1,0 +1,175 @@
+name: Stage release candidate
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  # Shared with publication: never overlap candidate writes or cancel a live upload.
+  group: candidate-release-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  preflight:
+    if: github.event.repository.private == false && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.candidate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Require exact existing tag and a new release
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-candidate.mjs preflight
+  model:
+    needs: preflight
+    # Local reusable workflow checks out this caller's exact candidate commit.
+    uses: ./.github/workflows/local-cpu-model.yml
+    permissions:
+      contents: read
+  create-draft:
+    needs: [preflight, model]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.draft.outputs.release_id }}
+      run_attempt: ${{ steps.draft.outputs.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Create a new empty draft without creating or moving a tag
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-candidate.mjs create-draft
+  windows:
+    needs: [preflight, create-draft]
+    runs-on: windows-latest
+    timeout-minutes: 25
+    # This entire trusted job has write permission, including build and test steps.
+    permissions:
+      contents: write
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      VERSION: ${{ needs.preflight.outputs.version }}
+      CANDIDATE_RUN_ATTEMPT: ${{ needs.create-draft.outputs.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Reject stale draft from an earlier attempt
+        run: node scripts/release-candidate.mjs check-attempt
+      - run: npm ci
+      - run: npm run check
+      - run: npm run package:win
+      - run: npm run installer:win
+      - name: Freeze final installer and portable archive, then extract the archive
+        run: |
+          New-Item -ItemType Directory dist/candidate
+          Copy-Item "dist/installer/TheUnfinishedShapes-$env:VERSION-Setup-x64.exe" dist/candidate/
+          Compress-Archive -Path dist/TheUnfinishedShapes-win32-x64 -DestinationPath "dist/candidate/TheUnfinishedShapes-$env:VERSION-win32-x64.zip"
+          node scripts/release-candidate.mjs record windows dist/candidate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Expand-Archive -LiteralPath "dist/candidate/TheUnfinishedShapes-$env:VERSION-win32-x64.zip" -DestinationPath dist/extracted
+      - name: Test the exact installer and extracted portable archive
+        env:
+          TUS_SMOKE_INSTALLER: dist/candidate/TheUnfinishedShapes-${{ needs.preflight.outputs.version }}-Setup-x64.exe
+          TUS_SMOKE_PORTABLE_EXECUTABLE: dist/extracted/TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe
+        run: node scripts/windows-installer-smoke.mjs
+      - name: Verify unchanged files and stage without replacing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
+        run: node scripts/release-candidate.mjs stage windows dist/candidate $env:RELEASE_ID
+  macos:
+    needs: [preflight, create-draft]
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      CANDIDATE_RUN_ATTEMPT: ${{ needs.create-draft.outputs.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: arm64
+      - name: Require native Apple Silicon
+        run: test "$(uname -m)" = arm64
+      - name: Reject stale draft from an earlier attempt
+        run: node scripts/release-candidate.mjs check-attempt
+      - run: npm ci
+      - run: npm run check
+      - run: node scripts/package-macos.mjs
+      - name: Freeze and extract the final archive
+        run: |
+          mkdir -p dist/candidate dist/extracted
+          ditto -c -k --sequesterRsrc --keepParent dist/TheUnfinishedShapes-darwin-arm64/TheUnfinishedShapes.app "dist/candidate/TheUnfinishedShapes-${VERSION}-darwin-arm64.zip"
+          node scripts/release-candidate.mjs record macos dist/candidate
+          ditto -x -k "dist/candidate/TheUnfinishedShapes-${VERSION}-darwin-arm64.zip" dist/extracted
+      - name: Test the extracted native application
+        env:
+          TUS_SMOKE_EXECUTABLE: dist/extracted/TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes
+        run: |
+          test "$(lipo -archs "$TUS_SMOKE_EXECUTABLE")" = arm64
+          codesign --verify --deep --strict dist/extracted/TheUnfinishedShapes.app
+          node scripts/electron-smoke.mjs
+      - name: Verify unchanged files and stage without replacing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
+        run: node scripts/release-candidate.mjs stage macos dist/candidate "$RELEASE_ID"
+  linux:
+    needs: [preflight, create-draft]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      CANDIDATE_RUN_ATTEMPT: ${{ needs.create-draft.outputs.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Reject stale draft from an earlier attempt
+        run: node scripts/release-candidate.mjs check-attempt
+      - run: npm ci
+      - run: npm run check
+      - run: npm run package:linux
+      - name: Freeze and extract the final archive
+        run: |
+          mkdir -p dist/candidate dist/extracted
+          tar -czf "dist/candidate/TheUnfinishedShapes-${VERSION}-linux-x64.tar.gz" -C dist TheUnfinishedShapes-linux-x64
+          node scripts/release-candidate.mjs record linux dist/candidate
+          tar -xzf "dist/candidate/TheUnfinishedShapes-${VERSION}-linux-x64.tar.gz" -C dist/extracted
+      - name: Test the extracted application with the CI software renderer
+        env:
+          TUS_SMOKE_EXECUTABLE: dist/extracted/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes
+        run: xvfb-run --auto-servernum node scripts/electron-smoke.mjs
+      - name: Verify unchanged files and stage without replacing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
+        run: node scripts/release-candidate.mjs stage linux dist/candidate "$RELEASE_ID"

@@ -1,41 +1,71 @@
 import {_electron as electron} from 'playwright-core';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,mkdir,writeFile,access} from 'node:fs/promises';
+import {mkdtemp,rm,mkdir,writeFile,access,realpath} from 'node:fs/promises';
 import os from 'node:os';
+import {observeGraphics,closeSmokeApp,withSmokeCleanup} from './graphics-smoke.mjs';
 import path from 'node:path';
+import {createGpuDiagnostics} from './gpu-smoke.mjs';
 const dir=await mkdtemp(path.join(os.tmpdir(),'tus-desktop-'));
 const fakeBin=path.join(dir,'bin'),fakeCodex=path.join(fakeBin,'codex'),marker=path.join(dir,'unexpected-codex-run');
 await mkdir(fakeBin);await writeFile(fakeCodex,`#!/bin/sh\ntouch '${marker}'\nexit 99\n`,{mode:0o755});
+const expectedCodexPath=await realpath(fakeCodex);
 const testEnv={...process.env,TUS_DATA_DIR:dir,PATH:fakeBin+path.delimiter+process.env.PATH};
-let app;
-try {
- app=await electron.launch({args:['.', '--no-sandbox'],env:testEnv,timeout:30000});
- const page=await app.firstWindow(); const errors=[];page.on('pageerror',e=>errors.push(e.message));
+const packagedExecutable=process.env.TUS_SMOKE_EXECUTABLE;
+// Headless Linux runners use explicit SwiftShader to avoid unstable automatic fallback.
+// These flags apply only to smoke launches, never to normal application startup.
+const ciFlags=process.platform==='linux'?['--no-sandbox','--use-gl=angle','--use-angle=swiftshader']:[];
+const launchOptions={...(packagedExecutable?{executablePath:path.resolve(packagedExecutable)}:{}),args:[...(packagedExecutable?[]:['.']),...ciFlags],env:testEnv,timeout:30000};
+let app, graphics, gpu;
+async function launch(label) {
+ gpu=await createGpuDiagnostics(label);
+ app=await electron.launch({...launchOptions,args:[...launchOptions.args,...gpu.args]});
+ await gpu.attach(app);
+}
+async function close(phase) {
+ const closing=app, observed=graphics, diagnostic=gpu;app=null;graphics=null;gpu=null;
+ await withSmokeCleanup(()=>closeSmokeApp(closing,observed,phase),()=>diagnostic?.finish());
+}
+await withSmokeCleanup(async()=>{
+ await launch('first launch');
+ if(process.platform==='darwin') assert.equal(await app.evaluate(()=>process.argv.includes('--no-sandbox')),false,'native macOS must not disable the sandbox');
+ const page=await app.firstWindow();graphics=await observeGraphics(page,{label:'first launch'});
+ if(process.platform==='darwin') assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences().sandbox),true,'native macOS renderer sandbox remains enabled');
+ graphics.phase('world connection');
  await page.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
- assert.equal(await page.locator('#scene-error').isVisible(),false);
+ await graphics.assertHealthy();
+ graphics.phase('construction');
  await page.locator('[data-kind="bridge"]').click(); await page.locator('#build-x').fill('3');
  await page.locator('#build-form button').click();
  await page.waitForFunction(()=>document.querySelector('#world-message')?.textContent.includes('placed'));
  let state=await page.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
  assert.equal(state.objects.length,1);assert.equal(state.objects[0].type,'bridge');
  assert.equal(await page.locator('#send').isDisabled(),true);
+ graphics.phase('settings and Codex discovery');
  await page.locator('#settings-open').click();assert.equal(await page.locator('#settings').isVisible(),true);
  await page.locator('#settings-close').click();assert.equal(await page.locator('#settings').isVisible(),false);
  await page.locator('#settings-open').click();
  await page.locator('#find-codex').click();
- const candidate=page.locator('.codex-candidate').filter({hasText:fakeCodex});await candidate.waitFor();await candidate.click();
- assert.equal(await page.locator('#codex').inputValue(),fakeCodex);
+ const candidate=page.locator('.codex-candidate').filter({hasText:expectedCodexPath});await candidate.waitFor();await candidate.click();
+ assert.equal(await page.locator('#codex').inputValue(),expectedCodexPath);
  await page.locator('#workspace').fill(dir);await page.locator('#save-world').click();
  await page.waitForFunction(()=>document.querySelector('#settings-message')?.textContent.includes('saved'));
  await page.locator('#settings-close').click();
+ await page.evaluate(async()=>{const s=await window.tus.loadSettings();await window.tus.saveSettings({...s,threadId:'smoke-preserved-game-thread'});});
  await assert.rejects(access(marker),'search must not execute discovered files');
+ graphics.phase('screenshot');
  await mkdir('dist',{recursive:true});await page.screenshot({path:'dist/desktop-smoke.png'});
- await app.close();app=null;
- app=await electron.launch({args:['.','--no-sandbox'],env:testEnv,timeout:30000});
- const reopened=await app.firstWindow();await reopened.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
+ await close();
+ await launch('restart');
+ const reopened=await app.firstWindow();graphics=await observeGraphics(reopened,{label:'restart'});graphics.phase('restart world connection');await reopened.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
+ graphics.phase('restart persistence');
  state=await reopened.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
  assert.equal(state.objects.length,1,'world survives desktop restart');
- const restored=await reopened.evaluate(()=>window.tus.loadSettings());assert.equal(restored.codexPath,fakeCodex);assert.equal(restored.workspacePath,dir);
+ const restored=await reopened.evaluate(()=>window.tus.loadSettings());assert.equal(restored.codexPath,expectedCodexPath);assert.equal(restored.workspacePath,dir);assert.equal(restored.threadId,'smoke-preserved-game-thread');
+ graphics.phase('authenticated removal');
+ // Removal below exercises the authenticated command API, not canvas selection or the Remove button.
  await reopened.evaluate(async id=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/command',method:'POST',body:{type:'remove',id}});},state.objects[0].id);
- assert.deepEqual(errors,[]);console.log('Electron smoke passed: WebGL scene, build, settings repeated/cancel, safe Codex discovery/selection, persisted settings and world restart, remove, no unsolicited model call.');
-} finally {await app?.close();await rm(dir,{recursive:true,force:true});}
+ const emptied=await reopened.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});assert.equal(emptied.objects.length,0,'API removal is confirmed by authoritative state read');
+ await assert.rejects(access(marker),'restart must not execute a discovered candidate');
+ await close();
+},()=>close('final cleanup'),()=>rm(dir,{recursive:true,force:true}));
+console.log(`${packagedExecutable?'Packaged':'Source'} ${process.platform}/${process.arch} Electron smoke`);console.log('Electron smoke passed: WebGL startup, UI construction, settings repeated/cancel, safe Codex discovery/selection, persisted settings/thread ID/world after restart, authenticated API removal, no unsolicited model call. Canvas selection and graphical removal were not tested.');

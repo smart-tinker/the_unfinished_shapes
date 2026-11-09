@@ -9,6 +9,8 @@ let settingsGeneration = 0;
 let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 1, z: 0 }, meId = null;
 let scene, renderer, camera, controls, player, companion, selectionBox;
 let objectSnapshot = '';
+let inspectorBase = null, inspectorDirty = false, editing = false, role = 'viewer';
+const objectData = new Map();
 const meshes = new Map(), otherPlayers = new Map(), keys = new Set();
 const sceneRoot = new THREE.Group();
 const clock = new THREE.Clock();
@@ -84,20 +86,36 @@ function objectMesh(object) {
   group.position.set(object.position.x, object.position.y, object.position.z); return group;
 }
 function disposeGroup(group) { group.traverse(child => { child.geometry?.dispose(); if (child.material) child.material.dispose(); }); }
-function selectObject(id) {
-  selectedId = id;
+function fillInspector(object) {
+  inspectorBase = object ? structuredClone(object) : null; inspectorDirty = false;
+  $('edit-form').hidden = !object;
+  if (!object) return;
+  for (const field of ['position', 'size']) for (const axis of ['x', 'y', 'z']) $(`edit-${field}-${axis}`).value = object[field][axis];
+  $('edit-color').value = object.color;
+  const canEdit = role === 'admin' || (role === 'builder' && object.ownerId === meId);
+  $('edit-fields').disabled = editing || !canEdit;
+  $('edit-message').textContent = !canEdit ? 'Read-only: you do not have permission to edit this shape.' : 'Changes are checked by the world server.';
+}
+function selectObject(id, fromPoll = false) {
+  if (!fromPoll && id !== selectedId && inspectorDirty && !window.confirm('Discard unapplied changes to this shape?')) return;
+  const changed = id !== selectedId; selectedId = id;
   if (selectionBox) { scene.remove(selectionBox); selectionBox.geometry.dispose(); selectionBox.material.dispose(); selectionBox = null; }
   if (id && meshes.has(id)) { selectionBox = new THREE.BoxHelper(meshes.get(id), '#ffe5a1'); scene.add(selectionBox); }
-  $('selection-label').textContent = id ? `Shape ${id.slice(0, 12)}` : 'No shape selected'; $('remove').disabled = !id;
+  const object = objectData.get(id);
+  $('selection-label').textContent = object ? `${object.type} · ${id.slice(0, 12)}` : 'No shape selected';
+  $('remove').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId));
+  if (changed || !inspectorDirty || !object) fillInspector(object);
+  else if (JSON.stringify(object) !== JSON.stringify(inspectorBase)) $('edit-message').textContent = 'This shape changed on the server. Your unapplied values are preserved; Reset reloads the current shape.';
 }
 function renderWorld(state) {
   if (meId !== state.me.id) { const savedPlayer = state.players.find(p => p.id === state.me.id); if (savedPlayer) playerPosition = { ...savedPlayer.position }; }
-  meId = state.me.id; $('role').textContent = `Role: ${state.me.role}`; $('revision').textContent = `REV ${state.revision}`;
+  meId = state.me.id; role = state.me.role; $('role').textContent = `Role: ${state.me.role}`; $('revision').textContent = `REV ${state.revision}`;
   const nextSnapshot = JSON.stringify(state.objects);
   if (objectSnapshot !== nextSnapshot) {
     for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear();
-    for (const object of state.objects) { const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh); }
-    selectObject(meshes.has(selectedId) ? selectedId : null); worldRevision = state.revision; objectSnapshot = nextSnapshot;
+    objectData.clear();
+    for (const object of state.objects) { objectData.set(object.id, object); const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh); }
+    selectObject(meshes.has(selectedId) ? selectedId : null, true); worldRevision = state.revision; objectSnapshot = nextSnapshot;
   }
   const live = new Set();
   for (const remote of state.players) {
@@ -126,6 +144,30 @@ async function command(body) { const result = await request('/command', 'POST', 
 for (const button of document.querySelectorAll('[data-kind]')) button.addEventListener('click', () => { selectedKind = button.dataset.kind; document.querySelectorAll('[data-kind]').forEach(el => el.classList.toggle('selected', el === button)); });
 $('build-form').addEventListener('submit', async event => { event.preventDefault(); const button = event.submitter; button.disabled = true; try { await command({ type: 'build', objectType: selectedKind, position: { x: Number($('build-x').value), y: selectedKind === 'block' ? 1 : .5, z: Number($('build-z').value) } }); feedback(`${selectedKind[0].toUpperCase() + selectedKind.slice(1)} placed in the shared world.`); } catch (error) { feedback(error.message, true); } finally { button.disabled = false; } });
 $('remove').addEventListener('click', async () => { if (!selectedId) return; const id = selectedId; $('remove').disabled = true; try { await command({ type: 'remove', id }); feedback('Shape removed.'); } catch (error) { feedback(error.message, true); } finally { $('remove').disabled = !selectedId; } });
+$('edit-form').addEventListener('input', () => { inspectorDirty = true; });
+$('edit-reset').addEventListener('click', () => fillInspector(objectData.get(selectedId)));
+$('edit-form').addEventListener('submit', async event => {
+  event.preventDefault(); if (!selectedId || !inspectorBase || editing) return;
+  const id = selectedId, baseline = inspectorBase, current = objectData.get(id), body = { type: 'update', id };
+  for (const field of ['position', 'size']) {
+    const value = Object.fromEntries(['x', 'y', 'z'].map(axis => [axis, Number($(`edit-${field}-${axis}`).value)]));
+    if (JSON.stringify(value) !== JSON.stringify(baseline[field])) body[field] = value;
+  }
+  if ($('edit-color').value !== baseline.color) body.color = $('edit-color').value;
+  const fields = Object.keys(body).filter(key => !['type', 'id'].includes(key));
+  if (!fields.length) { $('edit-message').textContent = 'No changes to apply.'; return; }
+  if (!current || fields.some(field => JSON.stringify(current[field]) !== JSON.stringify(baseline[field]))) { $('edit-message').textContent = 'A field you edited also changed on the server. Reset to reload it before applying.'; return; }
+  body.expected = Object.fromEntries(fields.map(field => [field, structuredClone(baseline[field])]));
+  inspectorDirty = true; editing = true; $('edit-fields').disabled = true; const generation = settingsGeneration;
+  try {
+    const result = await command(body);
+    if (generation !== settingsGeneration) return;
+    if (result.object) objectData.set(id, result.object);
+    if (selectedId === id) { inspectorDirty = false; fillInspector(objectData.get(id)); $('edit-message').textContent = 'Changes saved on the server.'; }
+    feedback('Shape updated on the server.');
+  } catch (error) { if (generation === settingsGeneration) { await poll(); if (generation !== settingsGeneration) return; if (selectedId === id) $('edit-message').textContent = error.message + ' Your unapplied values are preserved. Reset to reload the server values.'; feedback(error.message, true); } }
+  finally { editing = false; const object = objectData.get(selectedId); $('edit-fields').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId)); }
+});
 window.addEventListener('keydown', event => { if (!['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) keys.add(event.key.toLowerCase()); });
 window.addEventListener('keyup', event => keys.delete(event.key.toLowerCase())); window.addEventListener('blur', () => keys.clear());
 $('find-codex').addEventListener('click', async () => {
@@ -152,19 +194,110 @@ async function saveSettings() {
   settings = next; settingsGeneration++;
   const { token, ...persisted } = settings; await bridge.saveSettings(persisted);
   worldRevision = -1; objectSnapshot = ''; meId = null; lastPosition = '';
-  if (scene) { selectObject(null); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
+  if (scene) { selectObject(null, true); objectData.clear(); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
   await poll();
 }
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('settings-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('settings-message').textContent = error.message; } });
-$('settings-form').addEventListener('submit', async event => { event.preventDefault(); $('connect').disabled = true; $('settings-message').textContent = 'Connecting to your Codex app-server…'; try { await saveSettings(); const result = await bridge.connectCodex({ ...settings, newGameThread: $('new-game-thread').checked }); settings.threadId = result.threadId; $('new-game-thread').checked = false; const { token, ...persisted } = settings; await bridge.saveSettings(persisted); connected = true; $('agent-status').textContent = 'Ready · responds only when asked'; updateChatControls(); $('settings').close(); addMessage('Connected to your Codex workspace. No request has been sent.'); } catch (error) { $('settings-message').textContent = error.message; } finally { $('connect').disabled = false; } });
+$('settings-form').addEventListener('submit', async event => { event.preventDefault(); $('connect').disabled = true; $('settings-message').textContent = 'Connecting to your Codex app-server…'; try { await saveSettings(); const result = await bridge.connectCodex({ ...settings, newGameThread: $('new-game-thread').checked }); settings.threadId = result.threadId; $('new-game-thread').checked = false; const { token, ...persisted } = settings; await bridge.saveSettings(persisted); connected = true; $('agent-status').textContent = 'Ready · responds only when asked'; updateChatControls(); $('settings').close(); addMessage(result.resumed ? 'Resumed your saved Codex conversation. It retains the tools registered when it was created. To use updated game commands, open Settings and explicitly select “Create a new game conversation”, then Connect. Your old conversation and its history are preserved. No request has been sent.' : 'Connected to your Codex workspace. No request has been sent.'); } catch (error) { $('settings-message').textContent = error.message; } finally { $('connect').disabled = false; } });
+const toolRows = new Map(), itemRows = new Map();
+let stopRequested = false, acceptedThreadId = null, currentTurnId = null;
+const retiredTurns = new Set();
+function activityThread(threadId) {
+  if (threadId !== acceptedThreadId) { retiredTurns.clear(); currentTurnId = null; }
+  acceptedThreadId = threadId;
+}
+function activityRow(text, status = 'running') {
+  const row = document.createElement('li'); row.textContent = text; row.dataset.status = status; $('agent-actions').append(row);
+  while ($('agent-actions').children.length > 40) $('agent-actions').firstElementChild.remove();
+  return row;
+}
+function startActivity() {
+  if (currentTurnId) retiredTurns.add(currentTurnId);
+  if (retiredTurns.size > 100) retiredTurns.delete(retiredTurns.values().next().value);
+  currentTurnId = null;
+  stopRequested = false; toolRows.clear(); itemRows.clear(); $('agent-actions').replaceChildren(); $('agent-plan').replaceChildren(); $('agent-plan').hidden = true;
+  $('activity-state').textContent = 'Requested'; $('agent-intent').textContent = 'Waiting for Codex to report its next action.'; $('agent-stop-reason').textContent = 'Request submitted; no completion reported yet.';
+}
+function constructionLabel(design, verb = 'Build') {
+  if (!['block', 'bridge', 'port'].includes(design?.objectType || design?.type)) return null;
+  const position = design.position;
+  if (!position || !['x', 'y', 'z'].every(axis => typeof position[axis] === 'number' && Number.isFinite(position[axis]) && Math.abs(position[axis]) <= 1000)) return null;
+  return `${verb} ${design.objectType || design.type} at (${position.x}, ${position.y}, ${position.z})`;
+}
+function toolLabel(event) {
+  if (event.name === 'world_state') return 'Read world state';
+  if (!['world_command', 'world_build'].includes(event.name)) return 'Requested tool';
+  let args = event.arguments;
+  if (typeof args === 'string') { try { args = JSON.parse(args); } catch { return event.name === 'world_build' ? 'Build shape (invalid design)' : 'World command'; } }
+  if (event.name === 'world_build') return constructionLabel(args) || 'Build shape (invalid design)';
+  const labels = { build: 'Build shape', update: 'Edit shape', remove: 'Remove shape', move: 'Move player' };
+  return labels[args?.command?.type] || labels[args?.type] || 'World command';
+}
+function toolActivity(event) {
+  if (!busy || event.threadId !== acceptedThreadId || !event.turnId || event.id == null || retiredTurns.has(event.turnId)) return;
+  if (!currentTurnId) currentTurnId = event.turnId;
+  if (event.turnId !== currentTurnId) return;
+  const label = toolLabel(event), key = JSON.stringify([event.threadId, event.turnId, event.id]);
+  if (event.type === 'tool-start') {
+    $('agent-intent').textContent = label + ' requested.'; $('activity-state').textContent = 'Working';
+    if (!toolRows.has(key)) toolRows.set(key, activityRow(label + ' · running')); return;
+  }
+  const row = toolRows.get(key) || activityRow(label); toolRows.set(key, row);
+  const success = event.result?.success === true;
+  let response; try { const text = event.result?.contentItems?.find(item => item.type === 'inputText')?.text; if (typeof text === 'string' && text.length < 2000000) response = JSON.parse(text); } catch { /* Only structured evidence is summarized. */ }
+  const revision = Number.isSafeInteger(response?.revision) && response.revision >= 0 ? ` · revision ${response.revision}` : '';
+  if (event.name === 'world_build') {
+    const created = response?.object;
+    const confirmedLabel = success && typeof created?.id === 'string' && created.id.length > 0 && revision ? constructionLabel(created, 'Built') : null;
+    row.textContent = confirmedLabel ? confirmedLabel + ' · server confirmed' + revision : label + (success ? ' · construction not confirmed by a created object' : ' · failed');
+    row.dataset.status = confirmedLabel ? 'completed' : success ? 'unconfirmed' : 'failed';
+  } else {
+    row.textContent = label + (success ? ' · completed' : ' · failed') + revision; row.dataset.status = success ? 'completed' : 'failed';
+  }
+  if (!success) $('agent-stop-reason').textContent = 'A tool failed. The turn may continue; wait for its final status.';
+}
+function notificationActivity(method, params) {
+  if (params.threadId && acceptedThreadId && params.threadId !== acceptedThreadId) return;
+  const turnId = params.turnId || params.turn?.id;
+  if (turnId && (retiredTurns.has(turnId) || (currentTurnId && turnId !== currentTurnId))) return;
+  if (method === 'turn/started' && turnId) currentTurnId = turnId;
+  if (method === 'turn/started') { $('activity-state').textContent = 'Working'; $('agent-stop-reason').textContent = 'Turn in progress.'; }
+  // Show an explicit user-facing plan, never reasoning or reasoning-summary events.
+  if (method === 'turn/plan/updated' && Array.isArray(params.plan)) {
+    $('agent-plan').replaceChildren();
+    for (const step of params.plan.slice(0, 12)) { if (typeof step.step !== 'string') continue; const row = document.createElement('li'); row.textContent = step.step.slice(0, 500) + (['pending', 'inProgress', 'completed'].includes(step.status) ? ` (${step.status})` : ''); $('agent-plan').append(row); }
+    $('agent-plan').hidden = !$('agent-plan').children.length;
+  }
+  if (['item/started', 'item/completed'].includes(method)) {
+    const item = params.item, names = { commandExecution: 'Local command', fileChange: 'Workspace file changes', webSearch: 'Web search' };
+    const name = names[item?.type];
+    if (name && item.id) {
+      if (method === 'item/started') { $('agent-intent').textContent = name + ' requested.'; itemRows.set(item.id, activityRow(name + ' · running')); }
+      else {
+        const row = itemRows.get(item.id) || activityRow(name);
+        const failed = item.status === 'failed' || item.status === 'declined' || (Number.isInteger(item.exitCode) && item.exitCode !== 0);
+        row.dataset.status = failed ? 'failed' : 'completed'; row.textContent = name + (failed ? ' · failed or declined' : ' · completed') + (Number.isInteger(item.exitCode) ? ` · exit ${item.exitCode}` : '');
+      }
+    }
+  }
+  if (method === 'turn/completed') {
+    const status = params.turn?.status;
+    const failed = status === 'failed' || Boolean(params.turn?.error);
+    $('activity-state').textContent = failed ? 'Failed' : status === 'interrupted' ? 'Stopped' : status === 'completed' ? 'Completed' : 'Ended';
+    $('agent-stop-reason').textContent = failed ? 'Stopped with an error reported by Codex.' : status === 'interrupted' ? (stopRequested ? 'Stopped at your request; completed actions remain in the world.' : 'Codex reported that the turn was interrupted.') : status === 'completed' ? 'Codex reported the turn complete. This does not mean code changes were deployed.' : 'Turn ended; Codex did not provide a recognized completion status.';
+    $('agent-intent').textContent = 'No action currently running.';
+  }
+}
 let streamMessage = null;
-$('chat-form').addEventListener('submit', async event => { event.preventDefault(); const text = $('prompt').value.trim(); if (!text || !connected || busy) return; busy = true; updateChatControls(); addMessage(text, 'user'); $('prompt').value = ''; streamMessage = null; try { await bridge.sendPrompt(text); } catch (error) { addMessage(error.message, 'error'); busy = false; updateChatControls(); } });
-$('interrupt').addEventListener('click', async () => { $('interrupt').disabled = true; try { await bridge.interrupt(); } catch (error) { addMessage(error.message, 'error'); $('interrupt').disabled = !busy; } });
+$('chat-form').addEventListener('submit', async event => { event.preventDefault(); const text = $('prompt').value.trim(); if (!text || !connected || busy) return; busy = true; startActivity(); updateChatControls(); addMessage(text, 'user'); $('prompt').value = ''; streamMessage = null; try { await bridge.sendPrompt(text); } catch (error) { addMessage(error.message, 'error'); $('activity-state').textContent = 'Error'; $('agent-stop-reason').textContent = 'Request could not be confirmed: ' + error.message; busy = false; updateChatControls(); } });
+$('interrupt').addEventListener('click', async () => { $('interrupt').disabled = true; try { stopRequested = true; $('activity-state').textContent = 'Stopping'; $('agent-stop-reason').textContent = 'Stop requested; waiting for Codex to confirm interruption.'; await bridge.interrupt(); } catch (error) { addMessage(error.message, 'error'); $('interrupt').disabled = !busy; } });
 function codexEvent(event) {
-  if (event.type === 'connected') { connected = true; settings.threadId = event.threadId; $('agent-status').textContent = 'Ready · responds only when asked'; }
+  if (event.type === 'tool-start' || event.type === 'tool-result') toolActivity(event);
+  if (event.type === 'connected') { activityThread(event.threadId); connected = true; settings.threadId = event.threadId; $('agent-status').textContent = 'Ready · responds only when asked'; }
   if (event.type === 'error') addMessage(event.message || 'Codex reported an error.', 'error');
-  if (event.type === 'disconnected') { connected = false; busy = false; $('agent-status').textContent = 'Codex disconnected'; addMessage(event.message || 'Codex disconnected.', 'error'); }
+  if (event.type === 'disconnected') { $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; busy = false; $('agent-status').textContent = 'Codex disconnected'; addMessage(event.message || 'Codex disconnected.', 'error'); }
   if (event.type === 'approval') {
+    $('activity-state').textContent = 'Needs decision'; $('agent-stop-reason').textContent = 'Waiting for your response to an approval request; no approval has been granted.';
     const entry = addMessage(`Codex requests approval: ${event.method}. This preview cannot grant elevated permissions.`, 'system');
     const denial = ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(event.method) ? { decision: 'decline' } : event.method === 'item/permissions/requestApproval' ? { permissions: {}, scope: 'turn' } : null;
     if (denial) {
@@ -175,6 +308,7 @@ function codexEvent(event) {
   }
   if (event.type === 'notification') {
     const p = event.params || {};
+    notificationActivity(event.method, p);
     if (event.method === 'turn/started') { busy = true; $('agent-status').textContent = 'Working on your request…'; }
     if (event.method === 'item/agentMessage/delta') { if (!streamMessage) streamMessage = addMessage('', 'assistant'); streamMessage.textContent += p.delta || ''; $('chat').scrollTop = $('chat').scrollHeight; }
     if (event.method === 'item/completed' && p.item?.type === 'agentMessage') { if (streamMessage) streamMessage.textContent = p.item.text || streamMessage.textContent; else if (p.item.text) addMessage(p.item.text, 'assistant'); streamMessage = null; }

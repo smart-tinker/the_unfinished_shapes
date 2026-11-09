@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { realpath } from 'node:fs/promises';
-import { CodexBridge } from '../src/codex.mjs';
+import { CodexBridge, WORLD_TOOLS } from '../src/codex.mjs';
 
 const cwd = await realpath(process.cwd());
 function fixture(handler = () => undefined, timeoutMs = 500) {
@@ -96,9 +96,11 @@ test('malformed protocol, request timeout and exit reject pending requests and d
   await new Promise(r=>setTimeout(r,10)); malformed.child.stdout.write('not json\n');
   await assert.rejects(p,/malformed/); assert.equal(malformed.child.killed,true);
   const timed=fixture(()=>false,20); await assert.rejects(timed.start(),/timed out/);
-  const exited=fixture(()=>false); const q=exited.start();
-  await new Promise(r=>setTimeout(r,10)); exited.child.emit('exit',1);
-  await assert.rejects(q,/exited/);
+  const exited=fixture(request=>{
+    if(request.method==='initialize') queueMicrotask(()=>exited.child.emit('exit',1));
+    return false;
+  });
+  await assert.rejects(exited.start(),/exited/);
 });
 
 test('invalid paths do not start a process',async()=>{
@@ -128,7 +130,7 @@ test('fresh game thread registers dynamic tools without selecting arbitrary hist
   assert.equal(f.requests.some(m=>m.method==='thread/list'),false);
   const init=f.requests.find(m=>m.method==='initialize'); assert.equal(init.params.capabilities.experimentalApi,true);
   const start=f.requests.find(m=>m.method==='thread/start');
-  assert.deepEqual(start.params.dynamicTools.map(t=>t.name),['world_state','world_command']);
+  assert.deepEqual(start.params.dynamicTools.map(t=>t.name),['world_state','world_build','world_command']);
   assert.ok(start.params.dynamicTools.every(t=>t.type==='function' && t.inputSchema.type==='object'));
   f.bridge.stop();
 });
@@ -154,4 +156,25 @@ test('tool calls cannot run outside an explicit turn, from another thread or nam
     assert.equal(f.requests.at(-1).result.success,false);
   }
   assert.equal(events.length,0);f.bridge.stop();
+});
+
+test('world tool schema exposes explicit flat operations without ownership mutation',()=>{
+ const command=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command;
+ assert.equal(command.type,'object');assert.equal(command.oneOf,undefined);assert.equal(command.anyOf,undefined);
+ assert.deepEqual(command.properties.type.enum,['move','update','remove']);
+ assert.match(command.properties.type.description,/move the player only/);
+ assert.deepEqual(command.required,['type']);
+ assert.equal(command.additionalProperties,false);assert.equal(command.properties.ownerId,undefined);
+ assert.deepEqual(command.properties.expected.properties.position.properties.x,{type:'number'});
+ assert.equal(command.properties.expected.additionalProperties,false);
+ assert.match(command.properties.expected.description,/Required for update/);
+ assert.equal(command.properties.objectType,undefined);
+});
+
+test('world_build requires every design field and general command cannot advertise build',()=>{
+ const build=WORLD_TOOLS.find(t=>t.name==='world_build').inputSchema;
+ assert.deepEqual(build.required,['objectType','position','size','color']);assert.equal(build.additionalProperties,false);
+ assert.deepEqual(build.properties.objectType.enum,['block','bridge','port']);assert.equal(build.properties.color.type,'string');
+ const command=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command;
+ assert.equal(command.properties.type.enum.includes('build'),false);
 });

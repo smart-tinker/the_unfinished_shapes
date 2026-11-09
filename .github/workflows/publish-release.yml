@@ -1,0 +1,33 @@
+name: Publish staged candidate
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful Stage release candidate run ID to publish without rebuilding
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: candidate-release-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.event.repository.private == false && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify this candidate's completed staging run, manifests and files; publish unchanged
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: node scripts/release-candidate.mjs publish "$CANDIDATE_RUN_ID"

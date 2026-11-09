@@ -44,15 +44,19 @@ app.whenReady().then(async()=>{
     const currentBridge = bridge;
     const world = {...connectedWorld};
     bridge.on('event',async event=>{
+      if (currentBridge !== bridge) return;
       if(event.type !== 'tool') { win?.webContents.send('codex:event',event); return; }
+      const call = {id:event.id,threadId:event.threadId,turnId:event.turnId,name:event.name,arguments:event.arguments};
+      win?.webContents.send('codex:event',{type:'tool-start',...call});
       const result = await executeGameTool(event,world);
+      if (currentBridge === bridge) win?.webContents.send('codex:event',{type:'tool-result',...call,result});
       try { currentBridge.respond(event.id,result); } catch { /* Turn may have been interrupted. */ }
     });
     bridge.on('error',error=>win?.webContents.send('codex:event',{type:'error',message:error.message}));
     const result=await bridge.start({codexPath:s.codexPath,workspacePath:s.workspacePath,threadId:s.threadId||undefined,newGameThread:!!s.newGameThread});
     return result;
   });
-  handle('codex:send',async text=>{if(!bridge) throw new Error('Connect Codex first');if(typeof text !== 'string'||text.length>32000)throw new Error('Prompt too long');const guide = `You are the player's companion in The Unfinished Shapes. Act only on this request. Use world_state to inspect the world and world_command for existing mechanics. The server enforces permissions. For a missing mechanic explain/specify and implement code in this workspace with tests; never deploy, merge, modify CI permissions or bypass review. Do not assume a source change is deployed. Answer in the player's language.\n\nPlayer request: `; return bridge.send(guide+text);});
+  handle('codex:send',async text=>{if(!bridge) throw new Error('Connect Codex first');if(typeof text !== 'string'||text.length>32000)throw new Error('Prompt too long');const guide = `You are the player's companion in The Unfinished Shapes. Act only on this request. Use world_state to inspect the world. When world_build is available, construct new objects with its flat arguments {objectType,position,size,color}; supply every field explicitly, matching the requested design. world_command is for move/update/remove; move changes the player position and never creates an object. If a resumed conversation only has the legacy world_command schema, use its existing build variant with explicit objectType, position, size and color, or explain that the player can explicitly choose a new game conversation to get updated tools. Never invoke an unavailable tool or create a new conversation automatically. Confirm construction only from a successful server result containing the created object; do not describe a player move as a build. The server enforces permissions. For a missing mechanic explain/specify and implement code in this workspace with tests; never deploy, merge, modify CI permissions or bypass review. Do not assume a source change is deployed. Answer in the player's language.\n\nPlayer request: `; return bridge.send(guide+text);});
   handle('codex:interrupt',()=>bridge?.interrupt());
   handle('codex:respond',(id,result)=>bridge?.respond(id,result));
   win=new BrowserWindow({width:1440,height:940,minWidth:1000,minHeight:700,backgroundColor:'#131c24',webPreferences:{preload:path.join(here,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
