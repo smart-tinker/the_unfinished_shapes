@@ -40,6 +40,20 @@ async function state(id = 'alice') {
   assert.equal(response.status, 200);
   return response.json();
 }
+async function worldCommand(id, command) {
+  const response = await fetch(url + '/command', { method: 'POST', headers: { Authorization: 'Bearer ' + tokens[id], 'Content-Type': 'application/json' }, body: JSON.stringify(command), signal: AbortSignal.timeout(5000) });
+  assert.equal(response.status, 200);
+  return response.json();
+}
+async function waitForState(predicate, description) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const snapshot = await state();
+    if (predicate(snapshot)) return snapshot;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('Timed out waiting for ' + description);
+}
 async function connect(client) {
   const page = client.page;
   await page.locator('#settings-open').click();
@@ -69,6 +83,23 @@ async function close(client) {
 await withSmokeCleanup(async () => {
   await startServer();
   const alice = await launch('alice'), bob = await launch('bob');
+  const ready = await waitForState(snapshot => ['alice', 'bob'].every(id => snapshot.players.some(player => player.id === id)), 'both clients to publish their initial position');
+  await Promise.all(clients.map(client => client.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, ready.revision)));
+
+  alice.graphics.phase('agent movement observed by both clients');
+  const agentMove = await worldCommand('alice', { type: 'move', position: { x: 12, y: 1, z: 0 } });
+  await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent === 'X 12.0 · Z 0.0');
+  await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, agentMove.revision);
+  const acceptedAgentPosition = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x === 12, 'the agent move to be visible in the shared state');
+
+  await alice.page.keyboard.down('d');
+  await alice.page.waitForTimeout(400);
+  await alice.page.keyboard.up('d');
+  const manualMove = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x > acceptedAgentPosition.players.find(player => player.id === 'alice').position.x, 'manual movement to continue from the agent position');
+  await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, manualMove.revision);
+  const observedMove = (await state('bob')).players.find(player => player.id === 'alice');
+  assert.ok(observedMove.position.x > 12, 'the second client sees Alice beyond the agent destination');
+  assert.ok(Number((await alice.page.locator('#coordinates').textContent()).match(/X ([\d.-]+)/)?.[1]) > 12, 'the local GUI displays movement continuing from the agent destination');
   alice.graphics.phase('manual shared construction');
   await alice.page.locator('#build-x').fill('3');
   await alice.page.locator('#build-z').fill('4');
