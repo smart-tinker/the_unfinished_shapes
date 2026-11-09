@@ -138,10 +138,16 @@ async function poll() {
 function positionKey(position) { return `${position.x.toFixed(2)},${position.z.toFixed(2)}`; }
 let lastPosition = '';
 async function syncPosition() {
-  const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration;
+  const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration, movementVersion = localMovementVersion;
   if (moveRunning || key === lastPosition || !meId || !bridge) return; moveRunning = true;
-  try { const result = await request('/command', 'POST', { type: 'move', position }); if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && result.revision >= latestStateRevision) { latestStateRevision = result.revision; lastPosition = key; } }
-  catch { /* The status poll reports connectivity failures. */ } finally { moveRunning = false; }
+  try {
+    const result = await request('/command', 'POST', { type: 'move', position });
+    if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && result.revision >= latestStateRevision) {
+      latestStateRevision = result.revision;
+      if (movementVersion === localMovementVersion) playerPosition = position;
+      lastPosition = key;
+    }
+  } catch { /* The status poll reports connectivity failures. */ } finally { moveRunning = false; }
 }
 async function command(body) { const result = await request('/command', 'POST', body); if (result.error) throw new Error(result.message || result.error); await poll(); return result; }
 
