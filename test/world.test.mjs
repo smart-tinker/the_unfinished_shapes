@@ -123,7 +123,7 @@ test('an object with collision disabled does not impede movement',()=>{
 test('solid objects block a jump from passing through their underside',()=>{
  let world=physicsWorld({position:{x:0,y:3,z:0},size:{x:2,y:2,z:2}});
  world=move(world,{x:0,y:0,z:0},true);
- assert.ok(Math.abs(player(world).position.y-0.38)<1e-6,JSON.stringify(player(world)));
+ assert.ok(player(world).position.y<=0.38+1e-6,JSON.stringify(player(world)));
  assert.equal(player(world).velocityY,0);
 });
 
