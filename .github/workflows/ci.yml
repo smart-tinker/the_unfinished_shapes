@@ -1,8 +1,6 @@
 name: Validate
 on:
   pull_request:
-  push:
-    branches: [main, 'release/**']
   workflow_dispatch:
 permissions:
   contents: read
@@ -12,7 +10,7 @@ concurrency:
 jobs:
   test:
     if: github.event.repository.private == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -21,15 +19,36 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run check
-      - run: xvfb-run --auto-servernum node scripts/electron-smoke.mjs
+  linux-client:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
       - run: npm run package:linux
-      - name: Launch the packaged Linux application
+      - name: Packaged client lifecycle
         env:
           TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes
         run: xvfb-run --auto-servernum node scripts/electron-smoke.mjs
+      - name: Two packaged clients and a shared server
+        env:
+          TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes
+        run: xvfb-run --auto-servernum node scripts/shared-world-smoke.mjs
+  model:
+    needs: test
+    uses: ./.github/workflows/local-cpu-model.yml
+    permissions:
+      contents: read
   macos-native:
+    needs: test
     if: github.event.repository.private == false
     # Standard public runner: Apple Silicon, not a paid -large/-xlarge label.
     runs-on: macos-15
@@ -49,7 +68,6 @@ jobs:
           node -e "if(process.platform!=='darwin'||process.arch!=='arm64') throw Error('Expected native macOS arm64'); console.log(process.platform,process.arch)"
       - run: npm ci
       - run: npm run check
-      - run: node scripts/electron-smoke.mjs
       - run: node scripts/package-macos.mjs
       - name: Launch the native packaged application
         env:
@@ -58,6 +76,7 @@ jobs:
           test "$(lipo -archs "$TUS_SMOKE_EXECUTABLE")" = arm64
           node scripts/electron-smoke.mjs
   windows-installer:
+    needs: test
     if: github.event.repository.private == false
     runs-on: windows-latest
     timeout-minutes: 20
@@ -75,4 +94,6 @@ jobs:
       - run: npm run package:win
       - run: npm run installer:win
       - name: Verify clean install, current-candidate lifecycle and retained data
+        env:
+          TUS_SMOKE_PORTABLE_EXECUTABLE: dist/TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe
         run: node scripts/windows-installer-smoke.mjs
