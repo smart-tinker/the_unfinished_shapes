@@ -29,6 +29,19 @@ test('restores only matching user-facing chat history from a resumed conversatio
   assert.equal(h.element('chat').children.length, 2, 'history from another conversation cannot replace the current chat');
 });
 
+test('history replacement avoids duplicates and reports unavailable saved history', () => {
+  const h = historyRendererHarness();
+  h.run("addMessage('stale cached entry', 'assistant')");
+  const history = { type: 'history', threadId: 'saved', available: true, messages: [{ role: 'assistant', text: 'Restored reply' }] };
+  h.context.history = history; h.run('codexEvent(history)');
+  h.run('codexEvent(history)');
+  assert.deepEqual(h.element('chat').children.map(message => message.textContent), ['Restored reply']);
+  h.run("codexEvent({type:'history',threadId:'saved',available:false,messages:[]})");
+  assert.deepEqual(h.element('chat').children.map(message => [message.className, message.textContent]), [
+    ['chat-message system', 'Saved Codex chat history is unavailable.'],
+  ]);
+});
+
 test('activity shows requested command intent and only structured result evidence', () => {
   const h = activityHarness();
   h.tool({ type: 'tool-start', name: 'world_command', arguments: { command: { type: 'update', secret: 'SECRET' } } });
