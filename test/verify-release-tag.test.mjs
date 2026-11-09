@@ -98,6 +98,14 @@ test('read-only GET retries a missing HTTP response once but not a valid HTTP er
   });
   assert.equal((await denied(refPath)).status, 403);
   assert.equal(calls, 1);
+
+  calls = 0;
+  const unavailable = ghRequest(async () => {
+    calls++;
+    return { stdout: '' };
+  });
+  await assert.rejects(unavailable(refPath), /invalid HTTP response/);
+  assert.equal(calls, 3);
 });
 
 test('tag creation is 404-only, create-only and always followed by exact-SHA verification', async () => {
