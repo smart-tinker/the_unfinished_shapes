@@ -32,8 +32,8 @@ const dir=await mkdtemp(path.join(tmpdir(),'tus-local-e2e-'));
 const workspace=path.join(dir,'workspace'),home=path.join(dir,'codex-home');
 await mkdir(workspace,{mode:0o700});await mkdir(home,{mode:0o700});
 
-const token=randomBytes(24).toString('hex');
-const server=await createWorldServer({dataPath:path.join(dir,'world.json'),users:{[token]:{id:'cpu-test-builder',role:'builder'}},port:0});
+const token=randomBytes(24).toString('hex'), observerToken=randomBytes(24).toString('hex');
+const server=await createWorldServer({dataPath:path.join(dir,'world.json'),users:{[token]:{id:'cpu-test-builder',role:'builder'},[observerToken]:{id:'other-player',role:'builder'}},port:0});
 let bridge,timer,modelProcess,codexProcess;
 const cpuEvidence=createCpuEvidence();
 const diagnostics=createModelDiagnostics();
@@ -109,7 +109,7 @@ try {
  stage='codex_connected';
  timer=setTimeout(()=>rejectDone(new Error('Local model E2E exceeded its time budget.')),timeoutMs);
  const design={objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#3366cc'};
- await bridge.send(`Build this supplied design in the game. Call world_build exactly once with these exact JSON arguments: ${JSON.stringify(design)}. Use world_build, not world_command; the latter moves players or edits existing objects. Do not call shell tools, write code, or change the design. After world_build succeeds, say done. /no_think`);
+ await bridge.send(`First call world_state to inspect the shared world. Then build this supplied design in the game. Call world_build exactly once with these exact JSON arguments: ${JSON.stringify(design)}. Use world_build, not world_command; the latter moves players or edits existing objects. Do not call shell tools, write code, or change the design. After world_build succeeds, say done. /no_think`);
  stage='turn_request_accepted';
  await done;
  stage='turn_completed';
@@ -119,6 +119,12 @@ try {
  assert.ok(savedWorld,'No world state was persisted: the model did not perform a successful game action.');
  const state=JSON.parse(savedWorld);
  const acceptance=assertBuildAcceptance({events,state,design,ownerId:'cpu-test-builder'});
+ assert.ok(events.some(event=>event.name==='world_state' && event.success), 'real agent must inspect the world');
+ const observerResponse=await fetch(connection.url+'/state',{headers:{Authorization:'Bearer '+observerToken},signal:AbortSignal.timeout(5000)});
+ assert.equal(observerResponse.status,200);
+ const observerState=await observerResponse.json();
+ assert.equal(observerState.me.id,'other-player');
+ assert.deepEqual(observerState.objects,state.objects,'independent player sees the real agent construction');
  assert.equal(cpuEvidence.result().cpuOnly,true,'Positive CPU allocation was not observed, or GPU allocation contradicts CPU-only execution.');
  const evidence={status:'passed',acceptance,transport:'real Codex app-server → local llama.cpp Responses API → world dynamic tool → persisted server state',model,modelDigest,cpuOnly:cpuEvidence.result().cpuOnly,requestedGpuLayers:0,cpuEvidence:cpuEvidence.result(),elapsedMs:Date.now()-started,toolCalls:events,turnStatus,stage,diagnostics:diagnostics.result(),assistantText,worldRevision:state.revision,object:{type:state.objects[0].type,position:state.objects[0].position,ownerId:state.objects[0].ownerId}};
  console.log(JSON.stringify(evidence,null,2));

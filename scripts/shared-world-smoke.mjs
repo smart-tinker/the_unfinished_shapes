@@ -7,6 +7,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { observeGraphics, closeSmokeApp, withSmokeCleanup } from './graphics-smoke.mjs';
 
+import { selectObject } from './ui-acceptance.mjs';
+
 const dir = await mkdtemp(path.join(os.tmpdir(), 'tus-shared-'));
 const tokens = { alice: randomBytes(24).toString('hex'), bob: randomBytes(24).toString('hex') };
 const users = Object.fromEntries(Object.entries(tokens).map(([id, token]) => [token, { id, role: 'builder' }]));
@@ -62,18 +64,7 @@ async function launch(id) {
   await connect(client);
   return client;
 }
-async function select(client, object) {
-  // Project the test fixture using the documented initial camera, then use a real pointer click.
-  const point = await client.page.evaluate(async position => {
-    const THREE = await import('three');
-    const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, .1, 220);
-    camera.position.set(33, 28, 38); camera.lookAt(0, 0, 0); camera.updateMatrixWorld();
-    const p = new THREE.Vector3(position.x, position.y, position.z).project(camera);
-    return { x: (p.x + 1) * innerWidth / 2, y: (1 - p.y) * innerHeight / 2 };
-  }, object.position);
-  await client.page.mouse.click(point.x, point.y);
-  await client.page.waitForFunction(id => document.querySelector('#selection-label').textContent.includes(id.slice(0, 12)), object.id);
-}
+async function select(client, object) { await selectObject(client.page, object); }
 async function close(client) {
   if (!client.app) return;
   const app = client.app; client.app = null;

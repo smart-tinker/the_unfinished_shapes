@@ -22,9 +22,10 @@ test('two builders retain a shared world across restart and cannot edit each oth
   assert.equal(before.objects.length, 2);
   assert.deepEqual((await get('bob')).objects, before.objects);
   const aliceObject = before.objects.find(o => o.ownerId === 'alice');
-  for (const command of [{ type: 'update', id: aliceObject.id, color: '#ff0000' }, { type: 'remove', id: aliceObject.id }]) {
+  for (const command of [{ type: 'update', id: aliceObject.id, color: '#ff0000', expected: { color: aliceObject.color } }, { type: 'remove', id: aliceObject.id }]) {
     const denied = await executeGameTool({ name: 'world_command', arguments: { command } }, connection('bob'));
     assert.equal(denied.success, false, 'agent must not acquire another player permissions');
+    assert.equal(JSON.parse(denied.contentItems.find(item => item.type === 'inputText').text).error, 'forbidden', 'denial must come from server ownership rules');
   }
   const unchanged = await get('bob');
   assert.equal(unchanged.revision, before.revision);

@@ -5,6 +5,7 @@ import os from 'node:os';
 import {observeGraphics,closeSmokeApp,withSmokeCleanup} from './graphics-smoke.mjs';
 import path from 'node:path';
 import {createGpuDiagnostics} from './gpu-smoke.mjs';
+import {manualEditing} from './ui-acceptance.mjs';
 const dir=await mkdtemp(path.join(os.tmpdir(),'tus-desktop-'));
 const fakeBin=path.join(dir,'bin'),fakeCodex=path.join(fakeBin,'codex'),marker=path.join(dir,'unexpected-codex-run');
 await mkdir(fakeBin);await writeFile(fakeCodex,`#!/bin/sh\ntouch '${marker}'\nexit 99\n`,{mode:0o755});
@@ -33,6 +34,8 @@ await withSmokeCleanup(async()=>{
  graphics.phase('world connection');
  await page.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
  await graphics.assertHealthy();
+ graphics.phase('manual UI create, select, edit and remove');
+ await manualEditing(page);
  graphics.phase('construction');
  await page.locator('[data-kind="bridge"]').click(); await page.locator('#build-x').fill('3');
  await page.locator('#build-form button').click();
