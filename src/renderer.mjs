@@ -449,6 +449,15 @@ $('agent-model-save').addEventListener('click', async () => {
 $('chat-form').addEventListener('submit', async event => { event.preventDefault(); const text = $('prompt').value.trim(); if (!text || !connected || busy) return; busy = true; startActivity(); updateChatControls(); addMessage(text, 'user'); $('prompt').value = ''; streamMessage = null; try { await bridge.sendPrompt(text); } catch (error) { addMessage(error.message, 'error'); $('activity-state').textContent = 'Error'; $('agent-stop-reason').textContent = 'Request could not be confirmed: ' + error.message; busy = false; updateChatControls(); } });
 $('interrupt').addEventListener('click', async () => { $('interrupt').disabled = true; try { stopRequested = true; $('activity-state').textContent = 'Stopping'; $('agent-stop-reason').textContent = 'Stop requested; waiting for Codex to confirm interruption.'; await bridge.interrupt(); } catch (error) { addMessage(error.message, 'error'); $('interrupt').disabled = !busy; } });
 function codexEvent(event) {
+  if (event.type === 'history') {
+    if (event.threadId !== settings.threadId) return;
+    $('chat').replaceChildren();
+    if (event.available === true && Array.isArray(event.messages)) {
+      for (const message of event.messages) {
+        if (['user', 'assistant'].includes(message?.role) && typeof message.text === 'string' && message.text.trim()) addMessage(message.text, message.role);
+      }
+    } else addMessage('Saved Codex chat history is unavailable.', 'system');
+  }
   if (event.type === 'tool-start' || event.type === 'tool-result') toolActivity(event);
   if (event.type === 'connected') { activityThread(event.threadId); connected = true; settings.threadId = event.threadId; $('agent-status').textContent = 'Ready · responds only when asked'; void refreshAgentControls(); }
   if (event.type === 'error') addMessage(event.message || 'Codex reported an error.', 'error');
