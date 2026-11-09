@@ -50,11 +50,11 @@ export async function createGpuDiagnostics(label, log = console.log) {
           };
           app.on('gpu-info-update', () => { ready = true; features(); });
           emit({ event: 'observer-attached', note: 'Events before attachment may be absent; Chromium file logging starts at launch.' });
-          // Request current info too: gpu-info-update may already have fired before attachment.
+          // Read cached basic info; complete collection can start additional GPU probing.
           const timer = setTimeout(() => emit({ event: 'gpu-info-pending' }), 1500);
           timer.unref();
           try {
-            app.getGPUInfo('complete').then(info => {
+            app.getGPUInfo('basic').then(info => {
               clearTimeout(timer);
               const keys = ['vendorId', 'deviceId', 'active', 'driverVendor', 'driverVersion', 'vendorString', 'deviceString'];
               const gpuDevice = (info.gpuDevice || []).slice(0, 8).map(device => Object.fromEntries(keys.filter(key => key in device).map(key => [key, typeof device[key] === 'string' ? device[key].slice(0, 256) : device[key]])));
