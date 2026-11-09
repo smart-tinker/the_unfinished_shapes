@@ -155,3 +155,19 @@ test('game guide supports legacy resumed tools without automatic conversation re
   assert.match(main, /Never invoke an unavailable tool or create a new conversation automatically/);
   assert.match(main, /Confirm construction only from a successful server result containing the created object/);
 });
+
+function goalContextRendererHarness() {
+  const h = rendererHarness();
+  h.run("let agentControlState = null, goalMessageContextId = 'goal-1', settings = { threadId: 'saved', agentControlThreadId: 'saved', agentModelId: '', agentEffort: '' }; function populateAgentEfforts() {} function updateAgentControlButtons() {}");
+  h.load('function renderAgentControls(state) {', 'async function refreshAgentControls() {');
+  return h;
+}
+test('a completed native Goal no longer tags later assistant messages as Goal updates', () => {
+  const h = goalContextRendererHarness();
+  h.run(`renderAgentControls({
+    threadId: 'saved', threadStatus: 'idle', pendingApprovals: 0, turnId: null,
+    runtime: null, currentModel: null, currentEffort: null, goalSupported: true,
+    models: [], goal: { id: 'goal-1', status: 'completed', objective: 'Build the test object' },
+  })`);
+  assert.equal(h.run('goalMessageContextId'), null);
+});
