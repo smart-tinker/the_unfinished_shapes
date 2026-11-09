@@ -94,6 +94,7 @@ test('resuming a game conversation restores only user-facing history in chronolo
   assert.deepEqual(history, {
     type: 'history',
     threadId: 'saved',
+    available: true,
     messages: [
       { role: 'user', text: 'Build a bridge' },
       { role: 'assistant', text: 'I will build it.' },
