@@ -28,6 +28,23 @@ assert.ok(timeoutMs>=1000 && timeoutMs<=600000,'Timeout must be 1–600 seconds.
 const hash=createHash('sha256');
 for await(const chunk of createReadStream(modelPath))hash.update(chunk);
 const modelDigest=hash.digest('hex');
+async function interruptAndWaitForTurn(bridge, turnId) {
+ if (!turnId) return;
+ let timer, listener;
+ const completed = new Promise((resolve, reject) => {
+  const finish = error => { clearTimeout(timer); bridge.off('event', listener); error ? reject(error) : resolve(); };
+  listener = event => {
+   if (event.type === 'disconnected') finish(new Error(event.message));
+   if (event.type === 'notification' && event.method === 'turn/completed' && event.params?.turn?.id === turnId) finish();
+  };
+  timer = setTimeout(() => finish(new Error(`Timed out waiting for turn ${turnId} to stop.`)), 30000);
+  bridge.on('event', listener);
+  if (bridge.lastCompletedTurnId === turnId && !bridge.turnId) finish();
+ });
+ try { await bridge.interrupt(); await completed; }
+ finally { clearTimeout(timer); bridge.off('event', listener); }
+}
+
 const dir=await mkdtemp(path.join(tmpdir(),'tus-local-e2e-'));
 const workspace=path.join(dir,'workspace'),home=path.join(dir,'codex-home');
 await mkdir(workspace,{mode:0o700});await mkdir(home,{mode:0o700});
@@ -126,14 +143,20 @@ try {
  assert.equal(turnStatus,'completed');
  assert.ok(goalUpdates.some(update=>update.threadId===initialControls.threadId&&update.status==='active'),'native Goal updates must be emitted for the active thread');
  await bridge.pauseGoal();
- assert.equal((await bridge.readControlState()).goal.status,'paused');
+ const followupTurnId=bridge.turnId;
+ if(followupTurnId)await interruptAndWaitForTurn(bridge,followupTurnId);
+ const pausedState=await bridge.readControlState();
+ assert.equal(pausedState.goal.status,'paused');
+ assert.equal(pausedState.thread.status.type,'idle','pause plus stopping the current turn must leave the conversation idle');
+ assert.equal(bridge.turnId,null,'no native turn may remain active before clearing the Goal');
  await bridge.clearGoal();
  assert.equal((await bridge.readControlState()).goal,null);
  assert.equal(bridge.turnId,null,'native Goal acceptance must not leave an active follow-up turn after pause and clear');
- assert.notEqual(turnStatus,'inProgress','native Goal acceptance must finish without a hidden follow-up turn');
+ assert.ok(['completed','interrupted'].includes(turnStatus),'native Goal acceptance must finish without a hidden follow-up turn');
  assert.ok(goalUpdates.some(update=>update.status==='paused'),'pausing the Goal must emit its native status update');
  assert.equal(goalCleared,true,'clearing the Goal must emit the native cleared notification');
- goalAcceptance={supported:true,lifecycle:['created_active','native_turn_completed','paused','cleared'],modelTurnStarted:true,goalUpdates,runtime:initialControls.runtime};
+ stage='native_goal_lifecycle_verified';
+ goalAcceptance={supported:true,lifecycle:['created_active','native_turn_completed','paused',...(followupTurnId?['followup_turn_interrupted']:[]),'cleared'],modelTurnStarted:true,followupTurnInterrupted:Boolean(followupTurnId),finalTurnStatus:turnStatus,goalUpdates,runtime:initialControls.runtime};
  let savedWorld;
  try {savedWorld=await readFile(path.join(dir,'world.json'),'utf8');}
  catch(error){if(error.code!=='ENOENT')throw error;}
