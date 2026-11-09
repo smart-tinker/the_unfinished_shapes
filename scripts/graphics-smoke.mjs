@@ -13,9 +13,21 @@ export async function withSmokeCleanup(work, ...cleanup) {
   return result;
 }
 
+export async function acceptQuitPromptForSmoke(app) {
+  return app.evaluate(({ dialog }) => {
+    const showMessageBox = dialog.showMessageBox;
+    dialog.showMessageBox = function (...args) {
+      if (args.at(-1)?.title !== 'Codex activity may continue') return showMessageBox.apply(dialog, args);
+      dialog.showMessageBox = showMessageBox;
+      return Promise.resolve({ response: 1 });
+    };
+  });
+}
+
 export async function closeSmokeApp(app, graphics, phase = 'normal close') {
   if (!app) return;
   await withSmokeCleanup(async () => { graphics?.phase(phase); await graphics?.assertHealthy(); },
+    () => typeof app.evaluate === 'function' ? acceptQuitPromptForSmoke(app) : undefined,
     () => app.close(), () => graphics?.assertNoErrors());
 }
 
