@@ -8,6 +8,7 @@ const idle = () => ({
   thread: { status: { type: 'idle' } },
   turnId: null,
   pendingApprovals: 0,
+  goalSupported: true,
   goal: null,
 });
 
@@ -49,6 +50,13 @@ test('an idle conversation with no Goal or approvals closes without a prompt', a
   assert.equal(h.confirmations.length, 0);
 });
 
+test('an idle conversation can close when native Goals are confirmed unsupported', async () => {
+  const h = harness({ state: { ...idle(), goalSupported: false } });
+  assert.equal(await h.closeWindow(), true);
+  assert.deepEqual(h.counts(), { quitCalls: 1, cleanupCalls: 1 });
+  assert.equal(h.confirmations.length, 0);
+});
+
 test('any remaining native Goal requires an explicit quit decision', async () => {
   for (const status of ['active', 'paused']) {
     const state = { ...idle(), goal: { id: 'goal-1', status } };
@@ -72,7 +80,7 @@ test('an active turn or pending approval requires confirmation', async () => {
 });
 
 test('unknown or disconnected Codex state requires confirmation before app quit', async () => {
-  for (const state of [null, { connected: false }, { ...idle(), thread: { status: { type: 'unknown' } } }]) {
+  for (const state of [null, { connected: false }, { ...idle(), thread: { status: { type: 'unknown' } } }, { ...idle(), goalSupported: null }]) {
     const h = harness({ state, answer: false });
     assert.equal(await h.requestAppQuit(), true);
     assert.deepEqual(h.counts(), { quitCalls: 0, cleanupCalls: 0 });
@@ -94,9 +102,11 @@ test('choosing quit anyway allows cleanup; choosing keep-open leaves the app ali
 test('unsafe state and unreadable state both require an explicit decision', async () => {
   const active = { ...idle(), thread: { status: { type: 'active' } }, turnId: 'turn-1' };
   const unknown = await confirmQuitIfUnsafe(null, async () => false);
+  const unknownGoalSupport = await confirmQuitIfUnsafe({ ...idle(), goalSupported: null }, async () => false);
   const blocked = await confirmQuitIfUnsafe(active, async () => false);
   const accepted = await confirmQuitIfUnsafe(active, async () => true);
   assert.equal(unknown, false);
+  assert.equal(unknownGoalSupport, false);
   assert.equal(blocked, false);
   assert.equal(accepted, true);
 });
