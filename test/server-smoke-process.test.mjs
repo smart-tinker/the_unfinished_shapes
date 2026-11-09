@@ -18,7 +18,7 @@ test('shared smoke rejects an already signalled server without waiting for anoth
   await assert.rejects(stopServerProcess(child), /unexpected.*exit/i);
   assert.ok(Date.now() - start < 1000);
 });
-test('shared smoke awaits graceful requested shutdown', async () => {
+test('shared smoke awaits graceful requested shutdown', { skip: process.platform === 'win32' }, async () => {
   const child = spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>process.exit(0)); console.log('ready'); setInterval(()=>{},1000)"], { stdio: ['ignore', 'pipe', 'ignore'] });
   try {
     await once(child.stdout, 'data');
