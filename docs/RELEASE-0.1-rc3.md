@@ -1,6 +1,6 @@
 # The Unfinished Shapes 0.1-rc3
 
-This candidate integrates issue-scoped changes into `release/0.1.0-rc3`. Publication requires either explicit workflow dispatch or creation of the dedicated publication branch at the accepted commit; merging a feature does not publish it. See [publication routes](../CONTRIBUTING.md).
+This candidate integrates issue-scoped changes into `release/0.1.0-rc3`. The release pipeline now separates manual staging from manual publication; merging a feature does not publish it. The existing RC3 draft is not reused by this pipeline. A fresh candidate version and tag require an owner decision. See [release procedure](../CONTRIBUTING.md).
 
 ## Scope
 
@@ -22,7 +22,7 @@ Interactive VM startup, object editing and removal passed on candidate `198063e5
 
 Current CPU acceptance requires at least one genuine valid `world_build`. Every call must match the requested design and succeed; every resulting object must have matching parameters and owner, a unique ID, and the total persisted count must equal the successful valid calls. Repeated valid construction requests execute independently. This checks game execution, not whether the model obeyed the requested call count. Historical single-build results above are preserved; revised acceptance still requires its own final-commit run.
 
-Publication requires source tests, native Linux/Windows/macOS package checks, a real CPU-model RC-branch push run and interactive GUI acceptance for the exact final commit. The release workflow verifies exact-SHA CPU evidence and immutable tag identity before publication; interactive acceptance is an operator prerequisite.
+Publication requires source tests, native Linux/Windows/macOS package checks, real CPU-model acceptance within the candidate staging workflow, and interactive GUI acceptance of the exact candidate files. The publish operation verifies that candidate’s successful staging attempt, source SHA, immutable tag and file hashes without rebuilding. Historical runs above are context only and are not consulted for acceptance; interactive acceptance remains an operator prerequisite.
 
 Resolve the final commit from this release's tag and inspect its [Actions runs](https://github.com/smart-tinker/the_unfinished_shapes/actions). The evidence above predates final assembly and is not a claim that those final checks have already passed. Final results must be recorded against the accepted SHA before publishing that same unchanged commit.
 
