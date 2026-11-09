@@ -112,3 +112,30 @@ test('unsupported native Goals are reported and never emulated with a prompt or 
   assert.equal(f.requests.some(request => request.method === 'turn/start'), false);
   f.bridge.stop();
 });
+
+test('does not send with a different conversation if the model catalog resolves after context changes', async () => {
+  let catalogRequest;
+  const f = fixture(message => {
+    if (message.method === 'model/list') { catalogRequest = message; return false; }
+  });
+  await f.start();
+  const sending = f.bridge.send('Build a bridge', { model: 'qwen3-local-cpu', effort: 'medium' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(catalogRequest);
+  f.bridge.threadId = 'replacement-thread';
+  f.reply({ id: catalogRequest.id, result: { data: [{ id: 'qwen3-local-cpu', supportedReasoningEfforts: [{ reasoningEffort: 'medium' }] }] } });
+  await assert.rejects(sending, /conversation changed/i);
+  assert.equal(f.requests.some(request => request.method === 'turn/start'), false);
+  f.bridge.stop();
+});
+
+test('clearing a native Goal records an explicit user mutation', async () => {
+  const f = fixture(message => {
+    if (message.method === 'thread/goal/get') return { goal: { threadId: 'game-thread', objective: 'Build', status: 'paused' } };
+  });
+  await f.start();
+  await f.bridge.clearGoal();
+  const clear = f.requests.find(request => request.method === 'thread/goal/clear');
+  assert.equal(clear.params.origin, 'user');
+  f.bridge.stop();
+});
