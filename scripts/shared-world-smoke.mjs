@@ -65,6 +65,7 @@ async function connect(client) {
   await page.waitForFunction(() => document.querySelector('#settings-message').textContent.includes('saved'));
   await page.locator('#settings-close').click();
   await page.waitForFunction(() => document.querySelector('#connection').textContent.includes('World connected'));
+  await page.evaluate(() => document.activeElement?.blur());
   assert.equal(await page.locator('#role').textContent(), 'Role: builder');
 }
 async function launch(id) {
