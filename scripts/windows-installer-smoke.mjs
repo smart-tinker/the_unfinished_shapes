@@ -35,7 +35,7 @@ try { await access(installDir); throw new Error('Refusing to replace an existing
 catch (error) { if (error.code !== 'ENOENT') throw error; }
 const settingsFixture = {
   workspacePath: path.join(work, 'player-workspace'), codexPath: path.join(work, 'codex.exe'),
-  serverUrl: '', threadId: 'saved-game-thread-fixture', token: 'test-value-that-must-not-be-saved'
+  serverUrl: '', threadId: 'saved-game-thread-fixture', agentControlThreadId: 'saved-game-thread-fixture', agentModelId: 'qwen3-local-cpu', agentEffort: 'medium', token: 'test-value-that-must-not-be-saved'
 };
 await mkdir(settingsFixture.workspacePath, { recursive: true });
 let instance, graphics, gpu;
@@ -67,13 +67,16 @@ async function uninstall() {
 async function verifyRestored(page) {
   graphics.phase('verify retained settings and world');
   const settings = await page.evaluate(() => window.tus.loadSettings());
-  for (const key of ['workspacePath', 'codexPath', 'threadId']) assert.equal(settings[key], settingsFixture[key], `${key} survives install/update`);
+  for (const key of ['workspacePath', 'codexPath', 'threadId', 'agentControlThreadId', 'agentModelId', 'agentEffort']) assert.equal(settings[key], settingsFixture[key], `${key} survives install/update`);
   const world = await page.evaluate(async () => { const s = await window.tus.loadSettings(); return window.tus.request({ ...s, path: '/state' }); });
   assert.equal(world.objects.length, 1);
   assert.equal(world.objects[0].type, 'bridge');
   assert.equal(world.objects[0].position.x, 7);
   assert.equal(await page.locator('#send').isDisabled(), true, 'installer must not invoke the model');
   const saved = JSON.parse(await readFile(path.join(dataDir, 'settings.json'), 'utf8'));
+  assert.equal(saved.agentControlThreadId, settingsFixture.agentControlThreadId, 'model preferences stay bound to the saved conversation');
+  assert.equal(saved.agentModelId, settingsFixture.agentModelId, 'agent model preference survives restart');
+  assert.equal(saved.agentEffort, settingsFixture.agentEffort, 'agent reasoning preference survives restart');
   assert.equal('token' in saved, false, 'session tokens must not be persisted');
 }
 await withSmokeCleanup(async () => {
