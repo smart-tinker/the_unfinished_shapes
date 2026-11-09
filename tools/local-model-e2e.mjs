@@ -129,6 +129,8 @@ try {
  assert.equal((await bridge.readControlState()).goal.status,'paused');
  await bridge.clearGoal();
  assert.equal((await bridge.readControlState()).goal,null);
+ assert.equal(bridge.turnId,null,'native Goal acceptance must not leave an active follow-up turn after pause and clear');
+ assert.notEqual(turnStatus,'inProgress','native Goal acceptance must finish without a hidden follow-up turn');
  assert.ok(goalUpdates.some(update=>update.status==='paused'),'pausing the Goal must emit its native status update');
  assert.equal(goalCleared,true,'clearing the Goal must emit the native cleared notification');
  goalAcceptance={supported:true,lifecycle:['created_active','native_turn_completed','paused','cleared'],modelTurnStarted:true,goalUpdates,runtime:initialControls.runtime};
