@@ -122,14 +122,22 @@ await withSmokeCleanup(async () => {
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < 14.5, 'Alice to walk back from the solid side');
   await alice.page.keyboard.up('a');
   await alice.page.waitForTimeout(300);
-  await alice.page.evaluate(() => document.activeElement?.blur());
-  await alice.page.keyboard.down('Space');
-  await alice.page.waitForFunction(() => {
-    const y = document.querySelector('#coordinates').textContent.match(/Y ([\d.-]+)/)?.[1];
-    return Number(y) > 0;
+  await alice.page.evaluate(() => {
+    document.activeElement?.blur();
+    window.__tusMovementKeys = [];
+    for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
+      if (['Space', 'KeyD'].includes(event.code)) window.__tusMovementKeys.push({ type, code: event.code, target: event.target?.tagName });
+    }, true);
   });
-  await alice.page.keyboard.up('Space');
   await alice.page.keyboard.down('d');
+  await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 14.68, 'Alice to reach the solid face');
+  await alice.page.keyboard.down('Space');
+  await alice.page.keyboard.up('Space');
+  console.log('Movement key input ' + JSON.stringify(await alice.page.evaluate(() => window.__tusMovementKeys)));
+  await waitForState(snapshot => {
+    const player = snapshot.players.find(item => item.id === 'alice');
+    return player?.position.x > 14.68 && player.position.y > 0;
+  }, 'Alice to steer over the supported edge while airborne');
   const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
   await alice.page.keyboard.up('d');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
