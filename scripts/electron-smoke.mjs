@@ -34,6 +34,17 @@ await withSmokeCleanup(async()=>{
  graphics.phase('world connection');
  await page.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
  await graphics.assertHealthy();
+ graphics.phase('agent controls, disconnected state and keyboard focus');
+ const beforeControls=await page.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
+ await page.locator('#agent-controls-open').click();
+ assert.equal(await page.locator('#agent-controls').isVisible(),true,'agent controls open from the game panel');
+ assert.match(await page.locator('#agent-controls-status').innerText(),/disconnected/i);
+ assert.equal(await page.locator('#goal-create').isDisabled(),true,'a disconnected Codex cannot start a Goal');
+ await page.keyboard.down('w'); await page.waitForTimeout(400); await page.keyboard.up('w');
+ const afterControls=await page.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
+ assert.deepEqual(afterControls.players.find(p=>p.id===beforeControls.me.id).position,beforeControls.players.find(p=>p.id===beforeControls.me.id).position,'WASD movement is frozen while the agent controls dialog is open');
+ await page.keyboard.press('Escape');
+ assert.equal(await page.locator('#agent-controls').isVisible(),false,'Escape closes controls without a mutation');
  graphics.phase('manual UI create, select, edit and remove');
  await manualEditing(page);
  graphics.phase('construction');
