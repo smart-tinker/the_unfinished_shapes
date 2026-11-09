@@ -17,7 +17,7 @@ const bridge = {
 };
 function updateChatControls() {}
 async function poll() { calls.push('poll'); }`);
-  h.load('function readSettings() {', "$(\\'save-world\\').addEventListener");
+    h.load('function readSettings() {', "$('save-world').addEventListener");
   h.element('workspace').value = '/new-workspace';
   h.element('codex').value = '/codex';
   h.element('server-url').value = 'http://world-a';
