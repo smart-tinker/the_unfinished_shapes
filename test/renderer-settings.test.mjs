@@ -8,7 +8,7 @@ function settingsHarness(controlState) {
   h.run(`let settings = { workspacePath: '/old-workspace', codexPath: '/codex', serverUrl: 'http://world-a', token: 'session-token', threadId: 'game-thread' };
 let connected = true, busy = false, settingsGeneration = 0, worldRevision = 1, objectSnapshot = '', worldState = {}, meId = 'player';
 let playerPosition = { x: 1, y: 0, z: 1 }, playerVelocityY = 0, jumpRequested = false, lastPosition = '', latestStateRevision = 1, localMovementVersion = 0;
-let scene = null, calls = [];
+let scene = null, calls = [], moveStarts = new Map();
 const liveControls = ${state};
 const bridge = {
   readAgentControls: async threadId => { calls.push('read:' + threadId); return liveControls; },
@@ -17,7 +17,7 @@ const bridge = {
 };
 function updateChatControls() {}
 async function poll() { calls.push('poll'); }`);
-  h.load('function readSettings() {', "$(\'save-world\').addEventListener");
+  h.load('function readSettings() {', "$(\\'save-world\\').addEventListener");
   h.element('workspace').value = '/new-workspace';
   h.element('codex').value = '/codex';
   h.element('server-url').value = 'http://world-a';
@@ -41,7 +41,7 @@ test('changing workspace is blocked while a paused Goal still has a running turn
 });
 
 test('an idle conversation can disconnect after fresh state confirms no active Goal or turn', async () => {
-  const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'idle', turnId: null, pendingApprovals: 0, goal: null });
+  const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'idle', pendingApprovals: 0, turnId: null, goal: null });
   await h.run('saveSettings()');
   assert.equal(h.run('settings.workspacePath'), '/new-workspace');
   assert.equal(h.run('settings.threadId'), '');
