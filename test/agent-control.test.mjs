@@ -24,7 +24,6 @@ function fixture(handler = () => undefined) {
         'thread/start': { thread: { id: 'game-thread', cwd, status: { type: 'idle' } } },
         'thread/read': { thread: { id: message.params.threadId, cwd, status: { type: 'idle' }, model: 'qwen3-local-cpu', reasoningEffort: 'medium' } },
         'model/list': { data: [{ id: 'qwen3-local-cpu', model: 'qwen3', displayName: 'Local Qwen', supportedReasoningEfforts: [{ reasoningEffort: 'medium' }], defaultReasoningEffort: 'medium' }] },
-        'experimentalFeature/list': { data: [{ name: 'goals', stage: 'stable', enabled: true, defaultEnabled: true }] },
         'thread/goal/get': { goal: null },
         'thread/goal/set': { goal: { threadId: message.params.threadId, objective: message.params.objective ?? 'Build a world', status: message.params.status ?? 'active' } },
         'thread/goal/clear': {},
@@ -49,6 +48,7 @@ test('agent status is read-only and reports native runtime, model catalog, and G
   assert.equal(state.goalSupported, true);
   assert.equal(state.models[0].id, 'qwen3-local-cpu');
   assert.equal(state.goal, null);
+  assert.equal(f.requests.some(request => request.method === 'experimentalFeature/list'), false);
   assert.equal(f.requests.some(request => request.method === 'turn/start'), false);
   assert.equal(f.requests.some(request => request.method === 'thread/goal/set'), false);
   f.bridge.stop();
@@ -100,17 +100,49 @@ test('model and reasoning overrides apply to the next turn only', async () => {
   f.bridge.stop();
 });
 
-test('unsupported native Goals are reported and never emulated with a prompt or turn loop', async () => {
-  const f = fixture(message => message.method === 'experimentalFeature/list'
-    ? { data: [{ name: 'goals', stage: 'stable', enabled: false, defaultEnabled: false }] }
-    : undefined);
+test('unsupported native Goals are detected by the native method, not experimentalFeature/list', async () => {
+  const f = fixture((message, reply) => {
+    if (message.method !== 'thread/goal/get') return undefined;
+    reply({ id: message.id, error: { code: -32601, message: 'Method not found' } });
+    return false;
+  });
   await f.start();
   const state = await f.bridge.readControlState();
   assert.equal(state.goalSupported, false);
+  assert.equal(state.goalReason, 'This Codex runtime does not expose native Goals.');
+  assert.equal(f.requests.some(request => request.method === 'experimentalFeature/list'), false);
   await assert.rejects(f.bridge.createGoal({ objective: 'Build', completionCriteria: 'Done' }), /not supported/i);
   assert.equal(f.requests.some(request => request.method === 'thread/goal/set'), false);
   assert.equal(f.requests.some(request => request.method === 'turn/start'), false);
   f.bridge.stop();
+});
+
+test('ephemeral conversations report Goals unavailable, while unrelated API errors stay unknown', async () => {
+  const ephemeral = fixture((message, reply) => {
+    if (message.method !== 'thread/goal/get') return undefined;
+    reply({ id: message.id, error: { code: -32600, message: 'ephemeral thread does not support goals: game-thread' } });
+    return false;
+  });
+  await ephemeral.start();
+  const ephemeralState = await ephemeral.bridge.readControlState();
+  assert.equal(ephemeralState.goalSupported, false);
+  assert.equal(ephemeralState.goalReason, 'This conversation cannot store native Goals.');
+  await assert.rejects(ephemeral.bridge.createGoal({ objective: 'Build', completionCriteria: 'Done' }), /cannot store/i);
+  assert.equal(ephemeral.requests.some(request => request.method === 'thread/goal/set'), false);
+  ephemeral.bridge.stop();
+
+  const unavailable = fixture((message, reply) => {
+    if (message.method !== 'thread/goal/get') return undefined;
+    reply({ id: message.id, error: { code: -32000, message: 'Temporary server error' } });
+    return false;
+  });
+  await unavailable.start();
+  const unavailableState = await unavailable.bridge.readControlState();
+  assert.equal(unavailableState.goalSupported, null);
+  assert.equal(unavailableState.goalReason, 'Could not verify native Goal support.');
+  await assert.rejects(unavailable.bridge.createGoal({ objective: 'Build', completionCriteria: 'Done' }), /could not verify/i);
+  assert.equal(unavailable.requests.some(request => request.method === 'thread/goal/set'), false);
+  unavailable.bridge.stop();
 });
 
 test('does not send with a different conversation if the model catalog resolves after context changes', async () => {
