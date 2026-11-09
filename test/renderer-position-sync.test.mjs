@@ -35,7 +35,7 @@ test('a newer server position for the same player is adopted and the next manual
   h.run('playerPosition.x += 0.25; localMovementVersion++');
   await h.run('syncPosition()');
   const sent = JSON.parse(h.run('JSON.stringify(sent)'));
-  assert.deepEqual(sent[0][2], { type: 'move', position: { x: 12.25, y: 0, z: 0 } });
+  assert.deepEqual(sent[0][2], { type: 'move', position: { x: 12.25, y: 0, z: 0 }, jump: false });
 });
 
 test('a delayed older world snapshot cannot undo a newer accepted position', () => {
@@ -112,7 +112,7 @@ test('the latest server-accepted move wins when an earlier manual request replie
   h.context.result = { ...h.context.start, type: 'tool-result', result: { success: true, contentItems: [{ type: 'inputText', text: '{"revision":2}' }] } };
   h.run('toolActivity(result)');
   assert.equal(h.run('playerPosition.x'), 12);
-  resolveMove({ revision: 3 });
+  resolveMove({ revision: 3, position: { x: 2, y: 0, z: 0 }, velocityY: 0 });
   await pending;
   assert.equal(h.run('playerPosition.x'), 2);
 });
