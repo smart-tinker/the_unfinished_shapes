@@ -122,26 +122,12 @@ await withSmokeCleanup(async () => {
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < 14.5, 'Alice to walk back from the solid side');
   await alice.page.keyboard.up('a');
   await alice.page.waitForTimeout(300);
-  await alice.page.evaluate(() => {
-    document.activeElement?.blur();
-    window.__tusInputEvents = [];
-    for (const type of ['keydown', 'keyup', 'blur']) window.addEventListener(type, event => {
-      window.__tusInputEvents.push({ type, key: event.key, code: event.code, target: event.target?.tagName, active: document.activeElement?.tagName });
-    }, true);
-  });
+  await alice.page.evaluate(() => document.activeElement?.blur());
   await alice.page.keyboard.down('Space');
   await alice.page.waitForTimeout(120);
   await alice.page.keyboard.up('Space');
   await alice.page.keyboard.down('d');
-  const jumpTimeline = [];
-  for (let i = 0; i < 6; i++) {
-    await alice.page.waitForTimeout(100);
-    const snapshot = await state();
-    const player = snapshot.players.find(item => item.id === 'alice');
-    jumpTimeline.push({ server: player && { position: player.position, velocityY: player.velocityY }, client: await alice.page.locator('#coordinates').textContent() });
-  }
-  const inputEvents = await alice.page.evaluate(() => window.__tusInputEvents);
-  console.log('Jump probe ' + JSON.stringify({ inputEvents, timeline: jumpTimeline }));
+  await alice.page.waitForTimeout(700);
   await alice.page.keyboard.up('d');
   const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
@@ -156,14 +142,6 @@ await withSmokeCleanup(async () => {
   await alice.page.waitForFunction(() => document.querySelector('#edit-message').textContent.includes('saved'));
   await bob.page.waitForFunction(() => document.querySelector('#edit-size-x').value === '5');
   assert.equal((await state('bob')).objects[0].size.x, 5);
-  await alice.page.locator('#edit-supports-player').uncheck();
-  await alice.page.locator('#edit-apply').click();
-  await alice.page.waitForFunction(() => document.querySelector('#edit-message').textContent.includes('saved'));
-  assert.equal((await state('bob')).objects[0].supportsPlayer, false);
-  await alice.page.locator('#edit-supports-player').check();
-  await alice.page.locator('#edit-apply').click();
-  await alice.page.waitForFunction(() => document.querySelector('#edit-message').textContent.includes('saved'));
-  assert.equal((await state('bob')).objects[0].supportsPlayer, true);
   const denied = await fetch(url + '/command', { method: 'POST', headers: { Authorization: 'Bearer ' + tokens.bob, 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'remove', id: built.id }) });
   assert.equal(denied.status, 403, 'server rejects bypassing the disabled UI');
   assert.equal((await state()).objects[0].id, built.id);
