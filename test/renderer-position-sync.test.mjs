@@ -97,3 +97,22 @@ test('a confirmed agent move is adopted unless newer keyboard input arrived afte
   assert.equal(h.run('playerPosition.x'), 14);
   assert.equal(h.run('latestStateRevision'), 3);
 });
+
+
+test('the latest server-accepted move wins when an earlier manual request replies later', async () => {
+  const h = activityHarness();
+  h.context.initial = state(1, 0);
+  h.run('renderWorld(initial)');
+  h.run('playerPosition.x=2; localMovementVersion++');
+  let resolveMove;
+  h.context.request = (...args) => new Promise(resolve => { h.context.manualRequest = args; resolveMove = resolve; });
+  const pending = h.run('syncPosition()');
+  h.context.start = { type: 'tool-start', threadId: 'thread-1', turnId: 'turn-1', id: 'agent-move', name: 'world_command', arguments: { command: { type: 'move', position: { x: 12, y: 1, z: 0 } } } };
+  h.run('toolActivity(start)');
+  h.context.result = { ...h.context.start, type: 'tool-result', result: { success: true, contentItems: [{ type: 'inputText', text: '{"revision":2}' }] } };
+  h.run('toolActivity(result)');
+  assert.equal(h.run('playerPosition.x'), 12);
+  resolveMove({ revision: 3 });
+  await pending;
+  assert.equal(h.run('playerPosition.x'), 2);
+});
