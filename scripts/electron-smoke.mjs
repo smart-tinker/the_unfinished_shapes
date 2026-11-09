@@ -1,6 +1,6 @@
 import {_electron as electron} from 'playwright-core';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,mkdir,writeFile,access,realpath} from 'node:fs/promises';
+import {mkdtemp,rm,mkdir,writeFile,access,realpath,readFile} from 'node:fs/promises';
 import os from 'node:os';
 import {observeGraphics,closeSmokeApp,withSmokeCleanup} from './graphics-smoke.mjs';
 import path from 'node:path';
