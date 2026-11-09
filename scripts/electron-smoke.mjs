@@ -11,8 +11,9 @@ await mkdir(fakeBin);await writeFile(fakeCodex,`#!/bin/sh\ntouch '${marker}'\nex
 const expectedCodexPath=await realpath(fakeCodex);
 const testEnv={...process.env,TUS_DATA_DIR:dir,PATH:fakeBin+path.delimiter+process.env.PATH};
 const packagedExecutable=process.env.TUS_SMOKE_EXECUTABLE;
-// Preserve the existing Linux CI exception only; native macOS uses its normal sandbox.
-const ciFlags=process.platform==='linux'?['--no-sandbox']:[];
+// Headless Linux runners use explicit SwiftShader to avoid unstable automatic fallback.
+// These flags apply only to smoke launches, never to normal application startup.
+const ciFlags=process.platform==='linux'?['--no-sandbox','--use-gl=angle','--use-angle=swiftshader']:[];
 const launchOptions={...(packagedExecutable?{executablePath:path.resolve(packagedExecutable)}:{}),args:[...(packagedExecutable?[]:['.']),...ciFlags],env:testEnv,timeout:30000};
 let app, graphics, gpu;
 async function launch(label) {

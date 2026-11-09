@@ -139,8 +139,7 @@ jobs:
         run: node scripts/release-candidate.mjs stage macos dist/candidate "$RELEASE_ID"
   linux:
     needs: [preflight, create-draft]
-    # Same verified graphics environment as CI.
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: write
@@ -165,7 +164,7 @@ jobs:
           tar -czf "dist/candidate/TheUnfinishedShapes-${VERSION}-linux-x64.tar.gz" -C dist TheUnfinishedShapes-linux-x64
           node scripts/release-candidate.mjs record linux dist/candidate
           tar -xzf "dist/candidate/TheUnfinishedShapes-${VERSION}-linux-x64.tar.gz" -C dist/extracted
-      - name: Test the extracted application with default graphics
+      - name: Test the extracted application with the CI software renderer
         env:
           TUS_SMOKE_EXECUTABLE: dist/extracted/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes
         run: xvfb-run --auto-servernum node scripts/electron-smoke.mjs
