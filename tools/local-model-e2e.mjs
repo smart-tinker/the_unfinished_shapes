@@ -114,7 +114,7 @@ try {
  assert.equal(initialControls.goalSupported,true,'the pinned Codex app-server must expose native Goals');
  assert.equal(initialControls.goal,null,'a new game conversation must start without a Goal');
  const design={objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#3366cc'};
- const objective=`Read the shared world, then build exactly one object by calling world_build exactly once with these exact JSON arguments: ${JSON.stringify(design)}. Do not call world_command, use shell tools, or change the design.`;
+ const objective=`Your first game-tool call must be world_state. Read its successful result and identify the current player and role. Do not call world_build before world_state succeeds. Then call world_build exactly once with these exact JSON arguments: ${JSON.stringify(design)}. Do not call world_command, use shell tools, or change the design.`;
  const createdGoal=await bridge.createGoal({objective,completionCriteria:'The server has persisted exactly one object matching the supplied design; report the result.'});
  assert.equal(createdGoal.threadId,initialControls.threadId);
  assert.equal(createdGoal.status,'active');
@@ -137,7 +137,7 @@ try {
  assert.ok(savedWorld,'No world state was persisted: the model did not perform a successful game action.');
  const state=JSON.parse(savedWorld);
  const acceptance=assertBuildAcceptance({events,state,design,ownerId:'cpu-test-builder'});
- assert.ok(events.some(event=>event.name==='world_state' && event.success), 'real agent must inspect the world');
+ const worldInspectionIndex=events.findIndex(event=>event.name==='world_state'&&event.success);const buildIndex=events.findIndex(event=>event.name==='world_build'&&event.success);assert.ok(worldInspectionIndex>=0,'real agent must inspect the world');assert.ok(worldInspectionIndex<buildIndex,'real agent must inspect the world before changing it');
  const observerResponse=await fetch(connection.url+'/state',{headers:{Authorization:'Bearer '+observerToken},signal:AbortSignal.timeout(5000)});
  assert.equal(observerResponse.status,200);
  const observerState=await observerResponse.json();
