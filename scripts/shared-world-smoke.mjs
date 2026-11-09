@@ -142,6 +142,13 @@ await withSmokeCleanup(async () => {
     for (const type of ['focus', 'blur']) window.addEventListener(type, event => {
       window.__tusMovementKeys.push({ type, target: event.target?.tagName, focused: document.hasFocus(), at: Math.round(performance.now()) });
     }, true);
+    const tracked = new WeakSet(), nativeHas = Set.prototype.has, nativeAdd = Set.prototype.add, nativeDelete = Set.prototype.delete, nativeClear = Set.prototype.clear;
+    let dHeld = false;
+    const setEvents = [];
+    Set.prototype.add = function(value) { if (value === 'd') { tracked.add(this); dHeld = true; setEvents.push({ type: 'add', at: Math.round(performance.now()) }); } return nativeAdd.call(this, value); };
+    Set.prototype.delete = function(value) { if (value === 'd' && tracked.has(this)) { dHeld = false; setEvents.push({ type: 'delete', at: Math.round(performance.now()) }); } return nativeDelete.call(this, value); };
+    Set.prototype.clear = function() { if (tracked.has(this) && nativeHas.call(this, 'd')) { dHeld = false; setEvents.push({ type: 'clear', at: Math.round(performance.now()) }); } return nativeClear.call(this); };
+    window.__tusMovementKeyProbe = () => ({ dHeld, events: [...setEvents] });
   });
   await focus(alice);
   await alice.page.keyboard.down('d');
@@ -158,7 +165,7 @@ await withSmokeCleanup(async () => {
     jumpTimeline.push({ server: player && { position: player.position, velocityY: player.velocityY }, client: await alice.page.locator('#coordinates').textContent(), focus: await alice.page.evaluate(() => ({ focused: document.hasFocus(), visibility: document.visibilityState, active: document.activeElement?.tagName })) });
     if (player?.position.x > 14.68 && player.position.y > 0) break;
   }
-  console.log('Movement probe ' + JSON.stringify({ keys: await alice.page.evaluate(() => window.__tusMovementKeys), timeline: jumpTimeline }));
+  console.log('Movement probe ' + JSON.stringify({ keys: await alice.page.evaluate(() => window.__tusMovementKeys), keySet: await alice.page.evaluate(() => window.__tusMovementKeyProbe()), timeline: jumpTimeline }));
   await alice.page.keyboard.up('Space');
   await waitForState(snapshot => {
     const player = snapshot.players.find(item => item.id === 'alice');
