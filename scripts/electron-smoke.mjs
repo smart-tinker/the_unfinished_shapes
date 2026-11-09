@@ -71,4 +71,4 @@ await withSmokeCleanup(async()=>{
  await assert.rejects(access(marker),'restart must not execute a discovered candidate');
  await close();
 },()=>close('final cleanup'),()=>rm(dir,{recursive:true,force:true}));
-console.log(`${packagedExecutable?'Packaged':'Source'} ${process.platform}/${process.arch} Electron smoke`);console.log('Electron smoke passed: WebGL startup, UI construction, settings repeated/cancel, safe Codex discovery/selection, persisted settings/thread ID/world after restart, authenticated API removal, no unsolicited model call. Canvas selection and graphical removal were not tested.');
+console.log(`${packagedExecutable?'Packaged':'Source'} ${process.platform}/${process.arch} Electron smoke`);console.log('Electron smoke passed: WebGL startup, UI construction, settings repeated/cancel, safe Codex discovery/selection, persisted settings/thread ID/world after restart, authenticated API removal, no unsolicited model call. Real canvas selection, UI editing and graphical removal passed before restart.');

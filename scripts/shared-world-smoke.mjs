@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { observeGraphics, closeSmokeApp, withSmokeCleanup } from './graphics-smoke.mjs';
 
+import { stopServerProcess } from './server-smoke-process.mjs';
 import { selectObject } from './ui-acceptance.mjs';
 
 const dir = await mkdtemp(path.join(os.tmpdir(), 'tus-shared-'));
@@ -31,13 +32,8 @@ async function startServer() {
   });
 }
 async function stopServer() {
-  const process = server; server = null;
-  if (!process || process.exitCode !== null) return;
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => { process.kill('SIGKILL'); reject(new Error('Shared server did not stop')); }, 10000);
-    process.once('exit', code => { clearTimeout(timeout); code === 0 ? resolve() : reject(new Error('Server exit ' + code)); });
-    process.kill('SIGTERM');
-  });
+  const child = server; server = null;
+  await stopServerProcess(child);
 }
 async function state(id = 'alice') {
   const response = await fetch(url + '/state', { headers: { Authorization: 'Bearer ' + tokens[id] }, signal: AbortSignal.timeout(5000) });
