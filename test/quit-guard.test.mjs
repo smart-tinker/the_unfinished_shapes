@@ -122,7 +122,7 @@ test('automatic quit confirmation is limited to an explicit CI smoke launch', ()
 test('shared-world smoke launch explicitly enables CI quit auto-confirm', async () => {
   const { readFile } = await import('node:fs/promises');
   const source = await readFile(new URL('../scripts/shared-world-smoke.mjs', import.meta.url), 'utf8');
-  const args = source.match(/args: \\[\\.\\.\\.\\(executable \\? \\[\\] : \\['\\.'\\]\\), ([^\\]]*)\\]/);
+  const args = source.match(/args: (.*?), env:/);
   assert.ok(args, 'shared-world smoke launch arguments are present');
   assert.match(args[1], /--tus-smoke-confirm-quit/);
 });
