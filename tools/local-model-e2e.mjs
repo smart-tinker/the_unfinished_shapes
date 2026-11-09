@@ -56,7 +56,7 @@ const cpuEvidence=createCpuEvidence();
 const diagnostics=createModelDiagnostics();
 let proxy,stage='initializing';
 const events=[];const started=Date.now();let failure;
-let assistantText='',turnStatus='not_started',goalAcceptance=null,goalUpdates=[],goalCleared=false;
+let assistantText='',turnStatus='not_started',goalAcceptance=null,goalUpdates=[],goalCleared=false,historyEvents=[],turnStartedCount=0,goalResumeAcceptance=null;
 try {
  modelProcess=spawn(llamaPath,['--model',modelPath,'--alias',model,'--host','127.0.0.1','--port','11445','--n-gpu-layers','0','--ctx-size','16384','--threads','4','--parallel','1','--jinja','--reasoning-budget','0','--temp','0','--seed','42','--log-verbosity','4','--log-colors','off'],{stdio:['ignore','pipe','pipe']});
  let modelExit;
@@ -114,7 +114,8 @@ try {
   } else if(event.type==='disconnected') rejectDone(new Error(event.message));
   else if(event.type==='notification' && event.method==='thread/goal/updated') goalUpdates.push({threadId:event.params?.threadId,status:event.params?.goal?.status});
   else if(event.type==='notification' && event.method==='thread/goal/cleared') goalCleared=true;
-  else if(event.type==='notification' && event.method==='turn/started') {turnStatus=event.params?.turn?.status ?? 'inProgress';stage='turn_started';}
+  else if(event.type==='history') historyEvents.push(event);
+  else if(event.type==='notification' && event.method==='turn/started') {turnStartedCount++;turnStatus=event.params?.turn?.status ?? 'inProgress';stage='turn_started';}
   else if(event.type==='notification' && event.method==='item/completed' && event.params?.item?.type==='agentMessage') {
    // Only synthetic test assistant output, never reasoning or arbitrary tool output.
    assistantText=String(event.params.item.text ?? '').replaceAll(token,'[redacted]').slice(0,4000);
@@ -149,6 +150,21 @@ try {
  assert.equal(pausedState.goal.status,'paused');
  assert.equal(pausedState.thread.status.type,'idle','pause plus stopping the current turn must leave the conversation idle');
  assert.equal(bridge.turnId,null,'no native turn may remain active before clearing the Goal');
+ const threadId=initialControls.threadId, turnCountBeforeResume=turnStartedCount;
+ bridge.stop();
+ stage='codex_restart_resume_paused_goal';
+ await bridge.start({codexPath,workspacePath:workspace,threadId});
+ const resumedState=await bridge.readControlState();
+ assert.equal(resumedState.thread.id,threadId,'restart must resume the same Codex conversation');
+ assert.equal(resumedState.thread.status.type,'idle','resume must not start a hidden turn');
+ assert.equal(resumedState.goal.status,'paused','native Goal state must survive app-server restart');
+ assert.equal(bridge.turnId,null,'resume must not create a second turn');
+ assert.equal(turnStartedCount,turnCountBeforeResume,'resume must not start another turn');
+ const restoredHistory=historyEvents.at(-1);
+ assert.equal(restoredHistory?.threadId,threadId);
+ assert.equal(restoredHistory?.available,true,'saved native conversation history must be restored');
+ assert.ok(restoredHistory.messages.length>0,'resumed history must contain prior conversation messages');
+ goalResumeAcceptance={threadId,goalStatus:resumedState.goal.status,threadStatus:resumedState.thread.status.type,historyMessages:restoredHistory.messages.length,turnStartedCount};
  await bridge.clearGoal();
  assert.equal((await bridge.readControlState()).goal,null);
  assert.equal(bridge.turnId,null,'native Goal acceptance must not leave an active follow-up turn after pause and clear');
@@ -170,7 +186,7 @@ try {
  assert.equal(observerState.me.id,'other-player');
  assert.deepEqual(observerState.objects,state.objects,'independent player sees the real agent construction');
  assert.equal(cpuEvidence.result().cpuOnly,true,'Positive CPU allocation was not observed, or GPU allocation contradicts CPU-only execution.');
- const evidence={status:'passed',acceptance,nativeGoal:goalAcceptance,transport:'real Codex app-server → local llama.cpp Responses API → world dynamic tool → persisted server state',model,modelDigest,cpuOnly:cpuEvidence.result().cpuOnly,requestedGpuLayers:0,cpuEvidence:cpuEvidence.result(),elapsedMs:Date.now()-started,toolCalls:events,turnStatus,stage,diagnostics:diagnostics.result(),assistantText,worldRevision:state.revision,object:{type:state.objects[0].type,position:state.objects[0].position,ownerId:state.objects[0].ownerId}};
+ const evidence={status:'passed',acceptance,nativeGoal:goalAcceptance,nativeGoalResume:goalResumeAcceptance,transport:'real Codex app-server → local llama.cpp Responses API → world dynamic tool → persisted server state',model,modelDigest,cpuOnly:cpuEvidence.result().cpuOnly,requestedGpuLayers:0,cpuEvidence:cpuEvidence.result(),elapsedMs:Date.now()-started,toolCalls:events,turnStatus,stage,diagnostics:diagnostics.result(),assistantText,worldRevision:state.revision,object:{type:state.objects[0].type,position:state.objects[0].position,ownerId:state.objects[0].ownerId}};
  console.log(JSON.stringify(evidence,null,2));
  if(process.env.TUS_TEST_REPORT) await writeFile(path.resolve(process.env.TUS_TEST_REPORT),JSON.stringify(evidence,null,2)+'\n');
 } catch(error) {
