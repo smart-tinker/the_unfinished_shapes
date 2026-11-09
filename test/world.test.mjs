@@ -21,7 +21,7 @@ test('vectors, colors and corrupt saved data are rejected',()=>{
  assert.throws(()=>validateWorld({version:2,revision:0,objects:[],players:[]}));
 });
 test('move updates only the authenticated player and keeps height server-owned',()=>{
- const state=applyCommand(emptyWorld(),builder,{type:'move',id:'bob',position:{x:1,y:2,z:3}}).state;
+ const state=applyCommand(emptyWorld(),builder,{type:'move',position:{x:1,y:2,z:3}}).state;
  assert.deepEqual(state.players,[{id:'alice',position:{x:1,y:0,z:3},velocityY:0}]);
 });
 test('update changes only supplied fields and preserves object identity',()=>{
