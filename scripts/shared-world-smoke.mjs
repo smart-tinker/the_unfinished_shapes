@@ -86,6 +86,7 @@ async function close(client) {
 await withSmokeCleanup(async () => {
   await startServer();
   const alice = await launch('alice'), bob = await launch('bob');
+  await alice.page.bringToFront();
   const ready = await waitForState(snapshot => ['alice', 'bob'].every(id => snapshot.players.some(player => player.id === id)), 'both clients to publish their initial position');
   await Promise.all(clients.map(client => client.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, ready.revision)));
 
