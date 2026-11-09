@@ -24,7 +24,16 @@ async function ghResponse(args, run) {
 }
 
 export function ghRequest(run = execute) {
-  return endpoint => ghResponse(['api', '--method', 'GET', '--include', endpoint], run);
+  return async endpoint => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await ghResponse(['api', '--method', 'GET', '--include', endpoint], run);
+      } catch (error) {
+        if (attempt >= 2 || !/GitHub tag request (?:failed without an HTTP response|returned an invalid HTTP response)\.$/.test(error.message)) throw error;
+        await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+  };
 }
 
 export function ghCreateTag(run = execute) {
