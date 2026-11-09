@@ -12,12 +12,15 @@ concurrency:
 jobs:
   probe:
     if: github.event.repository.private == false
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
-        mode: [default, mesa]
+        include:
+          - { os: ubuntu-latest, mode: swiftshader }
+          - { os: ubuntu-22.04, mode: mesa }
+          - { os: ubuntu-22.04, mode: default }
     steps:
       - uses: actions/checkout@v4
         with:

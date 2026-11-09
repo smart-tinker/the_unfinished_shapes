@@ -8,7 +8,7 @@ import { withSmokeCleanup } from './graphics-smoke.mjs';
 
 // A standalone context isolates runner graphics from the game and its saved data.
 const mode = process.argv[2] || 'default';
-assert.ok(['default', 'mesa'].includes(mode));
+assert.ok(['default', 'mesa', 'swiftshader'].includes(mode));
 const directory = await mkdtemp(path.join(os.tmpdir(), 'tus-webgl-probe-'));
 const main = path.join(directory, 'main.cjs');
 await writeFile(main, [
@@ -21,7 +21,7 @@ let app;
 const gpu = await createGpuDiagnostics('standalone-' + mode);
 await withSmokeCleanup(async () => {
   app = await electron.launch({
-    args: [main, '--no-sandbox', ...gpu.args, ...(mode === 'mesa' ? ['--use-gl=angle', '--use-angle=gl'] : [])],
+    args: [main, '--no-sandbox', ...gpu.args, ...(mode !== 'default' ? ['--use-gl=angle', '--use-angle=' + (mode === 'mesa' ? 'gl' : 'swiftshader')] : [])],
     env: { ...process.env, ...(mode === 'mesa' ? { LIBGL_ALWAYS_SOFTWARE: '1', GALLIUM_DRIVER: 'llvmpipe' } : {}) },
     timeout: 30000
   });
