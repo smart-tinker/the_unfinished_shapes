@@ -40,9 +40,11 @@ test('an ordinary request is not labeled as Goal work while an active Goal exist
     addMessage = (text, kind = 'system') => { const message = { textContent: text, kind, querySelector: () => null }; capturedMessages.push(message); return message; };`);
   await h.element('chat-form').listeners.submit({ preventDefault() {} });
   h.run("codexEvent({ type: 'notification', method: 'turn/started', params: { threadId: 'thread-1' } })");
-  assert.equal(h.element('agent-status').textContent, 'Working on your request…');
+  assert.equal(h.element('agent-status').textContent, 'Codex turn in progress');
   h.run("codexEvent({ type: 'notification', method: 'item/agentMessage/delta', params: { threadId: 'thread-1', delta: 'Here is the result.' } })");
   assert.equal(h.run('capturedMessages[1].kind'), 'assistant');
+  h.run("streamMessage = null; codexEvent({ type: 'notification', method: 'item/completed', params: { threadId: 'thread-1', item: { type: 'agentMessage', text: 'Complete reply.' } } })");
+  assert.equal(h.run('capturedMessages[2].kind'), 'assistant');
 });
 
 test('disconnect never presents the agent as idle or the Goal as stopped', () => {
