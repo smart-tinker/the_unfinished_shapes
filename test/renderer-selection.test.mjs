@@ -21,6 +21,7 @@ function selectionHarness() {
   camera:{},
   THREE:{BoxHelper:class {constructor(mesh,color){this.mesh=mesh;this.color=color;this.geometry={dispose(){}};this.material={dispose(){}};}}},
  });
+ h.run('let movePreview=null,dragCandidate=null;');
  h.load('function selectObject(', 'function renderWorld(');
  h.context.objects=objects;
  return h;
@@ -70,6 +71,7 @@ test('group move preview applies one snapped delta and preserves relative positi
   ['two',{position:{set(x,y,z){Object.assign(positions.two,{x,y,z});}}}],
  ]);
  h.context.placementPosition=()=>({x:5,y:1,z:3});
+ h.context.first=first;h.context.second=second;
  h.element('move-snap-enabled').checked=false;
  h.load('function setMovePreviewPosition(', 'function refreshMovePreview(');
  h.run("let sends=[];function command(body){sends.push(body)};let movePreview={objectId:'one',object:first,objects:[first,second],ghost:ghosts.get('one'),ghosts,plane:'xz'}");
