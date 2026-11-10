@@ -24,7 +24,7 @@ jobs:
   linux-client:
     needs: test
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,6 +42,12 @@ jobs:
         env:
           TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes
         run: xvfb-run --auto-servernum node scripts/shared-world-smoke.mjs
+      - name: Bounded packaged-world performance
+        env:
+          TUS_BENCHMARK: '1'
+          TUS_BENCHMARK_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes
+        run: xvfb-run --auto-servernum node scripts/performance-benchmark.mjs
   model:
     needs: test
     uses: ./.github/workflows/local-cpu-model.yml

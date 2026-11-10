@@ -3,10 +3,12 @@ import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { applyCommand, emptyWorld, validateWorld, mechanics, WorldError } from './world.mjs';
 
-export async function createWorldServer({dataPath, users, host = '127.0.0.1', port = 4174} = {}) {
+export async function createWorldServer({dataPath, users, host = '127.0.0.1', port = 4174, onPersistenceSample} = {}) {
   if (!dataPath || typeof dataPath !== 'string') throw new Error('dataPath is required.');
+  if (onPersistenceSample !== undefined && typeof onPersistenceSample !== 'function') throw new Error('onPersistenceSample must be a function.');
   if (!users || typeof users !== 'object' || Array.isArray(users) || !Object.keys(users).length) throw new Error('Configure at least one user token.');
   const identities = new Set();
   for (const [token,user] of Object.entries(users)) {
@@ -21,11 +23,23 @@ export async function createWorldServer({dataPath, users, host = '127.0.0.1', po
   const limits = new Map();
   // shortcut: gravity advances on move requests only; add a server tick if falling must continue while disconnected or during server downtime.
   const movementTimes = new Map();
-  async function save(next) {
+  async function save(next, commandType) {
     await mkdir(path.dirname(dataPath),{recursive:true});
     const temporary = `${dataPath}.${randomUUID()}.tmp`;
-    try { await writeFile(temporary,JSON.stringify(next),{flag:'wx',mode:0o600}); await rename(temporary,dataPath); }
-    catch(error) { await unlink(temporary).catch(()=>{}); throw error; }
+    const measure = typeof onPersistenceSample === 'function';
+    const started = measure ? performance.now() : 0;
+    try {
+      const encoded = JSON.stringify(next);
+      const serializedAt = measure ? performance.now() : 0;
+      await writeFile(temporary,encoded,{flag:'wx',mode:0o600});
+      const writtenAt = measure ? performance.now() : 0;
+      await rename(temporary,dataPath);
+      if (measure) {
+        const sample = {commandType,objects:next.objects.length,players:next.players.length,bytes:Buffer.byteLength(encoded),serializeMs:serializedAt-started,writeMs:writtenAt-serializedAt,renameMs:performance.now()-writtenAt};
+        // Metrics are advisory and cannot turn a committed write into a failed command.
+        try { onPersistenceSample(sample); } catch {}
+      }
+    } catch(error) { await unlink(temporary).catch(()=>{}); throw error; }
   }
   function json(res,status,value) { res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'}); res.end(JSON.stringify(value)); }
   const server = http.createServer(async (req,res) => {
@@ -58,7 +72,7 @@ export async function createWorldServer({dataPath, users, host = '127.0.0.1', po
         const movedAt=Date.now(), previousMove=movementTimes.get(actor.id);
         const deltaSeconds=command?.type==='move'&&previousMove!==undefined ? Math.min(.25,Math.max(0,(movedAt-previousMove)/1000)) : 0;
         const update = applyCommand(state,actor,command,deltaSeconds);
-        await save(update.state);
+        await save(update.state,command.type);
         state=update.state;
         if(command?.type==='move')movementTimes.set(actor.id,movedAt);
         return update.result;
