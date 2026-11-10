@@ -53,6 +53,18 @@ test('apply sends changed fields only and hydrates confirmed server response', a
   assert.equal(h.element('edit-fields').disabled, false);
 });
 
+test('numeric position edits update the local drag ghost before Apply', () => {
+  const h = editingHarness();
+  h.run("movePreview={previewPosition:{x:0,y:1,z:0},ghost:{position:{set(x,y,z){this.x=x;this.y=y;this.z=z}}}}");
+  h.element('edit-position-x').value = '5';
+  h.element('edit-position-y').value = '3';
+  h.element('edit-position-z').value = '-2';
+  h.element('edit-form').listeners.input({ target: { id: 'edit-position-y' } });
+  assert.deepEqual(JSON.parse(h.run('JSON.stringify(movePreview.previewPosition)')), { x: 5, y: 3, z: -2 });
+  assert.deepEqual(JSON.parse(h.run('JSON.stringify([movePreview.ghost.position.x,movePreview.ghost.position.y,movePreview.ghost.position.z])')), [5, 3, -2]);
+  assert.equal(h.run('inspectorDirty'), true);
+});
+
 test('unchanged inspector sends no mutation', async () => {
   const h = editingHarness(); await h.submit();
   assert.equal(h.run('sends.length'), 0);
