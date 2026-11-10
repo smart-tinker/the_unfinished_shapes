@@ -4,7 +4,7 @@ import { rendererHarness } from './support/renderer-harness.mjs';
 
 function harness() {
   const h = rendererHarness();
-  h.run(`let settings = { threadId: 'thread-1' }, connected = false, busy = false, streamMessage = null, agentControlState = null, goalMessageContextId = null;
+  h.run(`let settings = { threadId: 'thread-1' }, connected = false, busy = false, streamMessage = null, agentControlState = null, goalMessageContextId = null, agentControlRead = 0;
     function activityThread() {} function refreshAgentControls() {} function updateChatControls() {}
     function notificationActivity() {} function toolActivity() {} function addMessage() {}`);
   h.load('function codexEvent(event) {', 'try { initScene(); }');
