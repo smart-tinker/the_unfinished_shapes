@@ -1,0 +1,55 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { rendererHarness } from './support/renderer-harness.mjs';
+
+function fullscreenHarness({ focusedTag = 'BODY', fullscreen = true, dragging = false } = {}) {
+  const h = rendererHarness();
+  const listeners = {};
+  h.context.toggleCalls = [];
+  Object.assign(h.context, {
+    window: { addEventListener: (name, listener) => { listeners[name] = listener; } },
+    document: { activeElement: { tagName: focusedTag }, querySelector: () => null },
+  });
+  h.run(`let keys = new Set(), dragCandidate = null, movePreview = null, jumpRequested = false;
+    let isFullscreen = ${fullscreen}, cancelled = 0;
+    function cancelMovePreview() { dragCandidate = null; movePreview = null; cancelled++; }
+    const bridge = { toggleFullscreen: () => { toggleCalls.push('toggle'); isFullscreen = !isFullscreen; } };
+    if (${dragging}) movePreview = { objectId: 'shape-1' };`);
+  h.load("window.addEventListener('keydown', event => {", "window.addEventListener('keyup'");
+  return { h, keydown: listeners.keydown };
+}
+
+function press(keydown, code, key = code) {
+  const event = { code, key, repeat: false, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  keydown(event);
+  return event;
+}
+
+test('F11 toggles native fullscreen without becoming a game movement key', () => {
+  const { h, keydown } = fullscreenHarness({ fullscreen: false });
+  const event = press(keydown, 'F11');
+  assert.deepEqual(h.context.toggleCalls, ['toggle']);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(h.run("keys.has('f11')"), false);
+});
+
+test('Escape exits fullscreen only after higher-priority UI and drag handling', () => {
+  const normal = fullscreenHarness();
+  const event = press(normal.keydown, 'Escape');
+  assert.deepEqual(normal.h.context.toggleCalls, ['toggle']);
+  assert.equal(event.defaultPrevented, true);
+
+  const input = fullscreenHarness({ focusedTag: 'TEXTAREA' });
+  press(input.keydown, 'Escape');
+  assert.deepEqual(input.h.context.toggleCalls, [], 'typing focus keeps Escape local to the field');
+
+  const dialog = fullscreenHarness();
+  dialog.h.context.document.querySelector = selector => selector === 'dialog[open]' ? {} : null;
+  press(dialog.keydown, 'Escape');
+  assert.deepEqual(dialog.h.context.toggleCalls, [], 'an open dialog keeps Escape');
+
+  const drag = fullscreenHarness({ dragging: true });
+  press(drag.keydown, 'Escape');
+  assert.deepEqual(drag.h.context.toggleCalls, [], 'Escape cancels the local preview before fullscreen');
+  assert.equal(drag.h.run('cancelled'), 1);
+});
