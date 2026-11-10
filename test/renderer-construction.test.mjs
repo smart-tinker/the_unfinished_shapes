@@ -350,6 +350,24 @@ test('world lighting Preview and Cancel are local; Apply sends one versioned com
  assert.deepEqual(h.context.worldState.lighting,{version:3,ambientIntensity:1.2,sunIntensity:2.4});
 });
 
+test('connection settings cannot change while a shared lighting Apply is unresolved',async()=>{
+ const h=rendererHarness(),effects=[];
+ h.context.editing=false;h.context.worldLightingPreview={attempted:true};
+ h.context.settings={workspacePath:'old',codexPath:'codex',serverUrl:'http://old',token:'',threadId:'',lightingQuality:'full'};
+ h.context.readSettings=()=>({...h.context.settings,serverUrl:'http://new'});
+ h.context.connected=false;h.context.movePreview=null;h.context.dragCandidate=null;h.context.inspectorDirty=false;
+ h.context.clearAgentBuildPreview=()=>effects.push('clear-preview');
+ h.context.cancelMovePreview=()=>{};h.context.updateChatControls=()=>{};h.context.updateWorldLighting=()=>{};
+ h.context.bridge={disconnectCodex:async()=>effects.push('disconnect'),saveSettings:async()=>effects.push('save-settings')};
+ h.context.poll=async()=>effects.push('poll');h.context.worldState={lighting:{version:0,ambientIntensity:2.6,sunIntensity:3.1},objects:[]};
+ h.context.worldRevision=0;h.context.objectSnapshot='';h.context.lightingInputVersion=-1;h.context.lampLights=new Map();
+ h.context.meId=null;h.context.playerPosition={x:0,y:0,z:0};h.context.playerVelocityY=0;h.context.jumpRequested=false;h.context.lastPosition='';
+ h.context.latestStateRevision=-1;h.context.localMovementVersion=0;h.context.moveStarts=new Map();h.context.scene=null;
+ h.load('async function saveSettings()', "$('save-world').addEventListener");
+ await assert.rejects(h.run('saveSettings()'),/shared lighting Apply.*resolve/i);
+ assert.deepEqual(effects,[]);
+});
+
 test('late lighting Apply from an old connection cannot overwrite the new world',async()=>{
  const h=rendererHarness();h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};
  h.context.settingsGeneration=0;h.context.latestStateRevision=7;h.context.worldRevision=7;
