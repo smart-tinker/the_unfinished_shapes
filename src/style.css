@@ -30,3 +30,5 @@
 .agent-goal-summary strong{font-size:10px;color:var(--amber)}
 .agent-goal-summary p{font-size:10px;line-height:1.4;max-height:3.8em;overflow:hidden;margin:4px 0 7px;white-space:pre-wrap;overflow-wrap:anywhere}
 .agent-goal-summary button{padding:5px 8px}
+
+#selection-rectangle{position:fixed;z-index:4;border:1px solid var(--amber);background:#f2c56d33;pointer-events:none}#box-select-toggle[aria-pressed=true]{border-color:var(--amber);background:#514731;color:var(--amber)}#group-controls .edit-actions{margin:0}
