@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyWorld,applyCommand,validateWorld} from '../src/world.mjs';
+import {emptyWorld,applyCommand,validateWorld,mechanics} from '../src/world.mjs';
 const builder={id:'alice',role:'builder'};
 const build={type:'build',objectType:'block',position:{x:0,y:1,z:0}};
 test('build is immutable and ownership is server-derived',()=>{
@@ -243,4 +243,48 @@ test('group move rejects mixed ownership, missing IDs, stale positions, duplicat
   assert.throws(()=>applyCommand(snapshot,actor,command),{code});
   assert.deepEqual(snapshot,original,code);
  }
+});
+
+
+test('stairs and ramps are explicit world mechanics with a saved uphill direction',()=>{
+ for(const [objectType,direction] of [['stairs','north'],['ramp','east']]){
+  const {state,result}=applyCommand(emptyWorld(),builder,{type:'build',objectType,direction,position:{x:0,y:1,z:0},size:{x:4,y:2,z:8}});
+  assert.ok(mechanics.includes(objectType));
+  assert.equal(result.object.direction,direction);
+  assert.deepEqual({blocksMovement:result.object.blocksMovement,supportsPlayer:result.object.supportsPlayer},{blocksMovement:true,supportsPlayer:true});
+  assert.equal(validateWorld(state).objects[0].direction,direction);
+ }
+});
+
+test('stairs and ramps reject invalid or missing directions and corrupt saved directions',()=>{
+ for(const objectType of ['stairs','ramp']){
+  for(const direction of [undefined,'up','north-east',null,1]){
+   const command={type:'build',objectType,position:{x:0,y:1,z:0},size:{x:4,y:2,z:8}};
+   if(direction!==undefined)command.direction=direction;
+   assert.throws(()=>applyCommand(emptyWorld(),builder,command),{code:'invalid_direction'});
+  }
+  const corrupt={version:1,revision:1,objects:[{id:objectType,type:objectType,direction:'up',position:{x:0,y:1,z:0},size:{x:4,y:2,z:8},color:'#c8a570',ownerId:'alice',blocksMovement:true,supportsPlayer:true}],players:[]};
+  assert.throws(()=>validateWorld(corrupt),{code:'invalid_state'});
+ }
+});
+
+test('a north-facing ramp carries manual and agent movement up its continuous slope',()=>{
+ const ramp={type:'build',objectType:'ramp',direction:'north',position:{x:0,y:1,z:10},size:{x:4,y:2,z:8}};
+ let world=applyCommand(emptyWorld(),builder,ramp).state;
+ for(let z=1.25;z<=15;z+=1.25)world=move(world,{x:0,y:0,z});
+ for(let z=13.75;z>=6.25;z-=1.25)world=move(world,{x:0,y:0,z});
+ const manual=player(world);
+ const agentState=applyCommand(world,{id:'bob',role:'builder'},{type:'move',position:{x:0,y:0,z:6.25}}).state.players.find(item=>item.id==='bob');
+ assert.ok(manual.position.y>1.5,JSON.stringify(manual.position));
+ assert.ok(manual.position.y<=2+1e-6,JSON.stringify(manual.position));
+ assert.deepEqual(agentState.position,manual.position);
+});
+
+test('stairs provide four equal walkable rises toward their saved cardinal direction',()=>{
+ const stair={type:'build',objectType:'stairs',direction:'east',position:{x:10,y:1,z:0},size:{x:8,y:2,z:4}};
+ let world=applyCommand(emptyWorld(),builder,stair).state;
+ for(let x=1.25;x<=15;x+=1.25)world=move(world,{x,y:0,z:0});
+ for(let x=13.75;x>=6.25;x-=1.25)world=move(world,{x,y:0,z:0});
+ assert.ok(player(world).position.y>1.5,JSON.stringify(player(world).position));
+ assert.ok(player(world).position.y<=2+1e-6,JSON.stringify(player(world).position));
 });
