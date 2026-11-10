@@ -154,19 +154,20 @@ await withSmokeCleanup(async () => {
   await alice.page.waitForFunction(text => document.querySelector('#coordinates').textContent === text, expectedAgentCoordinates);
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, agentMove.revision);
   const acceptedAgentPosition = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x === agentMove.position.x, 'the agent move to be visible in the shared state');
+  const acceptedAgentX = acceptedAgentPosition.players.find(player => player.id === 'alice').position.x;
 
   await focus(alice);
   await alice.page.keyboard.down('d');
   let manualMove;
   try {
-    manualMove = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x > acceptedAgentPosition.players.find(player => player.id === 'alice').position.x, 'manual movement to continue from the agent position');
+    manualMove = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x > acceptedAgentX, 'manual movement to continue from the agent position');
   } finally {
     await alice.page.keyboard.up('d');
   }
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, manualMove.revision);
   const observedMove = (await state('bob')).players.find(player => player.id === 'alice');
   assert.ok(observedMove.position.x > acceptedAgentPosition.players.find(player => player.id === 'alice').position.x, 'the second client sees Alice move farther under keyboard control');
-  assert.ok(Number((await alice.page.locator('#coordinates').textContent()).match(/X ([\d.-]+)/)?.[1]) > 12, 'the local GUI displays movement continuing from the agent destination');
+  await alice.page.waitForFunction(minimum => Number(document.querySelector('#coordinates').textContent.match(/X ([\d.-]+)/)?.[1]) > minimum, acceptedAgentX);
   alice.graphics.phase('manual shared construction');
   await alice.page.locator('#build-x').fill('16');
   await alice.page.locator('#build-z').fill('0');
