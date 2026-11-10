@@ -14,6 +14,11 @@ export async function fullscreenAcceptance(app, page) {
     const settings = await window.tus.loadSettings();
     return window.tus.request({ ...settings, path: '/state' });
   });
+  await page.waitForFunction(async () => {
+    const settings = await window.tus.loadSettings();
+    const state = await window.tus.request({ ...settings, path: '/state' });
+    return state.players?.some(player => player.id === state.me?.id) === true;
+  }, null, { timeout: 10000, polling: 250 });
   const before = await readWorld();
   const normalSize = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize());
   const button = page.locator('#fullscreen-toggle');
@@ -46,6 +51,7 @@ export async function fullscreenAcceptance(app, page) {
   await expectFullscreen(false);
 
   const after = await readWorld();
+  assert.deepEqual(after.players, before.players, 'fullscreen leaves player position unchanged');
   assert.equal(after.revision, before.revision, 'fullscreen never sends a world command');
   assert.deepEqual(after.objects, before.objects);
   assert.deepEqual(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize()), normalSize, 'exiting fullscreen restores windowed bounds');
