@@ -76,10 +76,9 @@ export function captureSceneSnapshot(state, view, worldConnectionId) {
     totalPlayerCount:players.length,includedPlayerCount:Math.min(players.length,MAX_SCENE_PLAYERS),playersTruncated:players.length>MAX_SCENE_PLAYERS};
 }
 
-export async function executeGameTool(event,{url,token,connectionId},{sceneSnapshot}={}) {
+export async function executeGameTool(event,{url,token,connectionId}) {
   if(!['world_state','world_build','world_command'].includes(event.name))return toolResult(false,{error:'Unknown game tool'});
   const isRead=event.name==='world_state';
-  if(isRead&&sceneSnapshot&&sceneSnapshot.worldConnectionId!==connectionId)return toolResult(false,{error:'Scene context belongs to a different world connection; refresh before acting.'});
   let command=event.arguments?.command;
   if(event.name==='world_build'){
     const design=event.arguments,fields=['objectType','position','size','color'];
@@ -91,16 +90,7 @@ export async function executeGameTool(event,{url,token,connectionId},{sceneSnaps
   try{
     const response=await fetch(url+(isRead?'/state':'/command'),{method:isRead?'GET':'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:isRead?undefined:JSON.stringify(command),signal:AbortSignal.timeout(5000),redirect:'error'});
     const value=await response.json();
-    if(!response.ok||!isRead||!sceneSnapshot)return toolResult(response.ok,value);
-    const existingIds=new Set(value.objects.map(object=>object.id)),missingSelectedIds=sceneSnapshot.selectedIds.filter(id=>!existingIds.has(id));
-    const current=captureSceneSnapshot(value,{revision:value.revision,selectedIds:sceneSnapshot.selectedIds.filter(id=>existingIds.has(id)),camera:sceneSnapshot.camera},connectionId);
-    return toolResult(true,{...value,objects:current.objects,players:current.players,totalObjectCount:current.totalObjectCount,
-      includedObjectCount:current.includedObjectCount,objectsTruncated:current.objectsTruncated,totalPlayerCount:current.totalPlayerCount,
-      includedPlayerCount:current.includedPlayerCount,playersTruncated:current.playersTruncated,
-      sceneContext:{worldConnectionId:connectionId,submittedRevision:sceneSnapshot.revision,currentRevision:current.revision,
-        changedSinceSubmit:current.revision!==sceneSnapshot.revision,selectedIds:[...sceneSnapshot.selectedIds],missingSelectedIds,
-        camera:sceneSnapshot.camera,submittedObjects:sceneSnapshot.objects,submittedPlayers:sceneSnapshot.players,
-        submittedTotalObjectCount:sceneSnapshot.totalObjectCount,submittedTotalPlayerCount:sceneSnapshot.totalPlayerCount,
-        submittedObjectsTruncated:sceneSnapshot.objectsTruncated,submittedPlayersTruncated:sceneSnapshot.playersTruncated}});
+    if(!response.ok||!isRead)return toolResult(response.ok,value);
+    return toolResult(true,{...value,worldConnectionId:connectionId});
   }catch(error){return toolResult(false,{error:error.message});}
 }

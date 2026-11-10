@@ -475,7 +475,7 @@ $('chat-form').addEventListener('submit',async event=>{
   try{
     const result=await bridge.sendPrompt(text,sceneContextForPrompt()),context=result?.sceneContext;
     $('scene-context-status').textContent=context
-      ? `Scene context captured for this request: revision ${context.revision}, ${context.selectedCount} selected, ${context.includedObjectCount}/${context.totalObjectCount} objects${context.truncated?' (partial)':''}${context.attached===false?'; turn association not confirmed':''}.`
+      ? `Scene context captured for this request: revision ${context.revision}, ${context.selectedCount} selected, ${context.includedObjectCount}/${context.totalObjectCount} objects${context.truncated?' (partial)':''}.`
       : 'Scene context could not be confirmed for this request.';
   }catch(error){
     $('scene-context-status').textContent='Scene context was not sent: '+error.message;

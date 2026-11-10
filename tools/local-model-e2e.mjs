@@ -96,7 +96,7 @@ try {
  const providerBase=`http://127.0.0.1:${proxy.address().port}/v1`;
  await writeFile(path.join(home,'config.toml'),`model = ${JSON.stringify(model)}\nmodel_provider = "local_cpu"\n[model_providers.local_cpu]\nname = "Local CPU test only"\nbase_url = ${JSON.stringify(providerBase)}\nwire_api = "responses"\nrequires_openai_auth = false\n`);
  const address=await server.start();
- const connection={url:`http://127.0.0.1:${address.port}`,token};
+ const connection={url:`http://127.0.0.1:${address.port}`,token,connectionId:randomBytes(16).toString('hex')};
  bridge=new CodexBridge({timeoutMs:30000,spawnProcess:(exe,args,options)=>(codexProcess=spawn(exe,args,{...options,env:{PATH:process.env.PATH,HOME:dir,USERPROFILE:dir,TMPDIR:dir,TEMP:dir,TMP:dir,CODEX_HOME:home,NO_PROXY:'127.0.0.1,localhost',no_proxy:'127.0.0.1,localhost'}}))});
  let resolveDone,rejectDone;
  const done=new Promise((resolve,reject)=>{resolveDone=resolve;rejectDone=reject;});
