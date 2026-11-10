@@ -312,17 +312,17 @@ test('stairs and ramps are walkable in every cardinal direction and ignore clien
  }
 });
 
-test('stairs do not step the player into a low ceiling',()=>{
+test('stairs keep the player below a low ceiling until it is cleared',()=>{
  let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'stairs',direction:'east',position:{x:10,y:1,z:0},size:{x:8,y:2,z:4}}).state;
  world.objects.push({id:'low-ceiling',type:'block',position:{x:11,y:3.9,z:0},size:{x:2,y:1,z:4},color:'#c8a570',ownerId:'alice',blocksMovement:true,supportsPlayer:true});
  world.players.push({id:'alice',position:{x:5,y:0,z:0},velocityY:0});
- const trajectory=[];
- for(const x of [6.25,7.5,8.5,9.5,10.5,11.5,11.9,12.01,12.5]) {
-  world=move(world,{x,y:500,z:0});
-  trajectory.push(structuredClone(player(world).position));
- }
- const current=player(world), evidence=JSON.stringify({current,trajectory});
- assert.equal(current.position.y,1.5,evidence);
- assert.ok(current.position.x<12,evidence);
- assert.ok(current.position.y+1.62<=3.4+1e-6,evidence);
+ for(const x of [6.25,7.5,8.5,9.5,10.5,11.5,12.01])world=move(world,{x,y:500,z:0});
+ const underCeiling=player(world);
+ assert.ok(underCeiling.position.x<12,JSON.stringify(underCeiling));
+ assert.equal(underCeiling.position.y,1.5,JSON.stringify(underCeiling));
+ assert.ok(underCeiling.position.y+1.62<=3.4+1e-6,JSON.stringify(underCeiling));
+ world=move(world,{x:12.5,y:500,z:0});
+ const beyondCeiling=player(world);
+ assert.ok(beyondCeiling.position.x>=12.32,JSON.stringify(beyondCeiling));
+ assert.equal(beyondCeiling.position.y,2,JSON.stringify(beyondCeiling));
 });
