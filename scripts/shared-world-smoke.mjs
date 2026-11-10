@@ -83,6 +83,57 @@ async function focus(client) {
   await client.page.waitForFunction(() => document.hasFocus() && !document.querySelector('#settings').open);
 }
 async function select(client, object) { await selectObject(client.page, object); }
+async function projectPoint(page, position) {
+  return page.evaluate(async value => {
+    const THREE = await import('three');
+    const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, .1, 220);
+    camera.position.set(33, 28, 38); camera.lookAt(0, 0, 0); camera.updateMatrixWorld();
+    const p = new THREE.Vector3(value.x, value.y, value.z).project(camera);
+    return { x: (p.x + 1) * innerWidth / 2, y: (1 - p.y) * innerHeight / 2 };
+  }, position);
+}
+async function groundPoint(page, position) { return projectPoint(page, { ...position, y: 0 }); }
+async function dragObjectTo(page, object, destination, exactPoint = false) {
+  const start = await projectPoint(page, object.position), end = exactPoint ? await projectPoint(page, destination) : await groundPoint(page, destination);
+  const geometry = await page.evaluate(({ start, end }) => {
+    const canvas = document.querySelector('#viewport canvas');
+    window.__tusDragTrace = { counts: {}, events: [], last: null };
+    if (!canvas.dataset.tusDragTrace) {
+      canvas.dataset.tusDragTrace = 'true';
+      for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) canvas.addEventListener(type, event => {
+        const trace = window.__tusDragTrace, count = trace.counts[type] = (trace.counts[type] || 0) + 1;
+        const target = document.elementFromPoint(event.clientX, event.clientY);
+        const sample = { type, x: Math.round(event.clientX), y: Math.round(event.clientY), target: target?.id || target?.tagName, canvasTarget: target === canvas, selected: document.querySelector('#selection-label')?.textContent, preview: document.querySelector('#move-preview-status')?.textContent, previewHidden: document.querySelector('#move-preview-status')?.hidden };
+        trace.last = sample;
+        if (type !== 'pointermove' || count <= 2 || count === 100) trace.events.push(sample);
+      });
+    }
+    const at = point => { const target = document.elementFromPoint(point.x, point.y); return { x: Math.round(point.x), y: Math.round(point.y), target: target?.id || target?.tagName, canvasTarget: target === canvas }; };
+    const rect = canvas.getBoundingClientRect();
+    return { viewport: { width: innerWidth, height: innerHeight }, canvas: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, startTarget: at(start), endTarget: at(end) };
+  }, { start, end });
+  await page.mouse.move(start.x, start.y); await page.mouse.down();
+  for (let i = 1; i <= 100; i++) await page.mouse.move(start.x + (end.x - start.x) * i / 100, start.y + (end.y - start.y) * i / 100);
+  await page.mouse.up();
+  return { start, end, ...geometry };
+}
+async function waitForMovePreview(page, drag) {
+  try { await page.waitForFunction(() => document.querySelector('#move-preview-status')?.textContent.toLowerCase().includes('preview'), undefined, { timeout: 5000 }); }
+  catch {
+    const state = await page.evaluate(() => ({
+      selected: document.querySelector('#selection-label')?.textContent,
+      role: document.querySelector('#role')?.textContent,
+      editHidden: document.querySelector('#edit-form')?.hidden,
+      editDisabled: document.querySelector('#edit-fields')?.disabled,
+      editMessage: document.querySelector('#edit-message')?.textContent,
+      preview: document.querySelector('#move-preview-status')?.textContent,
+      previewHidden: document.querySelector('#move-preview-status')?.hidden,
+      position: ['x', 'y', 'z'].map(axis => document.querySelector('#edit-position-' + axis)?.value),
+      trace: window.__tusDragTrace,
+    }));
+    throw new Error('No local drag preview was created: ' + JSON.stringify({ drag, state }));
+  }
+}
 async function close(client) {
   if (!client.app) return;
   const app = client.app; client.app = null;
@@ -152,6 +203,69 @@ await withSmokeCleanup(async () => {
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('Y 2.0'), undefined, { timeout: 5000 });
+  // Drag stays local until Apply; the second client must never see the preview.
+  await focus(alice);
+  await alice.page.keyboard.down('a');
+  await waitForState(snapshot => {
+    const player = snapshot.players.find(item => item.id === 'alice');
+    return player?.position.y === 0 && player.position.x < 14;
+  }, 'Alice to leave the platform before moving it');
+  await alice.page.keyboard.up('a');
+  const beforePreview = await state();
+  await select(alice, built);
+  await alice.page.locator('#move-grid-step').fill('0.5');
+  await alice.page.locator('#move-plane').selectOption('x');
+  const firstDrag = await dragObjectTo(alice.page, built, { x: 20.2, y: 1, z: 0 }, true);
+  assert.equal(firstDrag.startTarget.canvasTarget, true, 'drag begins on a world object in the canvas');
+  assert.equal(firstDrag.endTarget.canvasTarget, false, 'drag continues to a target covered by the UI');
+  await waitForMovePreview(alice.page, firstDrag);
+  assert.deepEqual(await alice.page.locator('#edit-position-x').inputValue().then(async x => ({ x: Number(x), y: Number(await alice.page.locator('#edit-position-y').inputValue()), z: Number(await alice.page.locator('#edit-position-z').inputValue()) })), { x: 20, y: 1, z: 0 }, 'the visible 0.5 grid snaps an X-axis drag without changing other coordinates');
+  const previewState = await state();
+  assert.equal(previewState.revision, beforePreview.revision, 'pointer movement and preview do not mutate the server');
+  assert.deepEqual(previewState.objects, beforePreview.objects);
+  assert.equal(await bob.page.locator('#move-preview-status').isHidden(), true, 'the peer does not receive the local preview');
+  await alice.page.evaluate(() => {
+    window.__tusEscapeEvent = null;
+    window.addEventListener('keydown', event => { if (event.code === 'Escape') window.__tusEscapeEvent = event; }, { capture: true, once: true });
+  });
+  await focus(alice);
+  await alice.page.keyboard.press('Escape');
+  try { await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.hidden, undefined, { timeout: 5000 }); }
+  catch {
+    const escapeState = await alice.page.evaluate(() => ({
+      event: window.__tusEscapeEvent && { code: window.__tusEscapeEvent.code, defaultPrevented: window.__tusEscapeEvent.defaultPrevented },
+      hasFocus: document.hasFocus(),
+      activeElement: document.activeElement?.id || document.activeElement?.tagName,
+      preview: document.querySelector('#move-preview-status')?.textContent,
+      previewHidden: document.querySelector('#move-preview-status')?.hidden,
+    }));
+    throw new Error('Escape did not cancel local preview: ' + JSON.stringify(escapeState));
+  }
+  assert.equal((await state()).revision, beforePreview.revision, 'Cancel discards only the local proposal');
+
+  await alice.page.locator('#move-snap-enabled').uncheck();
+  const unsnappedDrag = await dragObjectTo(alice.page, built, { x: 20.2, y: 1, z: 0 }, true);
+  await waitForMovePreview(alice.page, unsnappedDrag);
+  const unsnappedX = Number(await alice.page.locator('#edit-position-x').inputValue());
+  assert.ok(Math.abs(unsnappedX - 20.2) < 1e-6, 'disabling snap preserves exact pointer position');
+  await alice.page.locator('#move-cancel').click();
+  await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.hidden);
+  assert.equal((await state()).revision, beforePreview.revision, 'Cancel button discards only the local proposal');
+  await alice.page.locator('#move-snap-enabled').check();
+
+  await alice.page.locator('#move-plane').selectOption('xz');
+  const secondDrag = await dragObjectTo(alice.page, built, { x: 20, z: 10 });
+  await waitForMovePreview(alice.page, secondDrag);
+  assert.equal((await state()).revision, beforePreview.revision);
+  await alice.page.locator('#edit-apply').click();
+  await alice.page.waitForFunction(() => document.querySelector('#edit-message').textContent.includes('saved'));
+  const movedState = await state();
+  const movedObject = movedState.objects.find(item => item.id === built.id);
+  assert.deepEqual(movedObject.position, { x: 20, y: 1, z: 10 });
+  assert.equal(movedState.revision, beforePreview.revision + 1, 'Apply commits exactly one update');
+  await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, movedState.revision);
+  built.position = movedObject.position;
+
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, builtState.revision);
   await select(alice, built); await select(bob, built);
   assert.equal(await bob.page.locator('#edit-apply').isDisabled(), true, 'foreign object is read-only');
@@ -163,7 +277,8 @@ await withSmokeCleanup(async () => {
   assert.equal((await state('bob')).objects[0].size.x, 5);
   const denied = await fetch(url + '/command', { method: 'POST', headers: { Authorization: 'Bearer ' + tokens.bob, 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'remove', id: built.id }) });
   assert.equal(denied.status, 403, 'server rejects bypassing the disabled UI');
-  assert.equal((await state()).objects[0].id, built.id);
+  const beforeRestart = await state();
+  assert.equal(beforeRestart.objects[0].id, built.id);
 
   for (const client of clients) { client.graphics.phase('server restart'); await client.graphics.assertHealthy(); }
   await stopServer();
@@ -172,7 +287,7 @@ await withSmokeCleanup(async () => {
   for (const client of clients) await client.page.waitForFunction(() => document.querySelector('#connection').textContent.includes('World connected'));
   const restored = await state('bob');
   assert.equal(restored.objects[0].id, built.id); assert.equal(restored.objects[0].size.x, 5);
-  assert.equal(restored.players.find(player => player.id === 'alice').position.y, 2, 'server restart preserves the landing surface position');
+  assert.deepEqual(restored.players.find(player => player.id === 'alice').position, beforeRestart.players.find(player => player.id === 'alice').position, 'server restart preserves the last accepted player position');
   assert.deepEqual(restored.players.map(p => p.id).sort(), ['alice', 'bob']);
   await close(bob);
   const returning = await launch('bob');
