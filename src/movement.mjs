@@ -11,7 +11,11 @@ const MAX_STEP_HEIGHT = 0.5;
 const EPSILON = 1e-7;
 
 export function shapeDimensionsValid(type, direction, size) {
-  if (type === 'stairs') return size.y <= 2;
+  if (type === 'stairs') {
+    // Four 0.125-unit treads stay wider than the maximum 0.083-unit movement step.
+    const run = direction === 'east' || direction === 'west' ? size.x : size.z;
+    return size.y <= 2 && run >= 0.5;
+  }
   if (type === 'ramp') return size.y <= (direction === 'east' || direction === 'west' ? size.x : size.z);
   return true;
 }

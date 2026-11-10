@@ -59,7 +59,7 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
       if (directional ? !SHAPE_DIRECTIONS.includes(command.direction) : Object.hasOwn(command,'direction')) fail('invalid_direction','Stairs and ramps need one cardinal uphill direction.');
       const defaults = {block:{x:2,y:2,z:2},bridge:{x:10,y:1,z:3},port:{x:12,y:1,z:8},...SHAPE_DEFAULT_SIZES};
       const position = vector(command.position), size = vector(command.size ?? defaults[command.objectType], true);
-      if (directional && !shapeDimensionsValid(command.objectType,command.direction,size)) fail('invalid_shape_dimensions','Stairs are limited to 0.5-unit rises and ramps to a 45-degree slope.');
+      if (directional && !shapeDimensionsValid(command.objectType,command.direction,size)) fail('invalid_shape_dimensions','Stairs need at least 0.5 units of run with rises no higher than 0.5; ramps are limited to 45 degrees.');
       const color = command.color ?? '#c8a570';
       if (typeof color !== 'string' || !/^#[a-f0-9]{6}$/i.test(color)) fail('invalid_color','Use a hex color such as #c8a570.');
       const object = {id:randomUUID(),type:command.objectType,...(directional?{direction:command.direction}:{}),position,size,color,ownerId:actor.id,...physicsDefaults[command.objectType]};
@@ -109,7 +109,11 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
         }
       }
       if (Object.hasOwn(command,'position')) object.position = vector(command.position);
-      if (Object.hasOwn(command,'size')) object.size = vector(command.size,true);
+      if (Object.hasOwn(command,'size')) {
+        const size = vector(command.size,true);
+        if (SHAPE_TYPES.includes(object.type) && !shapeDimensionsValid(object.type,object.direction,size)) fail('invalid_shape_dimensions','Stairs need at least 0.5 units of run with rises no higher than 0.5; ramps are limited to 45 degrees.');
+        object.size = size;
+      }
       if (Object.hasOwn(command,'color')) {
         if (typeof command.color !== 'string' || !/^#[a-f0-9]{6}$/i.test(command.color)) fail('invalid_color','Use a hex color such as #c8a570.');
         object.color = command.color;
