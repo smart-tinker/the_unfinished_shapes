@@ -77,3 +77,17 @@ test('chat warns before retry when an accepted turn loses its connection', async
   await h.element('chat-form').listeners.submit({preventDefault(){}});
   assert.match(h.element('scene-context-status').textContent,/accepted.*connection changed.*check.*before retrying/i);
 });
+
+test('chat treats a lost turn-start acknowledgment as uncertain and blocks a blind retry', async () => {
+  const h=sceneHarness();
+  h.context.bridge={sendPrompt:async()=>{throw new Error('Turn outcome is unknown: check the conversation before retrying. Codex request timed out: turn/start');}};
+  h.context.addMessage=()=>{};
+  h.context.startActivity=()=>{};
+  h.context.updateChatControls=()=>{};
+  h.run('let connected=true,busy=false,streamMessage=null;');
+  h.load('function sceneContextForPrompt() {', "$('interrupt').addEventListener");
+  h.element('prompt').value='Build this';
+  await h.element('chat-form').listeners.submit({preventDefault(){}});
+  assert.match(h.element('scene-context-status').textContent,/outcome is unknown.*check the conversation before retrying/i);
+  assert.doesNotMatch(h.element('scene-context-status').textContent,/was not sent/i);
+});

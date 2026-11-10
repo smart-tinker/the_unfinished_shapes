@@ -253,3 +253,24 @@ test('world_build requires every design field and general command cannot adverti
  const command=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command;
  assert.equal(command.properties.type.enum.includes('build'),false);
 });
+
+test('an accepted turn is returned if the conversation changes before its start response',async()=>{
+  let f;
+  f=fixture(request=>{
+    if(request.method==='turn/start')f.bridge.threadId='replacement-thread';
+  });
+  await f.start();
+  const result=await f.bridge.send('Build one thing');
+  assert.equal(result.turn.id,'turn1');
+  assert.equal(f.bridge.turnId,null);
+  f.bridge.stop();
+});
+
+test('a turn-start timeout is uncertain and cannot be blindly retried',async()=>{
+  const f=fixture(request=>request.method==='turn/start'?false:undefined,35);
+  await f.start();
+  await assert.rejects(f.bridge.send('Build one thing'),/Turn outcome is unknown.*check the conversation before retrying/i);
+  assert.equal(f.requests.filter(request=>request.method==='turn/start').length,1);
+  await assert.rejects(f.bridge.send('Retry build'),/Connect Codex first/);
+  assert.equal(f.requests.filter(request=>request.method==='turn/start').length,1);
+});
