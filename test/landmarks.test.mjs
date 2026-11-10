@@ -120,20 +120,6 @@ test('beacon labels stay within range and only the eight nearest are visible',()
  assert.deepEqual(labels.map(label=>label.visible),[true,true,true,true,true,true,true,true,false,false]);
 });
 
-test('beacon labels stay within range and only the eight nearest are visible',()=>{
- const source=readFileSync(new URL('../src/renderer.mjs',import.meta.url),'utf8');
- const start=source.indexOf('const BEACON_LABEL_RANGE'),end=source.indexOf('function clearBuildPreview()',start);
- assert.ok(start>=0&&end>start,'beacon label visibility policy is implemented');
- const labels=Array.from({length:10},()=>({visible:true}));
- const distances=[5,3,2,1,6,7,8,9,10,41];
- const beaconLabels=new Map(labels.map((label,index)=>[String(index),{mesh:{position:{distance:distances[index]}},label}]));
- const update=runInNewContext(`(()=>{${source.slice(start,end)};return updateBeaconLabels})()`,{
-  camera:{position:{distanceTo:position=>position.distance}},beaconLabels
- });
- update();
- assert.deepEqual(labels.map(label=>label.visible),[true,true,true,true,true,true,true,true,false,false]);
-});
-
 test('long landmark text is clipped to a readable number of canvas lines',()=>{
  const source=readFileSync(new URL('../src/renderer.mjs',import.meta.url),'utf8');
  const start=source.indexOf('function labelTexture('),end=source.indexOf('function objectMesh(',start);

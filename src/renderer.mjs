@@ -205,6 +205,7 @@ function labelTexture(value, background) {
     if(character==='\n'||Array.from(rows.at(-1)).length>=30)rows.push(character==='\n'?'':character);
     else rows[rows.length-1]+=character;
   }
+  // shortcut: six face lines; select the sign to read the full inscription in the inspector.
   if(rows.length>6){rows[5]=Array.from(rows[5]).slice(0,29).join('')+'…';rows.length=6;}
   const lineHeight=(canvas.height-28)/rows.length, fontSize=Math.max(10,Math.min(24,lineHeight*.68));
   context.font=fontSize+'px system-ui';context.fillStyle='#26312e';context.textAlign='center';context.textBaseline='middle';
@@ -262,6 +263,7 @@ function objectMesh(object) {
 }
 function updateBeaconLabels() {
   if(!camera)return;
+  // shortcut: show eight nearby names; revisit if dense scenes still feel cluttered.
   for(const item of beaconLabels.values())item.label.visible=false;
   const nearby=[...beaconLabels.values()].map(({mesh,label})=>({label,distance:camera.position.distanceTo(mesh.position)})).filter(item=>item.distance<=BEACON_LABEL_RANGE).sort((a,b)=>a.distance-b.distance);
   for(const [index,item] of nearby.entries())if(index<MAX_VISIBLE_BEACON_LABELS)item.label.visible=true;
