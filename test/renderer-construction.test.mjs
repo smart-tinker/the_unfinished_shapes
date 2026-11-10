@@ -352,7 +352,7 @@ test('world lighting Preview and Cancel are local; Apply sends one versioned com
 
 test('connection settings cannot change while a shared lighting Apply is unresolved',async()=>{
  const h=rendererHarness(),effects=[];
- h.context.editing=false;h.context.worldLightingPreview={attempted:true};
+ h.context.editing=false;h.context.settingsGeneration=0;h.context.worldLightingPreview={attempted:true};
  h.context.settings={workspacePath:'old',codexPath:'codex',serverUrl:'http://old',token:'',threadId:'',lightingQuality:'full'};
  h.context.readSettings=()=>({...h.context.settings,serverUrl:'http://new'});
  h.context.connected=false;h.context.movePreview=null;h.context.dragCandidate=null;h.context.inspectorDirty=false;
