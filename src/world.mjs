@@ -9,11 +9,11 @@ function requireUseRange(state, actor, object) {
   const position = state.players.find(player => player.id === actor.id)?.position ?? {x:0,y:0,z:0};
   if (Math.hypot(position.x-object.position.x,position.y-object.position.y,position.z-object.position.z) > 3 + 1e-7) fail('out_of_range','Move within 3 world units to use this object.',403);
 }
-function passageOccupied(state, object, actor, context) {
+function passageOccupied(state, object, context) {
   const online = new Set(Array.isArray(context?.onlinePlayerIds) ? context.onlinePlayerIds : []);
-  const players = state.players.filter(player => online.has(player.id));
-  if (online.has(actor.id) && !players.some(player => player.id === actor.id)) players.push({id:actor.id,position:{x:0,y:0,z:0}});
-  return players.some(player => playerOccupiesObject(player,object));
+  const players = new Map(state.players.filter(player => online.has(player.id)).map(player => [player.id,player]));
+  for (const id of online) if (!players.has(id)) players.set(id,{id,position:{x:0,y:0,z:0}});
+  return [...players.values()].some(player => playerOccupiesObject(player,object));
 }
 export class WorldError extends Error {
   constructor(code, message, status = 400) { super(message); this.code = code; this.status = status; }
@@ -226,7 +226,7 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25, context
       if (command.expectedVersion > object.version || (object.state !== command.state && command.expectedVersion !== object.version)) fail('conflict','The door or gate changed since it was read. Refresh before using it.',409);
       if (object.state === command.state) changed = false;
       else {
-        if (command.state === 'closed' && passageOccupied(next,object,actor,context)) fail('occupied','Cannot close a door or gate while a player occupies its passage.',409);
+        if (command.state === 'closed' && passageOccupied(next,object,context)) fail('occupied','Cannot close a door or gate while a player occupies its passage.',409);
         if (object.version >= Number.MAX_SAFE_INTEGER) fail('revision_exhausted','Object version limit reached.',409);
         object.state = command.state; object.version++; object.blocksMovement = command.state === 'closed';
       }
