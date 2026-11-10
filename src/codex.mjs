@@ -19,12 +19,12 @@ export const WORLD_TOOLS = [
       color: { type: 'string', description: 'Required hex color, e.g. #6c8cff. Preserve the color requested by the user.', pattern: '^#[a-fA-F0-9]{6}$' },
     }, required: ['objectType', 'position', 'size', 'color'], additionalProperties: false,
   } },
-  { type: 'function', name: 'world_command', description: 'Move the player, request a jump, or update/remove an existing object. Requested Y is ignored; the server resolves ground, collisions and landing. To create an object use world_build. Server checks identity, role, ownership and movement.', inputSchema: {
+  { type: 'function', name: 'world_command', description: 'Move the player with the same physics as manual control, request a jump, or update/remove an existing object. Movement stays on the walkable island, is limited to 5 world units per second, and obeys collisions and supported tops; a large target does not teleport. Requested Y is ignored. To create an object use world_build. The server checks identity, role, ownership and movement.', inputSchema: {
     type: 'object', properties: { command: {
-      type: 'object', description: 'Choose one operation. Move changes only the player position and never builds anything; Y is server-owned and jump is optional. Use world_build to create an object. Operation-specific fields are validated by the game server.',
+      type: 'object', description: 'Choose one operation. Move changes only the player position and never builds anything; it uses the manual movement speed, island boundary, collision and landing rules. Large targets move only by elapsed-time physics; Y is server-owned and jump is optional. Use world_build to create an object. Operation-specific fields are validated by the game server.',
       properties: {
-        type: { type: 'string', enum: ['move', 'update', 'remove'], description: 'move: move the player only. update: edit an existing object. remove: delete an existing object.' },
-        position: { ...positionSchema, description: 'Required for move; Y is ignored and resolved by the server. Optional new object position for update.' },
+        type: { type: 'string', enum: ['move', 'update', 'remove'], description: 'move: move the player only, using the same island and physics limits as manual control. update: edit an existing object. remove: delete an existing object.' },
+        position: { ...positionSchema, description: 'Required X/Z movement target; the server applies the shared 5 units/second cap and walkable island boundary. Y is ignored and resolved by the server. Optional new object position for update.' },
         jump: { type: 'boolean', description: 'Optional jump request. The server honors it only while standing on a supported surface.' },
         size: { ...positionSchema, description: 'Optional dimensions for update.' },
         color: { type: 'string', pattern: '^#[a-fA-F0-9]{6}$', description: 'Optional hex color for update.' },
