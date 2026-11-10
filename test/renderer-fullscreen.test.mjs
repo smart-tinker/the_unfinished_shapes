@@ -6,15 +6,15 @@ function fullscreenHarness({ focusedTag = 'BODY', fullscreen = true, dragging = 
   const h = rendererHarness();
   const listeners = {};
   h.context.toggleCalls = [];
+  h.context.isFullscreen = fullscreen;
+  h.context.bridge = { toggleFullscreen: () => { h.context.toggleCalls.push('toggle'); h.context.isFullscreen = !h.context.isFullscreen; } };
+  h.context.requestFullscreenToggle = () => h.context.bridge.toggleFullscreen();
   Object.assign(h.context, {
     window: { addEventListener: (name, listener) => { listeners[name] = listener; } },
     document: { activeElement: { tagName: focusedTag }, querySelector: () => null },
   });
-  h.run(`let keys = new Set(), dragCandidate = null, movePreview = null, jumpRequested = false;
-    let isFullscreen = ${fullscreen}, cancelled = 0;
+  h.run(`let keys = new Set(), dragCandidate = null, movePreview = null, jumpRequested = false, cancelled = 0;
     function cancelMovePreview() { dragCandidate = null; movePreview = null; cancelled++; }
-    const bridge = { toggleFullscreen: () => { toggleCalls.push('toggle'); isFullscreen = !isFullscreen; } };
-    function requestFullscreenToggle() { bridge.toggleFullscreen(); }
     if (${dragging}) movePreview = { objectId: 'shape-1' };`);
   h.load("window.addEventListener('keydown', event => {", "window.addEventListener('keyup'");
   return { h, keydown: listeners.keydown };

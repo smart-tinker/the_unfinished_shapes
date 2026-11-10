@@ -21,7 +21,7 @@ function editingHarness() {
       objectData.set(body.id,object); return {revision:2,object};
     }`);
   h.load('function fillInspector(', 'function renderWorld(');
-  h.load("$('edit-form').addEventListener('input'", "window.addEventListener('keydown'");
+  h.load("$('edit-form').addEventListener('input'", 'function setFullscreenState(value)');
   h.context.objectFixture = { id: 'shape-1', type: 'block', ownerId: 'alice', position: { x: 0, y: 1, z: 0 }, size: { x: 2, y: 2, z: 2 }, color: '#c8a570', blocksMovement: true, supportsPlayer: true };
   h.run('objectData.set(selectedId,structuredClone(objectFixture));fillInspector(objectFixture)');
   h.submit = () => h.element('edit-form').listeners.submit({ preventDefault() {} });
