@@ -11,9 +11,10 @@ const GAME_DEVELOPER_INSTRUCTIONS = "You are the player's companion in The Unfin
 const positionSchema = { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, required: ['x', 'y', 'z'], additionalProperties: false };
 export const WORLD_TOOLS = [
   { type: 'function', name: 'world_state', description: 'Read the connected game world, supported mechanics, player identity and role. Never returns credentials.', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
-  { type: 'function', name: 'world_build', description: 'Build one new object requested by the user. Specify every design field explicitly, including size and color. This creates an object; it never moves the player. Server validates the mechanic, role and coordinates.', inputSchema: {
+  { type: 'function', name: 'world_build', description: 'Build one new object requested by the user. Specify every design field explicitly, including size and color; stairs and ramps also require a cardinal uphill direction. This creates an object; it never moves the player. Server validates the mechanic, role and coordinates.', inputSchema: {
     type: 'object', properties: {
-      objectType: { type: 'string', enum: ['block', 'bridge', 'port'] },
+      objectType: { type: 'string', enum: ['block', 'bridge', 'port', 'stairs', 'ramp'] },
+      direction: { type: 'string', enum: ['north','east','south','west'], description: 'Required for stairs and ramps; points toward the high end.' },
       position: positionSchema,
       size: positionSchema,
       color: { type: 'string', description: 'Required hex color, e.g. #6c8cff. Preserve the color requested by the user.', pattern: '^#[a-fA-F0-9]{6}$' },

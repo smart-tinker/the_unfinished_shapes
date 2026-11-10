@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { movePlayer } from './movement.mjs';
+import { movePlayer, SHAPE_TYPES, SHAPE_DIRECTIONS, SHAPE_DEFAULT_SIZES, shapeDimensionsValid } from './movement.mjs';
 
-export const mechanics = ['block', 'bridge', 'port'];
+export const mechanics = ['block', 'bridge', 'port', ...SHAPE_TYPES];
 const physicsDefaults = Object.fromEntries(mechanics.map(type => [type, { blocksMovement: true, supportsPlayer: true }]));
 export class WorldError extends Error {
   constructor(code, message, status = 400) { super(message); this.code = code; this.status = status; }
@@ -19,6 +19,7 @@ export function validateWorld(state) {
   for (const o of state.objects) {
     if (!o || typeof o.id !== 'string' || ids.has(o.id) || !mechanics.includes(o.type) || typeof o.ownerId !== 'string' || !/^#[a-f0-9]{6}$/i.test(o.color)) fail('invalid_state', 'Invalid saved object.', 500);
     ids.add(o.id); vector(o.position); vector(o.size, true);
+    if (SHAPE_TYPES.includes(o.type) ? (!SHAPE_DIRECTIONS.includes(o.direction) || !shapeDimensionsValid(o.type,o.direction,o.size)) : Object.hasOwn(o,'direction')) fail('invalid_state', 'Invalid saved shape direction or dimensions.', 500);
     for (const [key, value] of Object.entries(physicsDefaults[o.type])) {
       if (!Object.hasOwn(o, key)) o[key] = value;
       else if (typeof o[key] !== 'boolean') fail('invalid_state', 'Invalid saved object physics.', 500);
@@ -54,11 +55,14 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
       if (actor.role === 'viewer') fail('forbidden','Viewers cannot build.',403);
       if (!mechanics.includes(command.objectType)) fail('new_mechanic_required','This mechanic is not implemented. Develop it in the repository and pass CI before deployment.',409);
       if (next.objects.length >= 5000) fail('world_full','Object capacity reached.',409);
-      const defaults = {block:{x:2,y:2,z:2},bridge:{x:10,y:1,z:3},port:{x:12,y:1,z:8}};
+      const directional = SHAPE_TYPES.includes(command.objectType);
+      if (directional ? !SHAPE_DIRECTIONS.includes(command.direction) : Object.hasOwn(command,'direction')) fail('invalid_direction','Stairs and ramps need one cardinal uphill direction.');
+      const defaults = {block:{x:2,y:2,z:2},bridge:{x:10,y:1,z:3},port:{x:12,y:1,z:8},...SHAPE_DEFAULT_SIZES};
       const position = vector(command.position), size = vector(command.size ?? defaults[command.objectType], true);
+      if (directional && !shapeDimensionsValid(command.objectType,command.direction,size)) fail('invalid_shape_dimensions','Stairs are limited to 0.5-unit rises and ramps to a 45-degree slope.');
       const color = command.color ?? '#c8a570';
       if (typeof color !== 'string' || !/^#[a-f0-9]{6}$/i.test(color)) fail('invalid_color','Use a hex color such as #c8a570.');
-      const object = {id:randomUUID(),type:command.objectType,position,size,color,ownerId:actor.id,...physicsDefaults[command.objectType]};
+      const object = {id:randomUUID(),type:command.objectType,...(directional?{direction:command.direction}:{}),position,size,color,ownerId:actor.id,...physicsDefaults[command.objectType]};
       next.objects.push(object); result = {object}; break;
     }
     case 'move_group': {

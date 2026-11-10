@@ -1,4 +1,5 @@
 import { toolResult } from './codex.mjs';
+import { SHAPE_TYPES, SHAPE_DIRECTIONS } from './movement.mjs';
 
 // shortcut: cap scene context at 64 objects and 32 players; raise if model requests need a larger view within context limits.
 const MAX_SCENE_OBJECTS = 64, MAX_SCENE_PLAYERS = 32;
@@ -53,7 +54,9 @@ export function captureSceneSnapshot(state, view, worldConnectionId) {
         !validId(object.ownerId)||typeof object.color!=='string'||!/^#[a-f0-9]{6}$/i.test(object.color)||
         typeof object.blocksMovement!=='boolean'||typeof object.supportsPlayer!=='boolean')throw new Error('World state contains an invalid object.');
     objectIds.add(object.id);
-    return {id:object.id,type:object.type,ownerId:object.ownerId,color:object.color,position:vector(object.position,1000),size:vector(object.size,50,0.25),blocksMovement:object.blocksMovement,supportsPlayer:object.supportsPlayer};
+    const oriented=SHAPE_TYPES.includes(object.type);
+    if(oriented&&!SHAPE_DIRECTIONS.includes(object.direction))throw new Error('World state contains an invalid shape direction.');
+    return {id:object.id,type:object.type,ownerId:object.ownerId,color:object.color,position:vector(object.position,1000),size:vector(object.size,50,0.25),blocksMovement:object.blocksMovement,supportsPlayer:object.supportsPlayer,...(oriented?{direction:object.direction}:{})};
   });
   const selectedSet=new Set(view.selectedIds);
   if(view.selectedIds.some(id=>!objectIds.has(id)))throw new Error('A selected object no longer exists; refresh the world before sending.');
@@ -83,7 +86,9 @@ export async function executeGameTool(event,{url,token,connectionId}) {
   let command=event.arguments?.command;
   if(event.name==='world_build'){
     const design=event.arguments,fields=['objectType','position','size','color'];
-    if(!design||typeof design!=='object'||Array.isArray(design)||fields.some(key=>!Object.hasOwn(design,key)||design[key]===undefined||design[key]===null)||Object.keys(design).some(key=>!fields.includes(key)))return toolResult(false,{error:'world_build requires exactly objectType, position, size and color. Supply every requested design field explicitly.'});
+    if(!design||typeof design!=='object'||Array.isArray(design))return toolResult(false,{error:'world_build requires exactly objectType, position, size and color; stairs and ramps also require a cardinal direction.'});
+    const oriented=SHAPE_TYPES.includes(design.objectType);
+    if(fields.some(key=>!Object.hasOwn(design,key)||design[key]===undefined||design[key]===null)||Object.keys(design).some(key=>!fields.includes(key)&&!(oriented&&key==='direction'))||(oriented?!SHAPE_DIRECTIONS.includes(design.direction):Object.hasOwn(design,'direction')))return toolResult(false,{error:'world_build requires exactly objectType, position, size and color; stairs and ramps also require a cardinal direction.'});
     command={type:'build',...design};
   }
   // Flat tool schemas cannot express conditional requirements; never drop edit guards.
