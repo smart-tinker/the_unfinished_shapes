@@ -26,6 +26,7 @@ test('signs and beacons are bounded, safe, decorative world mechanics with confl
  assert.equal(validateWorld(state).objects[0].text,inscription);
  for(const text of ['', 'x'.repeat(241)])assert.throws(()=>applyCommand(emptyWorld(),builder,sign(text)));
  assert.doesNotThrow(()=>applyCommand(emptyWorld(),builder,sign('🌟'.repeat(240))));
+ assert.throws(()=>applyCommand(state,builder,{type:'update',id:signObject.id,text:'Missing expected value'}),{code:'invalid_command'});
  const changed=applyCommand(state,builder,{type:'update',id:signObject.id,text:'New line\nSecond line',expected:{text:inscription}});
  assert.equal(changed.result.object.text,'New line\nSecond line');
  assert.throws(()=>applyCommand(changed.state,builder,{type:'update',id:signObject.id,text:'stale edit',expected:{text:inscription}}),{code:'conflict'});
