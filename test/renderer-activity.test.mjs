@@ -158,7 +158,7 @@ test('game guide supports legacy resumed tools without automatic conversation re
 
 function goalContextRendererHarness() {
   const h = rendererHarness();
-  h.run("let agentControlState = null, goalMessageContextId = 'goal-1', settings = { threadId: 'saved', agentControlThreadId: 'saved', agentModelId: '', agentEffort: '' }; function populateAgentEfforts() {} function updateAgentControlButtons() {}");
+  h.run("let agentControlState = null, goalMessageContextId = 'goal-1', settings = { threadId: 'saved', agentControlThreadId: 'saved', agentModelId: '', agentEffort: '' }, connected = true, busy = false; function populateAgentEfforts() {} function updateAgentControlButtons() {}");
   h.load('function renderAgentControls(state) {', 'async function refreshAgentControls() {');
   return h;
 }
@@ -174,7 +174,7 @@ test('a completed native Goal no longer tags later assistant messages as Goal up
 
 function goalNotificationRendererHarness() {
   const h = rendererHarness();
-  h.run("let settings = { threadId: 'saved' }, agentControlState = { goal: { id: 'goal-1', status: 'active' } }, goalMessageContextId = 'goal-1'; function addMessage() {} function refreshAgentControls() {} function notificationActivity() {} function updateChatControls() {}");
+  h.run("let settings = { threadId: 'saved' }, agentControlState = { goal: { id: 'goal-1', status: 'active' } }, goalMessageContextId = 'goal-1', connected = true, busy = false, agentControlRead = 0; function addMessage() {} function refreshAgentControls() {} function notificationActivity() {} function updateChatControls() {}");
   h.load('function codexEvent(event) {', 'try { initScene(); }');
   return h;
 }
