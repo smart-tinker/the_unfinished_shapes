@@ -265,3 +265,21 @@ test('closing an open doorway is denied while an online player occupies the pass
  const safe=await f.send({type:'set_state',id:door.id,state:'closed',expectedVersion:1});
  assert.equal(safe.status,200);assert.equal((await safe.json()).object.state,'closed');
 });
+
+
+test('closing a doorway also checks online players without a saved movement record',async t=>{
+ const f=await fixture(t);
+ await f.send({type:'move',position:{x:0,y:0,z:0}});
+ await new Promise(resolve=>setTimeout(resolve,260));
+ const moved=await f.send({type:'move',position:{x:5,y:0,z:0}});
+ assert.equal(moved.status,200);
+ const door=(await (await f.send({type:'build',objectType:'door',position:{x:0,y:1.5,z:0},size:{x:1,y:3,z:.25}})).json()).object;
+ const opened=await f.send({type:'set_state',id:door.id,state:'open',expectedVersion:0});
+ assert.equal(opened.status,200);
+ const bobState=await fetch(f.url+'/state',{headers:{Authorization:'Bearer test-only-bob-token'}});
+ assert.equal(bobState.status,200);
+ assert.equal((await bobState.json()).players.some(player=>player.id==='bob'),false,'Bob has no persisted position yet and is at the default spawn.');
+ const closed=await f.send({type:'set_state',id:door.id,state:'closed',expectedVersion:1});
+ assert.equal(closed.status,409);
+ assert.equal((await closed.json()).error,'occupied');
+});
