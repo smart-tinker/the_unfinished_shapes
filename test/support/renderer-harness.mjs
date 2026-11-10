@@ -9,8 +9,9 @@ export function rendererHarness() {
   let sequence = 0;
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
-      id, value: '', hidden: false, disabled: false, textContent: '', dataset: {}, children: [], listeners: {},
+      id, value: '', hidden: false, disabled: false, textContent: '', dataset: {}, style: {}, children: [], listeners: {},
       addEventListener(name, listener) { this.listeners[name] = listener; },
+      setAttribute(name, value) { this[name] = value; },
       replaceChildren(...children) { this.children = []; children.forEach(child => this.append(child)); },
       append(child) { child.parent = this; this.children.push(child); },
       remove() { this.parent.children.splice(this.parent.children.indexOf(this), 1); },
@@ -19,6 +20,8 @@ export function rendererHarness() {
     return elements.get(id);
   }
   const context = vm.createContext({ console, structuredClone, JSON, Number, Object, Map, String, Boolean,
+    selectedId: null, selectedIds: new Set(), selectionBoxes: new Map(), MAX_GROUP_SELECTION: 32,
+    boxSelectMode: false, boxCandidate: null, movePreview: null, dragCandidate: null,
     document: { createElement: () => element(`generated-${++sequence}`) }, $: element,
   });
   function run(code) { return vm.runInContext(code, context); }

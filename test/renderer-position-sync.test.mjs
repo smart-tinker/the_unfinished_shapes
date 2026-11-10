@@ -20,6 +20,7 @@ function syncHarness() {
     request: async (...args) => { sent.push(args); return { revision: 10 }; },
   });
   h.element('connection').classList = { add() {}, remove() {} };
+  h.load('function selectObject(', 'function renderWorld(');
   h.load('function renderWorld(', 'async function command(');
   return h;
 }

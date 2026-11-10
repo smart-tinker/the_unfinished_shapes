@@ -61,6 +61,24 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
       const object = {id:randomUUID(),type:command.objectType,position,size,color,ownerId:actor.id,...physicsDefaults[command.objectType]};
       next.objects.push(object); result = {object}; break;
     }
+    case 'move_group': {
+      if (Object.keys(command).some(key => !['type','changes'].includes(key)) || !Array.isArray(command.changes) || command.changes.length < 2 || command.changes.length > 32) fail('invalid_command','Group movement requires 2–32 changes.');
+      const ids = new Set(), changes = [];
+      for (const change of command.changes) {
+        if (!change || typeof change !== 'object' || Array.isArray(change) || Object.keys(change).length !== 3 || !['id','position','expectedPosition'].every(key => Object.hasOwn(change,key)) ||
+            typeof change.id !== 'string' || !change.id || change.id.length > 128 || ids.has(change.id)) fail('invalid_command','Each group change needs a unique ID, position and expectedPosition.');
+        ids.add(change.id);
+        const object = next.objects.find(item => item.id === change.id);
+        if (!object) fail('not_found',`Object ${change.id} not found.`,404);
+        if (actor.role !== 'admin' && (actor.role !== 'builder' || object.ownerId !== actor.id)) fail('forbidden',`Only the owner or an admin may move object ${change.id}.`,403);
+        const expectedPosition = vector(change.expectedPosition), position = vector(change.position);
+        if (!['x','y','z'].every(axis => expectedPosition[axis] === object.position[axis])) fail('conflict',`Object ${change.id} changed since it was read. Refresh before moving the group.`,409);
+        changes.push({object,position});
+      }
+      for (const {object,position} of changes) object.position = position;
+      result = {objects:changes.map(({object})=>object)};
+      break;
+    }
     case 'update': {
       const object = next.objects.find(o => o.id === command.id);
       if (!object) fail('not_found','Object not found.',404);
@@ -106,7 +124,7 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
       if (actor.role !== 'admin' && (actor.role !== 'builder' || next.objects[index].ownerId !== actor.id)) fail('forbidden','Only the owner or an admin may remove this object.',403);
       next.objects.splice(index,1); break;
     }
-    default: fail('invalid_command','Supported commands: move, build, update, remove.');
+    default: fail('invalid_command','Supported commands: move, move_group, build, update, remove.');
   }
   if (state.revision >= Number.MAX_SAFE_INTEGER) fail('revision_exhausted','World revision limit reached.',409);
   next.revision++;

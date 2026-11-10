@@ -197,3 +197,50 @@ test('movement rejects non-numeric, non-finite, and out-of-range coordinates',()
   assert.throws(()=>applyCommand(emptyWorld(),builder,{type:'move',position:{x,y:0,z:0}}));
  }
 });
+
+
+function groupMoveWorld() {
+ let state=emptyWorld();
+ for(const position of [{x:0,y:1,z:0},{x:4,y:1,z:0},{x:4,y:1,z:3}]) {
+  state=applyCommand(state,builder,{type:'build',objectType:'block',position}).state;
+ }
+ return state;
+}
+function groupMove(objects,delta={x:2,y:0,z:-1}) {
+ return {type:'move_group',changes:objects.map(object=>({
+  id:object.id,
+  position:{x:object.position.x+delta.x,y:object.position.y+delta.y,z:object.position.z+delta.z},
+  expectedPosition:object.position,
+ }))};
+}
+test('group move applies one shared delta in one revision without mutating the input',()=>{
+ const state=groupMoveWorld(), before=structuredClone(state), objects=state.objects;
+ const moved=applyCommand(state,builder,groupMove(objects));
+ assert.equal(moved.result.revision,state.revision+1);
+ assert.deepEqual(moved.result.objects.map(object=>object.id),objects.map(object=>object.id));
+ assert.deepEqual(moved.result.objects.map(object=>object.position),[
+  {x:2,y:1,z:-1},{x:6,y:1,z:-1},{x:6,y:1,z:2},
+ ]);
+ assert.deepEqual(state,before);
+ assert.deepEqual(moved.state.objects.map(object=>object.ownerId),['alice','alice','alice']);
+});
+test('group move rejects mixed ownership, missing IDs, stale positions, duplicates and oversized groups atomically',()=>{
+ const base=groupMoveWorld(), carol={id:'carol',role:'builder'};
+ const state=applyCommand(base,carol,{type:'build',objectType:'block',position:{x:8,y:1,z:0}}).state;
+ const original=structuredClone(state), foreign=state.objects.at(-1);
+ const aliceObjects=base.objects;
+ const cases=[
+  [groupMove([...aliceObjects.slice(0,1),foreign]),builder,'forbidden'],
+  [{type:'move_group',changes:[...groupMove(aliceObjects.slice(0,2)).changes,{...groupMove([aliceObjects[2]]).changes[0],id:'missing'}]},builder,'not_found'],
+  [{type:'move_group',changes:[{...groupMove(aliceObjects.slice(0,2)).changes[0],expectedPosition:{x:99,y:1,z:0}},groupMove(aliceObjects.slice(0,2)).changes[1]]},builder,'conflict'],
+  [{type:'move_group',changes:[groupMove(aliceObjects.slice(0,2)).changes[0],groupMove(aliceObjects.slice(0,2)).changes[0]]},builder,'invalid_command'],
+  [{type:'move_group',changes:[]},builder,'invalid_command'],
+  [{type:'move_group',changes:Array.from({length:33},(_,index)=>({id:'shape-'+index,position:{x:0,y:1,z:0},expectedPosition:{x:0,y:1,z:0}}))},builder,'invalid_command'],
+  [{...groupMove(aliceObjects.slice(0,2)),unexpected:true},builder,'invalid_command'],
+ ];
+ for(const [command,actor,code] of cases) {
+  const snapshot=structuredClone(original);
+  assert.throws(()=>applyCommand(snapshot,actor,command),{code});
+  assert.deepEqual(snapshot,original,code);
+ }
+});

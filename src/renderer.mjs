@@ -12,8 +12,9 @@ let settingsGeneration = 0, ordinaryTurn = false;
 let agentControlState = null, agentControlRead = 0, agentControlLoading = false, agentControlBusy = false, goalMessageContextId = null;
 let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 0, z: 0 }, playerVelocityY = 0, jumpRequested = false, meId = null, localMovementVersion = 0, latestStateRevision = -1;
 let worldState = { objects: [] };
-let scene, renderer, camera, controls, player, companion, selectionBox;
-let dragCandidate = null, movePreview = null;
+let scene, renderer, camera, controls, player, companion;
+let dragCandidate = null, movePreview = null, boxCandidate = null, boxSelectMode = false;
+const selectedIds = new Set(), selectionBoxes = new Map(), MAX_GROUP_SELECTION = 32;
 let objectSnapshot = '';
 let inspectorBase = null, inspectorDirty = false, editing = false, role = 'viewer';
 const objectData = new Map();
@@ -167,10 +168,11 @@ function initScene() {
   renderer.domElement.addEventListener('pointermove', updateObjectDrag);
   renderer.domElement.addEventListener('pointerup', finishObjectDrag);
   renderer.domElement.addEventListener('pointercancel', event => {
+    if (boxCandidate?.pointerId === event.pointerId) { cancelBoxSelection(); return; }
     if (dragCandidate?.pointerId !== event.pointerId) return;
-    const draft = dragCandidate; dragCandidate = null; controls.enabled = true;
+    const draft = dragCandidate; dragCandidate = null; controls.enabled = !boxSelectMode;
     if (draft.started && draft.previewPosition) movePreview = draft;
-    else { if (draft.ghost) { scene.remove(draft.ghost); disposeGroup(draft.ghost); } $('move-plane').disabled = false; }
+    else { clearMovePreview(); }
   });
   window.addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
   renderer.setAnimationLoop(() => {
@@ -245,7 +247,8 @@ function placementHit(event, draft) {
   const point = ray.ray.intersectPlane(plane, new THREE.Vector3());
   const target = point ? { point, surface: null } : null;
   if (!target || draft.plane !== 'xz') return target;
-  const surfaces = [...meshes.entries()].filter(([id]) => id !== draft.objectId).map(([, mesh]) => mesh);
+  const moving = new Set((draft.objects ?? []).map(object => object.id));
+  const surfaces = [...meshes.entries()].filter(([id]) => id !== draft.objectId && !moving.has(id)).map(([, mesh]) => mesh);
   for (const hit of ray.intersectObjects(surfaces, true)) {
     const id = objectIdForHit(hit.object), surface = objectData.get(id);
     if (!surface?.supportsPlayer || meshes.get(id)?.children[0] !== hit.object) continue;
@@ -255,18 +258,21 @@ function placementHit(event, draft) {
   return target;
 }
 function clearMovePreview() {
-  for (const draft of [dragCandidate, movePreview]) if (draft?.ghost) { scene?.remove(draft.ghost); disposeGroup(draft.ghost); }
+  for (const draft of [dragCandidate, movePreview]) {
+    const ghosts = draft?.ghosts ? [...draft.ghosts.values()] : draft?.ghost ? [draft.ghost] : [];
+    for (const ghost of ghosts) { scene?.remove(ghost); disposeGroup(ghost); }
+  }
   dragCandidate = null; movePreview = null;
-  if (controls) controls.enabled = true;
+  if (controls) controls.enabled = !boxSelectMode;
   $('move-preview-status').hidden = true; $('move-preview-status').textContent = '';
-  $('move-cancel').hidden = true;
+  $('move-cancel').hidden = true; $('group-move-apply').disabled = true;
   $('move-plane').disabled = false;
 }
 function cancelMovePreview() {
   const draft = movePreview ?? dragCandidate, id = draft?.objectId;
   clearMovePreview();
-  if (id && id === selectedId) fillInspector(objectData.get(id));
-  $('edit-message').textContent = 'Move preview cancelled; the shared world was not changed.';
+  if (id && selectedIds.size === 1 && id === selectedId) fillInspector(objectData.get(id));
+  $('group-move-status').textContent = 'Move preview cancelled; the shared world was not changed.';
 }
 function setMovePreviewPosition(draft, target) {
   const step = $('move-snap-enabled').checked ? Number($('move-grid-step').value) : 0;
@@ -274,17 +280,33 @@ function setMovePreviewPosition(draft, target) {
     $('move-preview-status').textContent = 'Grid step must be between 0.25 and 10.';
     return;
   }
-  const position = placementPosition(target.point, draft.object, target.surface, step, draft.plane);
+  const anchor = placementPosition(target.point, draft.object, target.surface, step, draft.plane);
+  const delta = { x:anchor.x-draft.object.position.x, y:anchor.y-draft.object.position.y, z:anchor.z-draft.object.position.z };
+  const objects = draft.objects?.length ? draft.objects : [draft.object];
   draft.target = { point: { x: target.point.x, y: target.point.y, z: target.point.z }, surfaceId: target.surface?.id ?? null };
-  draft.previewPosition = position;
-  draft.manualPosition = false;
-  draft.ghost.position.set(position.x, position.y, position.z);
-  for (const axis of ['x', 'y', 'z']) $('edit-position-' + axis).value = String(position[axis]);
-  inspectorDirty = true;
-  $('move-preview-status').hidden = false;
-  $('move-preview-status').textContent = 'Local preview only. Apply changes to move the shared object; Cancel or Escape discards it.';
+  draft.previewPosition = anchor; draft.manualPosition = false;
+  draft.changes = objects.map(object => ({
+    id:object.id,
+    expectedPosition:structuredClone(object.position),
+    position:{x:object.position.x+delta.x,y:object.position.y+delta.y,z:object.position.z+delta.z},
+  }));
+  for (const change of draft.changes) {
+    const ghost = draft.ghosts?.get(change.id) ?? draft.ghost;
+    ghost.position.set(change.position.x,change.position.y,change.position.z);
+  }
+  if (objects.length === 1) {
+    for (const axis of ['x', 'y', 'z']) $('edit-position-' + axis).value = String(anchor[axis]);
+    inspectorDirty = true;
+    $('move-preview-status').hidden = false;
+    $('move-preview-status').textContent = 'Local preview only. Apply changes to move the shared object; Cancel or Escape discards it.';
+    $('edit-message').textContent = 'Preview only — nothing has been sent to the world server.';
+  } else {
+    $('group-move-status').textContent = 'Local preview for ' + objects.length + ' objects. Apply once to move the group; Cancel or Escape discards it.';
+    $('group-move-apply').disabled = false;
+  }
   $('move-cancel').hidden = false;
-  $('edit-message').textContent = 'Preview only — nothing has been sent to the world server.';
+  $('move-preview-status').hidden = false;
+  if (objects.length > 1) $('move-preview-status').textContent = 'Preview only — nothing has been sent to the world server.';
 }
 function refreshMovePreview() {
   const draft = movePreview ?? (dragCandidate?.started ? dragCandidate : null);
@@ -294,54 +316,93 @@ function refreshMovePreview() {
     setMovePreviewPosition(draft, { point: draft.target.point, surface });
   } catch (error) { $('move-preview-status').textContent = error.message; }
 }
+function setBoxSelectionMode(enabled) {
+  boxSelectMode = enabled;
+  const button = $('box-select-toggle');
+  button.setAttribute('aria-pressed', String(enabled));
+  button.textContent = enabled ? 'Exit box selection' : 'Box select';
+  if (controls) controls.enabled = !enabled && !dragCandidate && !movePreview;
+}
+function updateSelectionRectangle(start, end) {
+  const rectangle = $('selection-rectangle');
+  rectangle.hidden = false;
+  rectangle.style.left = Math.min(start.x,end.x) + 'px'; rectangle.style.top = Math.min(start.y,end.y) + 'px';
+  rectangle.style.width = Math.abs(end.x-start.x) + 'px'; rectangle.style.height = Math.abs(end.y-start.y) + 'px';
+}
+function cancelBoxSelection() {
+  boxCandidate = null; $('selection-rectangle').hidden = true;
+  if (controls) controls.enabled = !boxSelectMode && !dragCandidate && !movePreview;
+}
 function beginObjectDrag(event) {
   renderer.domElement.dataset.startX = event.clientX; renderer.domElement.dataset.startY = event.clientY;
   if (event.button !== 0 || movePreview || editing || inspectorDirty) return;
+  if (boxSelectMode) {
+    boxCandidate = { pointerId:event.pointerId, start:{x:event.clientX,y:event.clientY}, end:{x:event.clientX,y:event.clientY} };
+    controls.enabled = false; renderer.domElement.setPointerCapture(event.pointerId);
+    updateSelectionRectangle(boxCandidate.start,boxCandidate.end); return;
+  }
   const ray = pointerRay(event), hit = ray?.intersectObjects([...meshes.values()], true)[0];
   const objectId = hit ? objectIdForHit(hit.object) : null;
   if (!canEditObject(objectData.get(objectId))) return;
   controls.enabled = false;
-  dragCandidate = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, objectId, plane: $('move-plane').value, started: false, ghost: null };
-  renderer.domElement.setPointerCapture(event.pointerId);
-  $('move-plane').disabled = true;
+  dragCandidate = { pointerId:event.pointerId, startX:event.clientX, startY:event.clientY, objectId, plane:$('move-plane').value, started:false, ghost:null, ghosts:null, objects:null };
+  renderer.domElement.setPointerCapture(event.pointerId); $('move-plane').disabled = true;
 }
 function updateObjectDrag(event) {
+  if (boxCandidate?.pointerId === event.pointerId) {
+    boxCandidate.end = {x:event.clientX,y:event.clientY}; updateSelectionRectangle(boxCandidate.start,boxCandidate.end); return;
+  }
   const draft = dragCandidate;
-  if (!draft || draft.pointerId !== event.pointerId || (!draft.started && Math.hypot(event.clientX - draft.startX, event.clientY - draft.startY) <= 5)) return;
+  if (!draft || draft.pointerId !== event.pointerId || (!draft.started && Math.hypot(event.clientX-draft.startX,event.clientY-draft.startY) <= 5)) return;
   const object = objectData.get(draft.objectId);
   if (!canEditObject(object) || editing || (!draft.started && selectedId === draft.objectId && inspectorDirty)) {
-    const permissionLost = !canEditObject(object);
-    clearMovePreview();
-    if (permissionLost) {
-      fillInspector(object);
-      $('edit-message').textContent = 'Your permission to edit this shape changed; the local move preview was discarded.';
-    }
+    const permissionLost = !canEditObject(object); clearMovePreview();
+    if (permissionLost) $('group-move-status').textContent = 'Your permission to edit this shape changed; the local move preview was discarded.';
     return;
   }
   if (!draft.started) {
-    if (!selectObject(draft.objectId)) { controls.enabled = true; dragCandidate = null; $('move-plane').disabled = false; return; }
-    draft.object = structuredClone(object); draft.ghost = objectMesh(object);
-    draft.ghost.traverse(child => {
-      if (!child.material) return;
-      child.material = child.material.clone(); child.material.color.set('#f3c969'); child.material.transparent = true; child.material.opacity = .42; child.material.depthWrite = false;
-    });
-    scene.add(draft.ghost); draft.started = true;
+    if (!selectedIds.has(draft.objectId) && !selectObject(draft.objectId)) { clearMovePreview(); return; }
+    const ids = selectedIds.has(draft.objectId) ? [...selectedIds] : [draft.objectId];
+    const members = ids.map(id => objectData.get(id));
+    if (members.some(member => !canEditObject(member))) {
+      $('group-move-status').textContent = 'This group contains read-only shapes. Remove them from the selection before moving the group.';
+      clearMovePreview(); return;
+    }
+    if (ids.length > 1 && ids.length > MAX_GROUP_SELECTION) { $('group-move-status').textContent = 'A group can contain at most ' + MAX_GROUP_SELECTION + ' shapes.'; clearMovePreview(); return; }
+    draft.objects = members.map(member => structuredClone(member)); draft.object = draft.objects.find(member => member.id === draft.objectId);
+    draft.ghosts = new Map();
+    for (const member of draft.objects) {
+      const ghost = objectMesh(member);
+      ghost.traverse(child => {
+        if (!child.material) return;
+        child.material = child.material.clone(); child.material.color.set('#f3c969'); child.material.transparent = true; child.material.opacity = .42; child.material.depthWrite = false;
+      });
+      draft.ghosts.set(member.id,ghost); scene.add(ghost);
+    }
+    draft.ghost = draft.ghosts.get(draft.objectId); draft.started = true;
     $('move-preview-status').hidden = false; $('move-preview-status').textContent = 'Drag preview — the shared world has not changed.';
     $('move-cancel').hidden = false;
   }
-  const target = placementHit(event, draft);
-  if (target) setMovePreviewPosition(draft, target);
+  const target = placementHit(event,draft);
+  if (target) setMovePreviewPosition(draft,target);
 }
 function finishObjectDrag(event) {
+  if (boxCandidate?.pointerId === event.pointerId) {
+    const box = boxCandidate; cancelBoxSelection();
+    selectObjectsInBox(box.start,box.end,event.ctrlKey||event.metaKey); return;
+  }
   const draft = dragCandidate;
   if (draft && draft.pointerId === event.pointerId) {
-    dragCandidate = null; controls.enabled = true;
-    if (draft.started && draft.previewPosition) movePreview = draft;
-    else { if (draft.ghost) { scene.remove(draft.ghost); disposeGroup(draft.ghost); } $('move-plane').disabled = false; }
+    dragCandidate = null; controls.enabled = !boxSelectMode;
+    if (draft.started && draft.previewPosition) {
+      movePreview = draft;
+      if (draft.objects.length > 1) $('group-move-apply').disabled = false;
+    } else clearMovePreview();
   }
-  if (Math.hypot(event.clientX - Number(renderer.domElement.dataset.startX), event.clientY - Number(renderer.domElement.dataset.startY)) > 5) return;
-  const ray = pointerRay(event), hit = ray?.intersectObjects([...meshes.values()], true)[0];
-  selectObject(hit ? objectIdForHit(hit.object) : null);
+  if (Math.hypot(event.clientX-Number(renderer.domElement.dataset.startX),event.clientY-Number(renderer.domElement.dataset.startY)) > 5) return;
+  const ray = pointerRay(event), hit = ray?.intersectObjects([...meshes.values()],true)[0], id = hit ? objectIdForHit(hit.object) : null;
+  if (event.ctrlKey||event.metaKey) selectObject(id,false,true);
+  else selectObject(id);
 }
 function disposeGroup(group) { group.traverse(child => { child.geometry?.dispose(); if (child.material) child.material.dispose(); }); }
 function fillInspector(object) {
@@ -369,18 +430,80 @@ function updateMovePreviewFromInspector() {
   draft.ghost.position.set(position.x, position.y, position.z);
   $('move-preview-status').textContent = 'Manual position preview. Apply changes to update the shared world.';
 }
-function selectObject(id, fromPoll = false) {
-  if (editing && id !== selectedId) return false;
-  if (!fromPoll && id !== selectedId && inspectorDirty && !window.confirm('Discard unapplied changes to this shape?')) return false;
-  if (id !== selectedId && (movePreview || dragCandidate?.started)) clearMovePreview();
-  const changed = id !== selectedId; selectedId = id;
-  if (selectionBox) { scene.remove(selectionBox); selectionBox.geometry.dispose(); selectionBox.material.dispose(); selectionBox = null; }
-  if (id && meshes.has(id)) { selectionBox = new THREE.BoxHelper(meshes.get(id), '#ffe5a1'); scene.add(selectionBox); }
-  const object = objectData.get(id);
-  $('selection-label').textContent = object ? `${object.type} · ${id.slice(0, 12)}` : 'No shape selected';
-  $('remove').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId));
-  if (changed || !inspectorDirty || !object) fillInspector(object);
-  else if (JSON.stringify(object) !== JSON.stringify(inspectorBase)) $('edit-message').textContent = 'This shape changed on the server. Your unapplied values are preserved; Reset reloads the current shape.';
+function selectObject(id, fromPoll = false, additive = false) {
+  if (fromPoll) return applySelection([...selectedIds],null,true);
+  if (additive && !id) return true;
+  const next = new Set(selectedIds); let primary = id;
+  if (additive) {
+    if (next.has(id)) { next.delete(id); primary = selectedId === id ? [...next].at(-1) ?? null : selectedId; }
+    else if (next.size < MAX_GROUP_SELECTION) next.add(id);
+    else { $('group-move-status').textContent = 'Selection is limited to ' + MAX_GROUP_SELECTION + ' shapes.'; return false; }
+  } else if (id && next.has(id)) {
+    if (next.size === 1) return true;
+    next.clear(); next.add(id);
+  } else { next.clear(); if (id) next.add(id); }
+  return applySelection(next,primary);
+}
+function selectObjectsInBox(start,end,additive=false) {
+  const rect = renderer.domElement.getBoundingClientRect(), left = Math.min(start.x,end.x), right = Math.max(start.x,end.x);
+  const top = Math.min(start.y,end.y), bottom = Math.max(start.y,end.y), ids = [];
+  camera.updateMatrixWorld?.();
+  for (const object of objectData.values()) {
+    const point = new THREE.Vector3(object.position.x,object.position.y,object.position.z).project(camera);
+    if (point.z < -1 || point.z > 1) continue;
+    const x = rect.left + (point.x+1)*rect.width/2, y = rect.top + (1-point.y)*rect.height/2;
+    if (x >= left && x <= right && y >= top && y <= bottom) ids.push(object.id);
+  }
+  const next = new Set(additive ? selectedIds : []); let skipped = false;
+  for (const id of ids) {
+    if (next.has(id)) continue;
+    if (next.size === MAX_GROUP_SELECTION) { skipped = true; break; }
+    next.add(id);
+  }
+  applySelection(next,[...next].at(-1));
+  if (skipped) $('group-move-status').textContent = 'Selection is limited to ' + MAX_GROUP_SELECTION + ' shapes; extra shapes were skipped.';
+}
+function refreshSelectionVisuals() {
+  for (const box of selectionBoxes.values()) { scene.remove(box); box.geometry.dispose(); box.material.dispose(); }
+  selectionBoxes.clear();
+  for (const id of selectedIds) {
+    const mesh = meshes.get(id), object = objectData.get(id); if (!mesh) continue;
+    const editable = role === 'admin' || (role === 'builder' && object?.ownerId === meId);
+    const box = new THREE.BoxHelper(mesh,editable?'#ffe5a1':'#aab7bd');
+    selectionBoxes.set(id,box); scene.add(box);
+  }
+}
+function previewObjectIds(draft) { return draft?.objects?.map(object => object.id) ?? (draft?.objectId ? [draft.objectId] : []); }
+function applySelection(ids, primary = null, fromPoll = false) {
+  const next = new Set([...ids].filter(id => objectData.has(id)).slice(0,MAX_GROUP_SELECTION));
+  const old = [...selectedIds], changed = old.length !== next.size || old.some(id => !next.has(id));
+  if (!changed && !fromPoll) return true;
+  if (!fromPoll && inspectorDirty && !window.confirm('Discard unapplied changes to this shape?')) return false;
+  const draft = movePreview ?? dragCandidate;
+  if ((fromPoll && previewObjectIds(draft).some(id => !next.has(id))) || (!fromPoll && changed && (movePreview || dragCandidate?.started))) clearMovePreview();
+  selectedIds.clear(); for (const id of next) selectedIds.add(id);
+  const previousPrimary = selectedId;
+  selectedId = next.has(primary) ? primary : next.has(previousPrimary) ? previousPrimary : [...next].at(-1) ?? null;
+  refreshSelectionVisuals();
+  const selected = [...selectedIds].map(id => objectData.get(id)), readOnly = selected.filter(object => !canEditObject(object)).length;
+  $('selection-label').textContent = selected.length === 0 ? 'No shape selected'
+    : selected.length === 1 ? selected[0].type + ' · ' + selected[0].id.slice(0,12) + (readOnly ? ' · Read only' : '')
+    : selected.length + ' shapes selected · ' + readOnly + ' read-only';
+  $('move-options').hidden = !selected.length;
+  $('group-controls').hidden = selected.length < 2;
+  $('edit-form').hidden = selected.length !== 1;
+  $('remove').disabled = selected.length !== 1 || readOnly > 0;
+  if (selected.length === 1) {
+    const object = selected[0];
+    if (previousPrimary !== selectedId || !inspectorDirty || !object) fillInspector(object);
+    else if (JSON.stringify(object) !== JSON.stringify(inspectorBase)) $('edit-message').textContent = 'This shape changed on the server. Your unapplied values are preserved; Reset reloads the current shape.';
+  } else {
+    inspectorBase = null; inspectorDirty = false; $('edit-fields').disabled = true;
+    if (selected.length > 1) $('group-move-status').textContent = readOnly
+      ? readOnly + ' read-only shape(s) selected. Remove them before moving this group.'
+      : 'Drag any selected shape to preview one shared group move.';
+  }
+  $('group-move-apply').disabled = true;
   return true;
 }
 function renderWorld(state, movementVersion = localMovementVersion) {
@@ -390,26 +513,17 @@ function renderWorld(state, movementVersion = localMovementVersion) {
   if (savedPlayer && movementVersion === localMovementVersion && !moveRunning && (firstState || positionKey(playerPosition) === lastPosition)) { playerPosition = { ...savedPlayer.position }; playerVelocityY = savedPlayer.velocityY ?? 0; lastPosition = positionKey(savedPlayer.position); }
   const accessChanged = meId !== state.me.id || role !== state.me.role;
   meId = state.me.id; role = state.me.role; $('role').textContent = `Role: ${state.me.role}`; $('revision').textContent = `REV ${state.revision}`;
-  if (accessChanged && selectedId) {
-    const selected = objectData.get(selectedId), draft = movePreview ?? dragCandidate;
-    if (draft && !canEditObject(objectData.get(draft.objectId))) {
-      clearMovePreview();
-      fillInspector(selected);
-      $('remove').disabled = !selected || !canEditObject(selected);
-      $('edit-message').textContent = 'Your permission to edit this shape changed; the local move preview was discarded.';
-    } else {
-      const canEdit = canEditObject(selected);
-      $('edit-fields').disabled = editing || !canEdit;
-      $('remove').disabled = !selected || !canEdit;
-    }
+  const draft = movePreview ?? dragCandidate;
+  if (accessChanged && previewObjectIds(draft).some(id => !objectData.has(id) || !canEditObject(objectData.get(id)))) {
+    clearMovePreview(); $('group-move-status').textContent = 'Your permission to edit a selected shape changed; the local move preview was discarded.';
   }
   const nextSnapshot = JSON.stringify(state.objects);
   if (objectSnapshot !== nextSnapshot) {
     for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear();
     objectData.clear();
     for (const object of state.objects) { objectData.set(object.id, object); const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh); }
-    selectObject(meshes.has(selectedId) ? selectedId : null, true); objectSnapshot = nextSnapshot;
-  }
+    objectSnapshot = nextSnapshot; selectObject(null,true);
+  } else if (accessChanged) selectObject(null,true);
   const online = Array.isArray(state.onlinePlayerIds) ? new Set(state.onlinePlayerIds) : null;
   const live = new Set();
   for (const remote of state.players) {
@@ -452,6 +566,41 @@ $('move-grid-step').disabled = !$('move-snap-enabled').checked;
 $('move-snap-enabled').addEventListener('change', () => { $('move-grid-step').disabled = !$('move-snap-enabled').checked; refreshMovePreview(); });
 $('move-grid-step').addEventListener('input', refreshMovePreview);
 $('move-cancel').addEventListener('click', cancelMovePreview);
+$('box-select-toggle').addEventListener('click', () => setBoxSelectionMode(!boxSelectMode));
+async function applyGroupMove() {
+  const draft = movePreview;
+  if (!draft || draft.objects?.length < 2 || !draft.changes?.length || editing) return;
+  const generation = settingsGeneration, button = $('group-move-apply');
+  button.disabled = true; editing = true;
+  const matches = objects => draft.changes.every(change => {
+    const object = objects.find(item => item.id === change.id);
+    return object && ['x','y','z'].every(axis => object.position[axis] === change.position[axis]);
+  });
+  try {
+    const result = await command({type:'move_group',changes:draft.changes});
+    if (generation !== settingsGeneration) return;
+    if (!Array.isArray(result.objects) || !matches(result.objects)) throw new Error('The server response did not confirm every moved shape.');
+    clearMovePreview(); $('group-move-status').textContent = 'The server confirmed all ' + draft.objects.length + ' shapes moved in one update.';
+    feedback('Group move saved on the server.');
+  } catch (error) {
+    if (generation !== settingsGeneration) return;
+    let confirmed = false, stateRead = false;
+    try {
+      const snapshot = await request('/state');
+      if (generation !== settingsGeneration) return;
+      if (snapshot.error) throw new Error(snapshot.message || snapshot.error);
+      renderWorld(snapshot); stateRead = true; confirmed = matches(snapshot.objects);
+    } catch { /* Do not retry an operation whose outcome is unknown. */ }
+    clearMovePreview();
+    $('group-move-status').textContent = confirmed
+      ? 'The refreshed server state confirms every shape moved; no retry was sent.'
+      : error.message + (stateRead ? ' The group was not confirmed at its target. Review the world and create a new preview; no retry was sent.' : ' The outcome is unknown. Refresh the world before trying again; no retry was sent.');
+    feedback($('group-move-status').textContent,!confirmed);
+  } finally {
+    editing = false; button.disabled = !movePreview;
+  }
+}
+$('group-move-apply').addEventListener('click', applyGroupMove);
 $('edit-form').addEventListener('input', event => {
   const id = event?.target?.id;
   if (!id?.startsWith('edit-position-') && !id?.startsWith('edit-size-') && !['edit-color', 'edit-blocks-movement', 'edit-supports-player'].includes(id)) return;
@@ -527,6 +676,8 @@ $('fullscreen-toggle').addEventListener('click', requestFullscreenToggle);
 setFullscreenState(false);
 window.addEventListener('keydown', event => {
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || document.querySelector('dialog[open]')) return;
+  if (event.code === 'Escape' && boxCandidate) { event.preventDefault(); cancelBoxSelection(); setBoxSelectionMode(false); return; }
+  if (event.code === 'Escape' && boxSelectMode) { event.preventDefault(); setBoxSelectionMode(false); return; }
   if (event.code === 'Escape' && (dragCandidate || movePreview)) { event.preventDefault(); cancelMovePreview(); return; }
   if (event.code === 'F11') { event.preventDefault(); if (!event.repeat) requestFullscreenToggle(); return; }
   if (event.code === 'Escape' && isFullscreen) { event.preventDefault(); requestFullscreenToggle(); return; }
@@ -579,7 +730,7 @@ async function saveSettings() {
   settings = next; settingsGeneration++;
   const { token, ...persisted } = settings; await bridge.saveSettings(persisted);
   worldRevision = -1; objectSnapshot = ''; worldState = { objects: [] }; meId = null; playerPosition = { x: 0, y: 0, z: 0 }; playerVelocityY = 0; jumpRequested = false; lastPosition = ''; latestStateRevision = -1; localMovementVersion++; moveStarts.clear();
-  if (scene) { selectObject(null, true); objectData.clear(); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
+  if (scene) { selectObject(null); objectData.clear(); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
   await poll();
 }
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('settings-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('settings-message').textContent = error.message; } });
@@ -620,7 +771,7 @@ function toolLabel(event) {
   const args = toolArguments(event);
   if (!args) return event.name === 'world_build' ? 'Build shape (invalid design)' : 'World command';
   if (event.name === 'world_build') return constructionLabel(args) || 'Build shape (invalid design)';
-  const labels = { build: 'Build shape', update: 'Edit shape', remove: 'Remove shape', move: 'Move player' };
+  const labels = { build: 'Build shape', update: 'Edit shape', remove: 'Remove shape', move: 'Move player', move_group: 'Move object group' };
   return labels[args?.command?.type] || labels[args?.type] || 'World command';
 }
 function toolActivity(event) {
@@ -718,7 +869,7 @@ $('agent-model-save').addEventListener('click', async () => {
 function sceneContextForPrompt() {
   const point = value => ({ x:value.x, y:value.y, z:value.z });
   return {
-    revision:worldRevision, selectedIds:selectedId ? [selectedId] : [],
+    revision:worldRevision, selectedIds:[...selectedIds],
     camera:{position:point(camera.position),target:point(controls.target),fov:camera.fov,aspect:camera.aspect,near:camera.near,far:camera.far,
       viewport:{width:renderer.domElement.clientWidth,height:renderer.domElement.clientHeight}},
   };
