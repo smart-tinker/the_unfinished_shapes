@@ -268,6 +268,12 @@ test('stairs and ramps reject invalid or missing directions and corrupt saved di
  }
 });
 
+test('stairs and ramps reject geometry too steep for shared walking physics',()=>{
+ const base={type:'build',position:{x:0,y:1,z:0}};
+ assert.throws(()=>applyCommand(emptyWorld(),builder,{...base,objectType:'stairs',direction:'north',size:{x:8,y:2.01,z:4}}),{code:'invalid_shape_dimensions'});
+ assert.throws(()=>applyCommand(emptyWorld(),builder,{...base,objectType:'ramp',direction:'north',size:{x:4,y:8.01,z:8}}),{code:'invalid_shape_dimensions'});
+});
+
 test('a north-facing ramp carries manual and agent movement up its continuous slope',()=>{
  const ramp={type:'build',objectType:'ramp',direction:'north',position:{x:0,y:1,z:10},size:{x:4,y:2,z:8}};
  const base=applyCommand(emptyWorld(),builder,ramp).state;
