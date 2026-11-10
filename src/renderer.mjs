@@ -402,7 +402,7 @@ function finishObjectDrag(event) {
   if (Math.hypot(event.clientX-Number(renderer.domElement.dataset.startX),event.clientY-Number(renderer.domElement.dataset.startY)) > 5) return;
   const ray = pointerRay(event), hit = ray?.intersectObjects([...meshes.values()],true)[0], id = hit ? objectIdForHit(hit.object) : null;
   if (event.ctrlKey||event.metaKey) selectObject(id,false,true);
-  else if (!id || !selectedIds.has(id)) selectObject(id);
+  else selectObject(id);
 }
 function disposeGroup(group) { group.traverse(child => { child.geometry?.dispose(); if (child.material) child.material.dispose(); }); }
 function fillInspector(object) {
