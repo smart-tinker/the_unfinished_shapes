@@ -341,7 +341,7 @@ test('world lighting Preview and Cancel are local; Apply sends one versioned com
  h.element('world-light-ambient').value='1.2';h.element('world-light-sun').value='2.4';
  h.run('previewWorldLighting()');await h.run('applyWorldLightingPreview()');
  assert.equal(h.context.requests.length,1);
- assert.deepEqual(h.context.requests[0],{path:'/command',method:'POST',body:{type:'set_lighting',ambientIntensity:1.2,sunIntensity:2.4,expectedVersion:2}});
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.requests[0])),{path:'/command',method:'POST',body:{type:'set_lighting',ambientIntensity:1.2,sunIntensity:2.4,expectedVersion:2}});
  assert.deepEqual(h.context.worldState.lighting,{version:3,ambientIntensity:1.2,sunIntensity:2.4});
 });
 
