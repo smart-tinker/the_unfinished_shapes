@@ -13,6 +13,9 @@ const expectedCodexPath=await realpath(fakeCodex);
 const testEnv={...process.env,TUS_DATA_DIR:dir,PATH:fakeBin+path.delimiter+process.env.PATH};
 const packagedExecutable=process.env.TUS_SMOKE_EXECUTABLE;
 const expectedVersion=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')).version;
+const expectedSourceSha=/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA||'')?process.env.GITHUB_SHA:null;
+const expectedBuildLabel=`v${expectedVersion} · ${expectedSourceSha?expectedSourceSha.slice(0,7):'build unknown'}`;
+const expectedBuildTitle=expectedSourceSha?`Version ${expectedVersion}; source SHA ${expectedSourceSha}`:`Version ${expectedVersion}; source SHA unavailable. This build is not release-identified.`;
 // Headless Linux runners use explicit SwiftShader to avoid unstable automatic fallback.
 // These flags apply only to smoke launches, never to normal application startup.
 const ciFlags=process.platform==='linux'?['--no-sandbox','--use-gl=angle','--use-angle=swiftshader']:[];
@@ -32,7 +35,8 @@ await withSmokeCleanup(async()=>{
  if(process.platform==='darwin') assert.equal(await app.evaluate(()=>process.argv.includes('--no-sandbox')),false,'native macOS must not disable the sandbox');
  const page=await app.firstWindow();graphics=await observeGraphics(page,{label:'first launch'});
  assert.equal(await page.locator('#build-version').count(),1,'packaged UI exposes one build version label');
- assert.equal(await page.locator('#build-version').innerText(),`v${expectedVersion}`,'packaged UI version matches the application package version');
+ assert.equal(await page.locator('#build-version').innerText(),expectedBuildLabel,'packaged UI version and short source SHA match the candidate metadata');
+ assert.equal(await page.locator('#build-version').getAttribute('title'),expectedBuildTitle,'build label identifies the exact source or marks it unknown');
  if(process.platform==='darwin') assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences().sandbox),true,'native macOS renderer sandbox remains enabled');
  graphics.phase('world connection');
  await page.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));

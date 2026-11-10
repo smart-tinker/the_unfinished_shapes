@@ -2,7 +2,7 @@
 
 A shared 3D construction world, with your own Codex as your companion.
 
-**0.1-rc8 is an early playable vertical slice, not a production MMO.** Rendering runs on the player's machine. Models run only when the player sends a request, using their own installed and authenticated Codex. This project does not implement an agent harness or store model-provider credentials.
+**The game is an early playable vertical slice, not a production MMO.** Rendering runs on the player's machine. An ordinary Codex turn starts when the player sends a request; a native Goal, when supported, can continue making progress in that conversation. Pausing or clearing a Goal does not necessarily stop a turn already running; stop that turn separately. Players use their own installed and authenticated Codex. This project does not implement an agent harness or store model-provider credentials.
 
 ## Install or update
 

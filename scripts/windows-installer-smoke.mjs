@@ -16,6 +16,10 @@ if (process.platform !== 'win32' || process.env.CI !== 'true' || process.env.RUN
   throw new Error('Run installer smoke only on a disposable Windows GitHub Actions runner.');
 }
 const run = promisify(execFile);
+const packageVersion=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')).version;
+const expectedSourceSha=/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA||'')?process.env.GITHUB_SHA:null;
+const expectedBuildLabel=`v${packageVersion} · ${expectedSourceSha?expectedSourceSha.slice(0,7):'build unknown'}`;
+const expectedBuildTitle=expectedSourceSha?`Version ${packageVersion}; source SHA ${expectedSourceSha}`:`Version ${packageVersion}; source SHA unavailable. This build is not release-identified.`;
 const work = await mkdtemp(path.join(os.tmpdir(), 'tus-installer-'));
 const dataDir = path.join(process.env.APPDATA, 'the-unfinished-shapes');
 try { await access(dataDir); throw new Error('Refusing to modify a pre-existing app data directory.'); }
@@ -46,6 +50,8 @@ async function launch(executablePath, label) {
   await gpu.attach(instance);
   const page = await instance.firstWindow();
   graphics = await observeGraphics(page, { label });
+  assert.equal(await page.locator('#build-version').innerText(), expectedBuildLabel, 'installed UI version and short source SHA match the candidate');
+  assert.equal(await page.locator('#build-version').getAttribute('title'), expectedBuildTitle, 'installed build identifies exact source or marks it unknown');
   graphics.phase('world connection');
   const actualDataDir = await instance.evaluate(({ app }) => app.getPath('userData'));
   assert.equal(path.resolve(actualDataDir).toLowerCase(), path.resolve(dataDir).toLowerCase(), 'stable default user-data path');

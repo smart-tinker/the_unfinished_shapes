@@ -20,6 +20,22 @@ const meshes = new Map(), otherPlayers = new Map(), keys = new Set();
 const sceneRoot = new THREE.Group();
 const clock = new THREE.Clock();
 const feedback = (text, error = false) => { $('world-message').textContent = text; $('world-message').classList.toggle('error', error); };
+async function showBuildIdentity() {
+  const label = $('build-version');
+  try {
+    const info = await bridge?.getBuildInfo();
+    if (!info || typeof info.version !== 'string') throw new Error('Build metadata is unavailable.');
+    const sourceSha = /^[a-f0-9]{40}$/.test(info.sourceSha || '') ? info.sourceSha : null;
+    label.textContent = `v${info.version} · ${sourceSha ? sourceSha.slice(0, 7) : 'build unknown'}`;
+    label.title = sourceSha
+      ? `Version ${info.version}; source SHA ${sourceSha}`
+      : `Version ${info.version}; source SHA unavailable. This build is not release-identified.`;
+  } catch {
+    label.textContent = 'Build unknown';
+    label.title = 'Build metadata unavailable. This build is not release-identified.';
+  }
+}
+void showBuildIdentity();
 function addMessage(text, kind = 'system') {
   const article = document.createElement('article'); article.className = `chat-message ${kind}`;
   if (kind === 'goal') { const label = document.createElement('small'); label.className = 'goal-message-label'; label.textContent = 'Goal update'; const body = document.createElement('span'); body.className = 'chat-message-body'; body.textContent = text; article.append(label, body); }
@@ -29,6 +45,18 @@ function addMessage(text, kind = 'system') {
 function updateChatControls() {
   $('send').disabled = !connected || busy; $('prompt').disabled = !connected;
   $('interrupt').disabled = !connected || !busy;
+}
+function refreshAgentStatus() {
+  const goalActive = agentControlState?.goal?.status === 'active' || Boolean(goalMessageContextId);
+  const status = !connected ? 'Codex disconnected'
+    : busy ? (goalActive ? 'Native Goal working…' : 'Working on your request…')
+    : agentControlState?.pendingApprovals ? 'Waiting for an approval decision'
+    : agentControlState?.goal?.status === 'active' ? 'Native Goal active'
+    : agentControlState?.goal?.status === 'paused' ? 'Native Goal paused'
+    : agentControlState?.threadStatus === 'idle' ? 'Connected · idle'
+    : agentControlState?.threadStatus === 'systemError' ? 'Codex reported an error'
+    : 'Connected · activity unknown';
+  $('agent-status').textContent = status;
 }
 function updateAgentControlButtons() {
   const state = agentControlState, live = connected && state?.connected === true && state.threadId === settings.threadId;
@@ -72,11 +100,12 @@ function renderAgentControls(state) {
   $('agent-model').value = models.some(model => model.id === savedModel) ? savedModel : '';
   populateAgentEfforts($('agent-model').value, settings.agentControlThreadId === state.threadId ? settings.agentEffort : '');
   updateAgentControlButtons();
+  refreshAgentStatus();
 }
 async function refreshAgentControls() {
   const requestId = ++agentControlRead, threadId = settings.threadId;
   if (!connected || !threadId) {
-    agentControlState = null; $('agent-controls-status').textContent = 'Codex is disconnected.';
+    agentControlState = null; refreshAgentStatus(); $('agent-controls-status').textContent = 'Codex is disconnected.';
     $('agent-controls-context').textContent = `World: ${$('connection').textContent.trim()} · ${$('role').textContent} · No Codex conversation`;
     $('agent-controls-runtime').textContent = 'Unknown'; $('agent-controls-thread').textContent = 'Unknown'; $('agent-controls-turn').textContent = 'Unknown'; $('agent-controls-current-model').textContent = 'Unknown';
     $('goal-support-status').textContent = 'Connect Codex to check native Goal support.';
@@ -91,7 +120,7 @@ async function refreshAgentControls() {
     renderAgentControls(state);
   } catch (error) {
     if (requestId !== agentControlRead || !connected || settings.threadId !== threadId) return;
-    agentControlState = null; $('agent-controls-status').textContent = 'Codex is connected, but its current state is unknown.';
+    agentControlState = null; refreshAgentStatus(); $('agent-controls-status').textContent = 'Codex is connected, but its current state is unknown.';
     $('goal-support-status').textContent = error.message; updateAgentControlButtons();
   } finally {
     if (requestId === agentControlRead) { agentControlLoading = false; updateAgentControlButtons(); }
@@ -708,9 +737,9 @@ function codexEvent(event) {
     } else addMessage('Saved Codex chat history is unavailable.', 'system');
   }
   if (event.type === 'tool-start' || event.type === 'tool-result') toolActivity(event);
-  if (event.type === 'connected') { activityThread(event.threadId); connected = true; settings.threadId = event.threadId; $('agent-status').textContent = 'Ready · responds only when asked'; void refreshAgentControls(); }
+  if (event.type === 'connected') { activityThread(event.threadId); connected = true; settings.threadId = event.threadId; agentControlState = null; goalMessageContextId = null; refreshAgentStatus(); void refreshAgentControls(); }
   if (event.type === 'error') addMessage(event.message || 'Codex reported an error.', 'error');
-  if (event.type === 'disconnected') { agentControlRead++; agentControlState = null; $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; busy = false; $('agent-status').textContent = 'Codex disconnected'; $('agent-goal-summary').hidden = true; addMessage(event.message || 'Codex disconnected.', 'error'); if ($('agent-controls').open) void refreshAgentControls(); }
+  if (event.type === 'disconnected') { const activityUnknown = busy || Boolean(agentControlState?.goal) || Boolean(goalMessageContextId); agentControlRead++; agentControlState = null; $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; busy = false; $('agent-status').textContent = activityUnknown ? 'Codex disconnected · activity unknown' : 'Codex disconnected'; $('agent-goal-summary').hidden = true; addMessage(event.message || 'Codex disconnected.', 'error'); if ($('agent-controls').open) void refreshAgentControls(); }
   if (event.type === 'approval') {
     if ($('agent-controls').open) void refreshAgentControls();
     $('activity-state').textContent = 'Needs decision'; $('agent-stop-reason').textContent = 'Waiting for your response to an approval request; no approval has been granted.';
@@ -730,18 +759,18 @@ function codexEvent(event) {
       if (goal.status === 'active') goalMessageContextId = goal.id || settings.threadId;
       else goalMessageContextId = null;
       addMessage(`Native Goal status: ${typeof goal.status === 'string' ? goal.status : 'updated'}.`, 'system');
-      void refreshAgentControls();
+      refreshAgentStatus(); void refreshAgentControls();
     }
     if (event.method === 'thread/goal/cleared') {
       if (agentControlState) agentControlState = { ...agentControlState, goal: null };
       goalMessageContextId = null; addMessage('Native Goal cleared.', 'system');
-      void refreshAgentControls();
+      refreshAgentStatus(); void refreshAgentControls();
     }
     notificationActivity(event.method, p);
-    if (event.method === 'turn/started') { busy = true; $('agent-status').textContent = 'Working on your request…'; }
+    if (event.method === 'turn/started') { busy = true; refreshAgentStatus(); }
     if (event.method === 'item/agentMessage/delta') { if (!streamMessage) streamMessage = addMessage('', goalMessageContextId ? 'goal' : 'assistant'); const body = streamMessage.querySelector('.chat-message-body'); if (body) body.textContent += p.delta || ''; else streamMessage.textContent += p.delta || ''; $('chat').scrollTop = $('chat').scrollHeight; }
     if (event.method === 'item/completed' && p.item?.type === 'agentMessage') { if (streamMessage) { const body = streamMessage.querySelector('.chat-message-body'); if (body) body.textContent = p.item.text || body.textContent; else streamMessage.textContent = p.item.text || streamMessage.textContent; } else if (p.item.text) addMessage(p.item.text, goalMessageContextId ? 'goal' : 'assistant'); streamMessage = null; }
-    if (event.method === 'turn/completed') { busy = false; $('agent-status').textContent = 'Ready · responds only when asked'; if (p.turn?.error?.message) addMessage(p.turn.error.message, 'error'); if (goalMessageContextId && agentControlState?.goal?.status !== 'active') goalMessageContextId = null; if ($('agent-controls').open) void refreshAgentControls(); }
+    if (event.method === 'turn/completed') { busy = false; if (p.turn?.error?.message) addMessage(p.turn.error.message, 'error'); if (goalMessageContextId && agentControlState?.goal?.status !== 'active') goalMessageContextId = null; refreshAgentStatus(); if ($('agent-controls').open) void refreshAgentControls(); }
     if (event.method === 'error') addMessage(p.error?.message || p.message || 'Codex reported an error.', 'error');
   }
   updateChatControls();
