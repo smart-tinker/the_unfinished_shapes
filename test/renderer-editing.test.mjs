@@ -8,7 +8,13 @@ function editingHarness() {
   Object.assign(h.context, { window: { confirm: () => true }, THREE: {}, scene: {}, meshes: new Map(), feedback: () => {}, settingsGeneration: 0, poll: async () => {}, positionUpdateCommand });
   h.run(`let selectedId='shape-1', inspectorBase=null, inspectorDirty=false, editing=false, role='builder', meId='alice', dragCandidate=null, movePreview=null;
     function clearMovePreview(){dragCandidate=null;movePreview=null;} function cancelMovePreview(){clearMovePreview();} function refreshMovePreview(){}
-    const objectData=new Map(); let selectionBox=null; let sends=[]; let failure=null;
+    const objectData=new Map(); let selectionBox=null; let sends=[]; let failure=null, stateReads=[], stateSnapshot=null;
+    async function request(path) {
+      stateReads.push(path);
+      if (path !== '/state') throw new Error('Unexpected request path: '+path);
+      return stateSnapshot || {objects:[...objectData.values()]};
+    }
+    function renderWorld(snapshot) { for (const object of snapshot.objects) objectData.set(object.id,object); }
     async function command(body) {
       sends.push(body); if(failure) throw new Error(failure);
       const {type,expected,...fields}=body; const object={...objectData.get(body.id),...fields};
@@ -95,13 +101,17 @@ test('failed update retains draft and restores editable controls', async () => {
   assert.equal(h.element('edit-fields').disabled, false);
 });
 
-test('server conflict after local check preserves draft, refreshes once and never retries', async () => {
-  const h = editingHarness(); let refreshes = 0; h.context.poll = async () => { refreshes++; };
-  h.element('edit-color').value = '#ffffff'; h.run("failure='Conflict: the shape changed'");
+test('server conflict refreshes authoritative state once, preserves the draft and never retries', async () => {
+  const h = editingHarness();
+  h.element('edit-color').value = '#ffffff';
+  h.run("failure='Conflict: the shape changed';stateSnapshot={objects:[{...objectData.get(selectedId),color:'#000000'}]}");
   await h.submit();
-  assert.equal(h.run('sends.length'), 1); assert.equal(refreshes, 1);
+  assert.equal(h.run('sends.length'), 1);
+  assert.deepEqual(JSON.parse(h.run('JSON.stringify(stateReads)')), ['/state']);
   assert.equal(h.run('sends[0].expected.color'), '#c8a570');
-  assert.equal(h.element('edit-color').value, '#ffffff'); assert.equal(h.run('inspectorDirty'), true);
-  assert.match(h.element('edit-message').textContent, /unapplied values are preserved/);
+  assert.equal(h.run('objectData.get(selectedId).color'), '#000000');
+  assert.equal(h.element('edit-color').value, '#ffffff');
+  assert.equal(h.run('inspectorDirty'), true);
+  assert.match(h.element('edit-message').textContent, /proposal is preserved/);
   assert.equal(h.element('edit-fields').disabled, false);
 });
