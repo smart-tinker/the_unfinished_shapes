@@ -236,7 +236,7 @@ test('tool calls cannot run outside an explicit turn, from another thread or nam
 test('world tool schema exposes explicit flat operations without ownership mutation',()=>{
  const command=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command;
  assert.equal(command.type,'object');assert.equal(command.oneOf,undefined);assert.equal(command.anyOf,undefined);
- assert.deepEqual(command.properties.type.enum,['move','update','remove']);
+ assert.deepEqual(command.properties.type.enum,['move','move_group','update','remove']);
  assert.match(command.properties.type.description,/move the player only/);
  assert.match(command.properties.type.description,/same island and physics limits/);
  assert.match(command.properties.position.description,/5 units\/second.*island boundary/);
