@@ -14,7 +14,7 @@ const userData = process.env.TUS_DATA_DIR ? path.resolve(process.env.TUS_DATA_DI
 mkdirSync(userData,{recursive:true});
 app.setPath('userData',userData);
 const here = path.dirname(fileURLToPath(import.meta.url));
-let win, bridge, localServer, connectedWorld;
+let win, bridge, localServer, connectedWorld, fullscreenRestoreBounds;
 if (!app.requestSingleInstanceLock()) app.quit();
 const settings = () => loadSettings(app.getPath('userData'));
 async function readBuildIdentity() {
@@ -79,7 +79,9 @@ app.whenReady().then(async()=>{
   handle('window:toggle-fullscreen', (...args) => {
     if (args.length) throw new Error('Fullscreen toggle does not accept arguments.');
     if (!win || win.isDestroyed()) throw new Error('The game window is unavailable.');
-    win.setFullScreen(!win.isFullScreen());
+    const entering = !win.isFullScreen();
+    if (process.platform === 'darwin' && entering) fullscreenRestoreBounds = win.getNormalBounds();
+    win.setFullScreen(entering);
     return true;
   });
   const localUrl = `http://127.0.0.1:${localServer.address().port}`;
@@ -194,8 +196,15 @@ app.whenReady().then(async()=>{
   attachQuitGuard(win);
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',(event)=>event.preventDefault());
-  win.on('enter-full-screen', () => win.webContents.send('window:fullscreen-changed', true));
-  win.on('leave-full-screen', () => win.webContents.send('window:fullscreen-changed', false));
+  win.on('enter-full-screen', () => {
+    if (process.platform === 'darwin' && !fullscreenRestoreBounds) fullscreenRestoreBounds = win.getNormalBounds();
+    win.webContents.send('window:fullscreen-changed', true);
+  });
+  win.on('leave-full-screen', () => {
+    if (process.platform === 'darwin' && fullscreenRestoreBounds) win.setSize(fullscreenRestoreBounds.width, fullscreenRestoreBounds.height);
+    fullscreenRestoreBounds = null;
+    win.webContents.send('window:fullscreen-changed', false);
+  });
   await win.loadFile(path.join(here,'index.html'));
 }).catch(error=>{dialog.showErrorBox('The Unfinished Shapes could not start',error.message+'\nYour saved settings and world have not been reset.');app.quit();});
 app.on('window-all-closed',()=>app.quit());
