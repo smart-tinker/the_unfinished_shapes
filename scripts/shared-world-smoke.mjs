@@ -93,8 +93,8 @@ async function projectPoint(page, position) {
   }, position);
 }
 async function groundPoint(page, position) { return projectPoint(page, { ...position, y: 0 }); }
-async function dragObjectTo(page, object, destination) {
-  const start = await projectPoint(page, object.position), end = await groundPoint(page, destination);
+async function dragObjectTo(page, object, destination, exactPoint = false) {
+  const start = await projectPoint(page, object.position), end = exactPoint ? await projectPoint(page, destination) : await groundPoint(page, destination);
   const geometry = await page.evaluate(({ start, end }) => {
     const canvas = document.querySelector('#viewport canvas');
     window.__tusDragTrace = { counts: {}, events: [], last: null };
@@ -213,8 +213,10 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('a');
   const beforePreview = await state();
   await select(alice, built);
-  const firstDrag = await dragObjectTo(alice.page, built, { x: 20, z: 10 });
+  await alice.page.locator('#move-plane').selectOption('x');
+  const firstDrag = await dragObjectTo(alice.page, built, { x: 20, y: 1, z: 0 }, true);
   await waitForMovePreview(alice.page, firstDrag);
+  assert.deepEqual(await alice.page.locator('#edit-position-x').inputValue().then(async x => ({ x: Number(x), y: Number(await alice.page.locator('#edit-position-y').inputValue()), z: Number(await alice.page.locator('#edit-position-z').inputValue()) })), { x: 20, y: 1, z: 0 }, 'X-axis dragging changes only X');
   const previewState = await state();
   assert.equal(previewState.revision, beforePreview.revision, 'pointer movement and preview do not mutate the server');
   assert.deepEqual(previewState.objects, beforePreview.objects);
@@ -238,6 +240,7 @@ await withSmokeCleanup(async () => {
   }
   assert.equal((await state()).revision, beforePreview.revision, 'Cancel discards only the local proposal');
 
+  await alice.page.locator('#move-plane').selectOption('xz');
   const secondDrag = await dragObjectTo(alice.page, built, { x: 20, z: 10 });
   await waitForMovePreview(alice.page, secondDrag);
   assert.equal((await state()).revision, beforePreview.revision);
