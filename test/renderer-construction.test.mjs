@@ -17,6 +17,13 @@ test('block palette includes wall, floor and column size presets',()=>{
  for(const preset of ['wall','floor','column'])assert.match(html,new RegExp(`data-preset="${preset}"`));
 });
 
+test('every construction palette kind is unique for the packaged client controls',()=>{
+ const html=readFileSync(new URL('../src/index.html',import.meta.url),'utf8');
+ const kinds=[...html.matchAll(/data-kind="([^"]+)"/g)].map(match=>match[1]);
+ assert.equal(new Set(kinds).size,kinds.length);
+ for(const kind of ['wall','floor','column'])assert.ok(kinds.includes(kind));
+});
+
 test('build preview stays local until Apply and Cancel never sends a command',async()=>{
  class Shape { constructor(){this.points=[];} moveTo(x,y){this.points.push([x,y]);} lineTo(x,y){this.points.push([x,y]);} closePath(){} }
  class ExtrudeGeometry { constructor(shape,options){this.shape=shape;this.options=options;} translate(){return this;} }

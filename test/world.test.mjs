@@ -299,3 +299,26 @@ test('stairs provide four equal walkable rises toward their saved cardinal direc
  }
  assert.deepEqual(heights,[.5,1,1.5,2]);
 });
+
+test('stairs and ramps are walkable in every cardinal direction and ignore client Y',()=>{
+ for(const objectType of ['stairs','ramp'])for(const direction of ['north','east','south','west']){
+  let world=applyCommand(emptyWorld(),builder,{type:'build',objectType,direction,position:{x:0,y:1,z:0},size:{x:8,y:2,z:8}}).state;
+  const start={north:{x:0,z:5},east:{x:-5,z:0},south:{x:0,z:-5},west:{x:5,z:0}}[direction];
+  const target={north:{x:0,z:3.5},east:{x:3.5,z:0},south:{x:0,z:3.5},west:{x:-3.5,z:0}}[direction];
+  world.players.push({id:'alice',position:{...start,y:0},velocityY:0});
+  for(let i=0;i<10;i++)world=move(world,{...target,y:500});
+  assert.ok(player(world).position.y>1.5,objectType+' '+direction+' '+JSON.stringify(player(world).position));
+  assert.ok(player(world).position.y<=2+1e-6,objectType+' '+direction+' '+JSON.stringify(player(world).position));
+ }
+});
+
+test('stairs do not step the player into a low ceiling',()=>{
+ let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'stairs',direction:'east',position:{x:10,y:1,z:0},size:{x:8,y:2,z:4}}).state;
+ world.objects.push({id:'low-ceiling',type:'block',position:{x:11,y:3.9,z:0},size:{x:2,y:1,z:4},color:'#c8a570',ownerId:'alice',blocksMovement:true,supportsPlayer:true});
+ world.players.push({id:'alice',position:{x:5,y:0,z:0},velocityY:0});
+ for(const x of [6.25,7.5,8.5,9.5,10.5,11.5,12.5])world=move(world,{x,y:500,z:0});
+ const current=player(world);
+ assert.equal(current.position.y,1.5,JSON.stringify(current));
+ assert.ok(current.position.x<12,JSON.stringify(current));
+ assert.ok(current.position.y+1.62<=3.4+1e-6,JSON.stringify(current));
+});
