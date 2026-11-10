@@ -73,7 +73,7 @@ test('canceling an agent preview clears only local ghosts and never calls Apply'
  h.context.command=async(...args)=>commands.push(args);
  h.context.bridge={decideBuildPreview:async(...args)=>decisions.push(args)};
  h.load('function addMessage(text, kind =', 'function updateChatControls()');
- h.load('function clearAgentBuildPreview()', 'function buildDesign()');
+ h.load('function clearAgentBuildPreview(', 'function buildDesign()');
  h.run("showAgentBuildPreview({previewId:'preview-2',objects:[{objectType:'block',position:{x:0,y:1,z:0},size:{x:2,y:2,z:2},color:'#123456'}]})");
  const card=h.element('chat').children[0],cancel=card.children.find(node=>/cancel/i.test(node.textContent));
  await cancel.listeners.click();
@@ -126,7 +126,7 @@ test('agent build preview is visible locally and only its approval button grants
  h.context.command=async(...args)=>h.context.commands.push(args);
  h.context.bridge={decideBuildPreview:async(...args)=>h.context.decisions.push(args)};
  h.load('function addMessage(text, kind =', 'function updateChatControls()');
- h.load('function clearAgentBuildPreview()', 'function buildDesign()');
+ h.load('function clearAgentBuildPreview(', 'function buildDesign()');
  const objects=[
   {objectType:'block',position:{x:0,y:1,z:0},size:{x:2,y:2,z:2},color:'#123456'},
   {objectType:'bridge',position:{x:8,y:1,z:0},size:{x:10,y:1,z:3},color:'#654321'},

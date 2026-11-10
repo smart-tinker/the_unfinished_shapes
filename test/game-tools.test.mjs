@@ -216,7 +216,7 @@ test('agent construction remains local until a trusted approval applies the exac
   const state=await (await fetch(connection.url+'/state',{headers:{Authorization:`Bearer ${token}`}})).json();
   assert.equal(state.revision,0);assert.equal(state.objects.length,0);
   const early=await session.execute({name:'world_apply',threadId,arguments:{previewId:proposed.previewId}});
-  assert.equal(early.success,false);assert.match(early.contentItems[0].text,/approval/i);
+  assert.equal(early.success,false);assert.match(early.contentItems[0].text,/explicitly approve/i);
   assert.equal((await (await fetch(connection.url+'/state',{headers:{Authorization:`Bearer ${token}`}})).json()).objects.length,0);
   assert.throws(()=>session.decide(proposed.previewId,'apply','another-thread'),/thread|conversation/i);
   session.decide(proposed.previewId,'apply',threadId);
