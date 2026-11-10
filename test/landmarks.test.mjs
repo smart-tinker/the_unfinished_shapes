@@ -109,12 +109,13 @@ test('agent scene context keeps landmark labels and stable selected IDs; schemas
 
 test('beacon labels stay within range and only the eight nearest are visible',()=>{
  const source=readFileSync(new URL('../src/renderer.mjs',import.meta.url),'utf8');
- const start=source.indexOf('const BEACON_LABEL_RANGE'),end=source.indexOf('function clearBuildPreview()',start);
+ assert.match(source,/const BEACON_LABEL_RANGE = 40, MAX_VISIBLE_BEACON_LABELS = 8/);
+ const start=source.indexOf('function updateBeaconLabels()'),end=source.indexOf('function clearBuildPreview()',start);
  assert.ok(start>=0&&end>start,'beacon label visibility policy is implemented');
  const labels=Array.from({length:10},()=>({visible:true}));
  const beaconLabels=new Map(labels.map((label,index)=>[String(index),{mesh:{position:{distance:[5,3,2,1,6,7,8,9,10,41][index]}},label}]));
  const update=runInNewContext(`(()=>{${source.slice(start,end)};return updateBeaconLabels})()`,{
-  camera:{position:{distanceTo:position=>position.distance}},beaconLabels
+  camera:{position:{distanceTo:position=>position.distance}},beaconLabels,BEACON_LABEL_RANGE:40,MAX_VISIBLE_BEACON_LABELS:8
  });
  update();
  assert.deepEqual(labels.map(label=>label.visible),[true,true,true,true,true,true,true,true,false,false]);
