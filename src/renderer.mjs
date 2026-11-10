@@ -279,7 +279,15 @@ function updateObjectDrag(event) {
   const draft = dragCandidate;
   if (!draft || draft.pointerId !== event.pointerId || (!draft.started && Math.hypot(event.clientX - draft.startX, event.clientY - draft.startY) <= 5)) return;
   const object = objectData.get(draft.objectId);
-  if (!canEditObject(object) || editing || (!draft.started && selectedId === draft.objectId && inspectorDirty)) { controls.enabled = true; dragCandidate = null; $('move-plane').disabled = false; return; }
+  if (!canEditObject(object) || editing || (!draft.started && selectedId === draft.objectId && inspectorDirty)) {
+    const permissionLost = !canEditObject(object);
+    clearMovePreview();
+    if (permissionLost) {
+      fillInspector(object);
+      $('edit-message').textContent = 'Your permission to edit this shape changed; the local move preview was discarded.';
+    }
+    return;
+  }
   if (!draft.started) {
     if (!selectObject(draft.objectId)) { controls.enabled = true; dragCandidate = null; $('move-plane').disabled = false; return; }
     draft.object = structuredClone(object); draft.ghost = objectMesh(object);
@@ -350,7 +358,20 @@ function renderWorld(state, movementVersion = localMovementVersion) {
   latestStateRevision = state.revision; worldState = state; worldRevision = state.revision;
   const firstState = meId !== state.me.id, savedPlayer = state.players.find(p => p.id === state.me.id);
   if (savedPlayer && movementVersion === localMovementVersion && !moveRunning && (firstState || positionKey(playerPosition) === lastPosition)) { playerPosition = { ...savedPlayer.position }; playerVelocityY = savedPlayer.velocityY ?? 0; lastPosition = positionKey(savedPlayer.position); }
+  const accessChanged = meId !== state.me.id || role !== state.me.role;
   meId = state.me.id; role = state.me.role; $('role').textContent = `Role: ${state.me.role}`; $('revision').textContent = `REV ${state.revision}`;
+  if (accessChanged && selectedId) {
+    const selected = objectData.get(selectedId), draft = movePreview ?? dragCandidate;
+    if (draft && !canEditObject(objectData.get(draft.objectId))) {
+      clearMovePreview();
+      fillInspector(selected);
+      $('edit-message').textContent = 'Your permission to edit this shape changed; the local move preview was discarded.';
+    } else {
+      const canEdit = canEditObject(selected);
+      $('edit-fields').disabled = editing || !canEdit;
+      $('remove').disabled = !selected || !canEdit;
+    }
+  }
   const nextSnapshot = JSON.stringify(state.objects);
   if (objectSnapshot !== nextSnapshot) {
     for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear();
@@ -479,6 +500,7 @@ for(const [button,kind,input] of [['browse-codex','codex','codex'],['browse-work
 $('settings-open').addEventListener('click', () => $('settings').showModal()); $('settings-close').addEventListener('click', () => $('settings').close());
 function readSettings() { return { ...settings, workspacePath: $('workspace').value.trim(), codexPath: $('codex').value.trim(), serverUrl: $('server-url').value.trim(), token: $('token').value }; }
 async function saveSettings() {
+  if (editing) throw new Error('Finish the current world update before changing connection settings.');
   const next = readSettings();
   const changed = ['workspacePath', 'codexPath', 'serverUrl', 'token'].some(key => next[key] !== settings[key]);
   if (changed && (connected || settings.threadId)) {
