@@ -361,7 +361,7 @@ test('unknown lighting Apply is reconciled from fresh server state before releas
  h.context.feedback=()=>{};h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1};h.context.renderer={shadowMap:{enabled:true}};h.context.controls={target:{x:0,y:0,z:0}};
  h.load('function updateLightingControls(','function labelTexture(');
  await h.run('applyWorldLightingPreview()');
- assert.deepEqual(JSON.parse(JSON.stringify(h.context.requests)),[['/command','POST'],['/state',undefined]]);
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.requests)),[['/command','POST'],['/state','GET']]);
  assert.equal(h.context.worldLightingPreview,null);
  assert.deepEqual(JSON.parse(JSON.stringify(h.context.worldState.lighting)),{version:2,ambientIntensity:1,sunIntensity:2});
  assert.match(h.element('world-light-message').textContent,/refreshed/i);
