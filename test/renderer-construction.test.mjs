@@ -130,10 +130,11 @@ test('agent build preview is visible locally and only its approval button grants
  const objects=[
   {objectType:'block',position:{x:0,y:1,z:0},size:{x:2,y:2,z:2},color:'#123456'},
   {objectType:'bridge',position:{x:8,y:1,z:0},size:{x:10,y:1,z:3},color:'#654321'},
+  {objectType:'door',position:{x:12,y:1.5,z:0},size:{x:1,y:3,z:.25},color:'#886644'},
  ];
  h.context.preview={previewId:'preview-1',objects};
  h.run('showAgentBuildPreview(preview)');
- assert.equal(h.context.added.length,2);
+ assert.equal(h.context.added.length,3);
  const card=h.element('chat').children[0];
  assert.match(card.textContent,/approve|look right/i);
  const apply=card.children.find(node=>/approve/i.test(node.textContent));
@@ -148,6 +149,19 @@ test('interactive object palette and inspector controls are present in the clien
  const html=readFileSync(new URL('../src/index.html',import.meta.url),'utf8');
  for(const kind of ['door','gate','button'])assert.match(html,new RegExp('data-kind="'+kind+'"'));
  for(const id of ['edit-use-policy','edit-target-id','edit-target-state','interactive-actions','edit-open','edit-close','edit-use-button'])assert.match(html,new RegExp('id="'+id+'"'));
+});
+
+test('interactive palette designs use safe default dimensions',()=>{
+ const h=rendererHarness();
+ h.element('build-x').value='2';h.element('build-z').value='3';
+ h.load('function buildDesign()','function previewSelectedBuild()');
+ for(const [type,size] of [['door',{x:1,y:3,z:.25}],['gate',{x:4,y:2,z:.5}],['button',{x:.5,y:.5,z:.25}]]){
+  h.context.selectedPreset=type;
+  const design=h.run('buildDesign()');
+  assert.equal(design.objectType,type);
+  assert.deepEqual(JSON.parse(JSON.stringify(design.size)),size);
+  assert.equal(design.position.y,size.y/2);
+ }
 });
 
 test('open doors and gates render visibly different from closed objects',()=>{
