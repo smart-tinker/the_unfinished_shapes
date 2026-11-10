@@ -127,3 +127,11 @@ test('server conflict refreshes authoritative state once, preserves the draft an
   assert.match(h.element('edit-message').textContent, /proposal is preserved/);
   assert.equal(h.element('edit-fields').disabled, false);
 });
+
+test('drag settings do not mark object inspector fields dirty', () => {
+  for (const id of ['move-plane', 'move-snap-enabled', 'move-grid-step']) {
+    const h = editingHarness();
+    h.element('edit-form').listeners.input({ target: { id } });
+    assert.equal(h.run('inspectorDirty'), false, `${id} is a drag preference, not an object edit`);
+  }
+});
