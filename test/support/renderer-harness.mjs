@@ -9,8 +9,8 @@ export function rendererHarness() {
   let sequence = 0;
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
-      id, value: '', hidden: false, disabled: false, textContent: '', dataset: {}, children: [], listeners: {},
-      addEventListener(name, listener) { this.listeners[name] = listener; },
+      id, value: '', hidden: false, disabled: false, textContent: '', dataset: {}, style: {}, children: [], listeners: {},
+      addEventListener(name, listener) { this.listeners[name] = listener; },\n      setAttribute(name, value) { this[name] = value; },
       replaceChildren(...children) { this.children = []; children.forEach(child => this.append(child)); },
       append(child) { child.parent = this; this.children.push(child); },
       remove() { this.parent.children.splice(this.parent.children.indexOf(this), 1); },
