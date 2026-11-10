@@ -12,6 +12,7 @@ await mkdir(fakeBin);await writeFile(fakeCodex,`#!/bin/sh\ntouch '${marker}'\nex
 const expectedCodexPath=await realpath(fakeCodex);
 const testEnv={...process.env,TUS_DATA_DIR:dir,PATH:fakeBin+path.delimiter+process.env.PATH};
 const packagedExecutable=process.env.TUS_SMOKE_EXECUTABLE;
+const expectedVersion=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')).version;
 // Headless Linux runners use explicit SwiftShader to avoid unstable automatic fallback.
 // These flags apply only to smoke launches, never to normal application startup.
 const ciFlags=process.platform==='linux'?['--no-sandbox','--use-gl=angle','--use-angle=swiftshader']:[];
@@ -30,6 +31,8 @@ await withSmokeCleanup(async()=>{
  await launch('first launch');
  if(process.platform==='darwin') assert.equal(await app.evaluate(()=>process.argv.includes('--no-sandbox')),false,'native macOS must not disable the sandbox');
  const page=await app.firstWindow();graphics=await observeGraphics(page,{label:'first launch'});
+ assert.equal(await page.locator('#build-version').count(),1,'packaged UI exposes one build version label');
+ assert.equal(await page.locator('#build-version').innerText(),`v${expectedVersion}`,'packaged UI version matches the application package version');
  if(process.platform==='darwin') assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences().sandbox),true,'native macOS renderer sandbox remains enabled');
  graphics.phase('world connection');
  await page.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
