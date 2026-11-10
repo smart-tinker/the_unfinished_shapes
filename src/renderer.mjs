@@ -471,13 +471,14 @@ function refreshSelectionVisuals() {
     selectionBoxes.set(id,box); scene.add(box);
   }
 }
+function previewObjectIds(draft) { return draft?.objects?.map(object => object.id) ?? (draft?.objectId ? [draft.objectId] : []); }
 function applySelection(ids, primary = null, fromPoll = false) {
   const next = new Set([...ids].filter(id => objectData.has(id)).slice(0,MAX_GROUP_SELECTION));
   const old = [...selectedIds], changed = old.length !== next.size || old.some(id => !next.has(id));
   if (!changed && !fromPoll) return true;
   if (!fromPoll && inspectorDirty && !window.confirm('Discard unapplied changes to this shape?')) return false;
   const draft = movePreview ?? dragCandidate;
-  if ((fromPoll && draft?.objects?.some(object => !next.has(object.id))) || (!fromPoll && changed && (movePreview || dragCandidate?.started))) clearMovePreview();
+  if ((fromPoll && previewObjectIds(draft).some(id => !next.has(id))) || (!fromPoll && changed && (movePreview || dragCandidate?.started))) clearMovePreview();
   selectedIds.clear(); for (const id of next) selectedIds.add(id);
   const previousPrimary = selectedId;
   selectedId = next.has(primary) ? primary : next.has(previousPrimary) ? previousPrimary : [...next].at(-1) ?? null;
@@ -511,7 +512,7 @@ function renderWorld(state, movementVersion = localMovementVersion) {
   const accessChanged = meId !== state.me.id || role !== state.me.role;
   meId = state.me.id; role = state.me.role; $('role').textContent = `Role: ${state.me.role}`; $('revision').textContent = `REV ${state.revision}`;
   const draft = movePreview ?? dragCandidate;
-  if (accessChanged && draft?.objects?.some(object => !canEditObject(objectData.get(object.id)))) {
+  if (accessChanged && previewObjectIds(draft).some(id => !objectData.has(id) || !canEditObject(objectData.get(id)))) {
     clearMovePreview(); $('group-move-status').textContent = 'Your permission to edit a selected shape changed; the local move preview was discarded.';
   }
   const nextSnapshot = JSON.stringify(state.objects);
