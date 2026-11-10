@@ -189,7 +189,7 @@ test('interactive controls send explicit state and button versions without clien
  h.context.inspectorBase={id:'door-1',type:'door',version:4};
  h.context.worldState={objects:[{id:'button-1',type:'button',version:3,targetId:'door-1'},{id:'door-1',type:'door',version:4}]};
  h.context.document.querySelectorAll=()=>[];
- h.load('async function command(body)','for (const button of document.querySelectorAll(\\'[data-kind]\\'))');
+ h.load('async function command(body)',"for (const button of document.querySelectorAll(");
  await h.element('edit-open').listeners.click();
  h.context.inspectorBase={id:'button-1',type:'button',version:3,targetId:'door-1'};
  await h.element('edit-use-button').listeners.click();
