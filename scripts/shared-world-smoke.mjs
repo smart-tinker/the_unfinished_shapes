@@ -95,9 +95,44 @@ async function projectPoint(page, position) {
 async function groundPoint(page, position) { return projectPoint(page, { ...position, y: 0 }); }
 async function dragObjectTo(page, object, destination) {
   const start = await projectPoint(page, object.position), end = await groundPoint(page, destination);
+  const geometry = await page.evaluate(({ start, end }) => {
+    const canvas = document.querySelector('#viewport canvas');
+    window.__tusDragTrace = { counts: {}, events: [], last: null };
+    if (!canvas.dataset.tusDragTrace) {
+      canvas.dataset.tusDragTrace = 'true';
+      for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) canvas.addEventListener(type, event => {
+        const trace = window.__tusDragTrace, count = trace.counts[type] = (trace.counts[type] || 0) + 1;
+        const target = document.elementFromPoint(event.clientX, event.clientY);
+        const sample = { type, x: Math.round(event.clientX), y: Math.round(event.clientY), target: target?.id || target?.tagName, canvasTarget: target === canvas, selected: document.querySelector('#selection-label')?.textContent, preview: document.querySelector('#move-preview-status')?.textContent, previewHidden: document.querySelector('#move-preview-status')?.hidden };
+        trace.last = sample;
+        if (type !== 'pointermove' || count <= 2 || count === 100) trace.events.push(sample);
+      });
+    }
+    const at = point => { const target = document.elementFromPoint(point.x, point.y); return { x: Math.round(point.x), y: Math.round(point.y), target: target?.id || target?.tagName, canvasTarget: target === canvas }; };
+    const rect = canvas.getBoundingClientRect();
+    return { viewport: { width: innerWidth, height: innerHeight }, canvas: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, startTarget: at(start), endTarget: at(end) };
+  }, { start, end });
   await page.mouse.move(start.x, start.y); await page.mouse.down();
   for (let i = 1; i <= 100; i++) await page.mouse.move(start.x + (end.x - start.x) * i / 100, start.y + (end.y - start.y) * i / 100);
   await page.mouse.up();
+  return { start, end, ...geometry };
+}
+async function waitForMovePreview(page, drag) {
+  try { await page.waitForFunction(() => document.querySelector('#move-preview-status')?.textContent.includes('Preview'), undefined, { timeout: 5000 }); }
+  catch {
+    const state = await page.evaluate(() => ({
+      selected: document.querySelector('#selection-label')?.textContent,
+      role: document.querySelector('#role')?.textContent,
+      editHidden: document.querySelector('#edit-form')?.hidden,
+      editDisabled: document.querySelector('#edit-fields')?.disabled,
+      editMessage: document.querySelector('#edit-message')?.textContent,
+      preview: document.querySelector('#move-preview-status')?.textContent,
+      previewHidden: document.querySelector('#move-preview-status')?.hidden,
+      position: ['x', 'y', 'z'].map(axis => document.querySelector('#edit-position-' + axis)?.value),
+      trace: window.__tusDragTrace,
+    }));
+    throw new Error('No local drag preview was created: ' + JSON.stringify({ drag, state }));
+  }
 }
 async function close(client) {
   if (!client.app) return;
@@ -178,8 +213,8 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('a');
   const beforePreview = await state();
   await select(alice, built);
-  await dragObjectTo(alice.page, built, { x: 20, z: 0 });
-  await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.textContent.includes('Preview'));
+  const drag = await dragObjectTo(alice.page, built, { x: 20, z: 0 });
+  await waitForMovePreview(alice.page, drag);
   const previewState = await state();
   assert.equal(previewState.revision, beforePreview.revision, 'pointer movement and preview do not mutate the server');
   assert.deepEqual(previewState.objects, beforePreview.objects);
@@ -188,8 +223,8 @@ await withSmokeCleanup(async () => {
   await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.hidden);
   assert.equal((await state()).revision, beforePreview.revision, 'Cancel discards only the local proposal');
 
-  await dragObjectTo(alice.page, built, { x: 20, z: 0 });
-  await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.textContent.includes('Preview'));
+  const drag = await dragObjectTo(alice.page, built, { x: 20, z: 0 });
+  await waitForMovePreview(alice.page, drag);
   assert.equal((await state()).revision, beforePreview.revision);
   await alice.page.locator('#edit-apply').click();
   await alice.page.waitForFunction(() => document.querySelector('#edit-message').textContent.includes('saved'));
