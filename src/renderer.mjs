@@ -456,9 +456,14 @@ async function saveSettings() {
       throw new Error('Clear the native Goal, resolve pending approvals, and wait for Codex to become idle before changing connection settings.');
     }
   }
+  if (changed && (movePreview || dragCandidate || inspectorDirty) &&
+      !window.confirm('Discard unapplied world changes before changing connection settings?')) {
+    throw new Error('Connection settings were not changed; local world edits are preserved.');
+  }
   if (next.workspacePath !== settings.workspacePath) next.threadId = '';
   if (changed) {
     if (movePreview || dragCandidate) cancelMovePreview();
+    inspectorDirty = false;
     await bridge.disconnectCodex(); connected = false; busy = false; updateChatControls();
     $('agent-status').textContent = 'Settings changed · reconnect Codex';
   }
