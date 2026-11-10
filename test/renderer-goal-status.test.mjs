@@ -4,9 +4,12 @@ import { rendererHarness } from './support/renderer-harness.mjs';
 
 function harness() {
   const h = rendererHarness();
-  h.run(`let settings = { threadId: 'thread-1' }, connected = false, busy = false, streamMessage = null, agentControlState = null, goalMessageContextId = null, agentControlRead = 0;
+  h.run(`let settings = { threadId: 'thread-1' }, connected = false, busy = false, streamMessage = null, agentControlState = null, goalMessageContextId = null, agentControlRead = 0, ordinaryTurn = false;
+    let bridge = { sendPrompt: async () => ({ sceneContext: { revision: 1, selectedCount: 0, includedObjectCount: 0, totalObjectCount: 0, truncated: false } }) };
+    function sceneContextForPrompt() { return {}; } function startActivity() {}
     function activityThread() {} function refreshAgentControls() {} function updateChatControls() {}
     function notificationActivity() {} function toolActivity() {} function addMessage() {}`);
+  h.load("$('chat-form').addEventListener('submit'", "$('interrupt').addEventListener('click'");
   h.load('function codexEvent(event) {', 'try { initScene(); }');
   return h;
 }
@@ -26,6 +29,20 @@ test('the status distinguishes normal turns from an active native Goal', () => {
   assert.equal(h.element('agent-status').textContent, 'Native Goal active');
   h.run("codexEvent({ type: 'notification', method: 'turn/completed', params: { threadId: 'thread-1', turn: { status: 'completed' } } })");
   assert.equal(h.element('agent-status').textContent, 'Native Goal active');
+});
+
+test('an ordinary request is not labeled as Goal work while an active Goal exists', async () => {
+  const h = harness();
+  h.run(`connected = true;
+    agentControlState = { threadStatus: 'idle', pendingApprovals: 0, goal: { id: 'goal-1', status: 'active' } };
+    goalMessageContextId = 'goal-1'; $('prompt').value = 'Inspect this object';
+    let capturedMessages = [];
+    addMessage = (text, kind = 'system') => { const message = { textContent: text, kind, querySelector: () => null }; capturedMessages.push(message); return message; };`);
+  await h.element('chat-form').listeners.submit({ preventDefault() {} });
+  h.run("codexEvent({ type: 'notification', method: 'turn/started', params: { threadId: 'thread-1' } })");
+  assert.equal(h.element('agent-status').textContent, 'Working on your request…');
+  h.run("codexEvent({ type: 'notification', method: 'item/agentMessage/delta', params: { threadId: 'thread-1', delta: 'Here is the result.' } })");
+  assert.equal(h.run('capturedMessages[1].kind'), 'assistant');
 });
 
 test('disconnect never presents the agent as idle or the Goal as stopped', () => {

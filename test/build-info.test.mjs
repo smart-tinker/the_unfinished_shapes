@@ -8,7 +8,11 @@ test('application version label is dynamic instead of a stale release literal', 
   assert.doesNotMatch(html, /0\.1-rc3/, 'the UI must not advertise the stale rc3 version');
   const main = await readFile(new URL('../src/main.mjs', import.meta.url), 'utf8');
   const smoke = await readFile(new URL('../scripts/electron-smoke.mjs', import.meta.url), 'utf8');
+  const windowsSmoke = await readFile(new URL('../scripts/windows-installer-smoke.mjs', import.meta.url), 'utf8');
   assert.match(main, /app\.getVersion\(\)/, 'Electron package metadata is the version source');
   assert.match(main, /build-info\.json/, 'a packaged build reads its recorded source identity');
   assert.match(smoke, /expectedSourceSha/, 'packaged smoke compares the visible identity with the candidate commit');
+  const waitForBuildIdentity = /await page\\.waitForFunction\\(\\(\\) => document\\.querySelector\\('#build-version'\\)\\?\\.getAttribute\\('title'\\) !== 'Loading build metadata'/;
+  assert.match(smoke, waitForBuildIdentity, 'Linux and macOS smoke waits for build metadata before checking the label');
+  assert.match(windowsSmoke, waitForBuildIdentity, 'Windows smoke waits for build metadata before checking the label');
 });
