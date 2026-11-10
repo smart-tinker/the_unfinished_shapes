@@ -19,6 +19,20 @@ test('disabling grid snap preserves pointer coordinates but still applies surfac
   assert.deepEqual(placementPosition({ x: 1.26, z: -2.76 }, moving, supported, 0), { x: 1.26, y: 5, z: -2.76 });
 });
 
+test('selected XY plane snaps horizontal and vertical while preserving depth', () => {
+  assert.deepEqual(
+    placementPosition({ x: 1.26, y: 4.24, z: 99 }, moving, null, 0.5, 'xy'),
+    { x: 1.5, y: 4, z: 0 },
+  );
+});
+
+test('selected YZ plane snaps vertical and depth while preserving width', () => {
+  assert.deepEqual(
+    placementPosition({ x: 99, y: 2.24, z: -2.76 }, moving, null, 0.5, 'yz'),
+    { x: 0, y: 2, z: -3 },
+  );
+});
+
 test('apply contains one conditional update and preserves the original server position', () => {
   const next = { x: 8, y: 1, z: -3 };
   const command = positionUpdateCommand(moving, next);
