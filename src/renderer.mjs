@@ -265,7 +265,7 @@ function clearMovePreview() {
   dragCandidate = null; movePreview = null;
   if (controls) controls.enabled = !boxSelectMode;
   $('move-preview-status').hidden = true; $('move-preview-status').textContent = '';
-  $('move-cancel').hidden = true; $('group-move-apply').disabled = true; $('group-move-cancel').hidden = true;
+  $('move-cancel').hidden = true; $('group-move-apply').disabled = true;
   $('move-plane').disabled = false;
 }
 function cancelMovePreview() {
@@ -396,7 +396,7 @@ function finishObjectDrag(event) {
     dragCandidate = null; controls.enabled = !boxSelectMode;
     if (draft.started && draft.previewPosition) {
       movePreview = draft;
-      if (draft.objects.length > 1) { $('group-move-apply').disabled = false; $('group-move-cancel').hidden = false; }
+      if (draft.objects.length > 1) $('group-move-apply').disabled = false;
     } else clearMovePreview();
   }
   if (Math.hypot(event.clientX-Number(renderer.domElement.dataset.startX),event.clientY-Number(renderer.domElement.dataset.startY)) > 5) return;
@@ -468,7 +468,7 @@ function applySelection(ids, primary = null, fromPoll = false) {
       ? readOnly + ' read-only shape(s) selected. Remove them before moving this group.'
       : 'Drag any selected shape to preview one shared group move.';
   }
-  $('group-move-apply').disabled = true; $('group-move-cancel').hidden = true;
+  $('group-move-apply').disabled = true;
   return true;
 }
 function selectObject(id, fromPoll = false, additive = false) {
@@ -493,10 +493,14 @@ function selectObjectsInBox(start,end,additive=false) {
     const x = rect.left + (point.x+1)*rect.width/2, y = rect.top + (1-point.y)*rect.height/2;
     if (x >= left && x <= right && y >= top && y <= bottom) ids.push(object.id);
   }
-  const next = new Set(additive ? selectedIds : []);
-  for (const id of ids) if (next.size < MAX_GROUP_SELECTION) next.add(id);
+  const next = new Set(additive ? selectedIds : []); let skipped = false;
+  for (const id of ids) {
+    if (next.has(id)) continue;
+    if (next.size === MAX_GROUP_SELECTION) { skipped = true; break; }
+    next.add(id);
+  }
   applySelection(next,[...next].at(-1));
-  if (ids.length + (additive ? selectedIds.size : 0) > MAX_GROUP_SELECTION) $('group-move-status').textContent = 'Selection is limited to ' + MAX_GROUP_SELECTION + ' shapes; extra shapes were skipped.';
+  if (skipped) $('group-move-status').textContent = 'Selection is limited to ' + MAX_GROUP_SELECTION + ' shapes; extra shapes were skipped.';
 }
 function renderWorld(state, movementVersion = localMovementVersion) {
   if (state.revision < latestStateRevision) return;
@@ -514,9 +518,8 @@ function renderWorld(state, movementVersion = localMovementVersion) {
     for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear();
     objectData.clear();
     for (const object of state.objects) { objectData.set(object.id, object); const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh); }
-    objectSnapshot = nextSnapshot;
-  }
-  selectObject(null,true);
+    objectSnapshot = nextSnapshot; selectObject(null,true);
+  } else if (accessChanged) selectObject(null,true);
   const online = Array.isArray(state.onlinePlayerIds) ? new Set(state.onlinePlayerIds) : null;
   const live = new Set();
   for (const remote of state.players) {
@@ -559,7 +562,6 @@ $('move-grid-step').disabled = !$('move-snap-enabled').checked;
 $('move-snap-enabled').addEventListener('change', () => { $('move-grid-step').disabled = !$('move-snap-enabled').checked; refreshMovePreview(); });
 $('move-grid-step').addEventListener('input', refreshMovePreview);
 $('move-cancel').addEventListener('click', cancelMovePreview);
-$('group-move-cancel').addEventListener('click', cancelMovePreview);
 $('box-select-toggle').addEventListener('click', () => setBoxSelectionMode(!boxSelectMode));
 $('group-move-apply').addEventListener('click', async () => {
   const draft = movePreview;
@@ -669,6 +671,8 @@ $('fullscreen-toggle').addEventListener('click', requestFullscreenToggle);
 setFullscreenState(false);
 window.addEventListener('keydown', event => {
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || document.querySelector('dialog[open]')) return;
+  if (event.code === 'Escape' && boxCandidate) { event.preventDefault(); cancelBoxSelection(); setBoxSelectionMode(false); return; }
+  if (event.code === 'Escape' && boxSelectMode) { event.preventDefault(); setBoxSelectionMode(false); return; }
   if (event.code === 'Escape' && (dragCandidate || movePreview)) { event.preventDefault(); cancelMovePreview(); return; }
   if (event.code === 'F11') { event.preventDefault(); if (!event.repeat) requestFullscreenToggle(); return; }
   if (event.code === 'Escape' && isFullscreen) { event.preventDefault(); requestFullscreenToggle(); return; }
