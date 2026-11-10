@@ -169,8 +169,8 @@ app.whenReady().then(async()=>{
     const modelOptions=agentModelForThread(await settings(),threadId);
     if(current!==bridge||connectedWorld!==world||current.threadId!==threadId)throw new Error('Codex conversation changed; refresh agent controls.');
     const result=await current.send(guide+text,modelOptions||{},snapshot);
-    if(current!==bridge||connectedWorld!==world||current.threadId!==threadId)throw new Error('Codex connection or conversation changed.');
-    return {...result,sceneContext:{revision:snapshot.revision,selectedCount:snapshot.selectedIds.length,includedObjectCount:snapshot.includedObjectCount,totalObjectCount:snapshot.totalObjectCount,truncated:snapshot.objectsTruncated||snapshot.playersTruncated,attached:true}};
+    const connectionChangedAfterAcceptance=current!==bridge||connectedWorld!==world||current.threadId!==threadId;
+    return {...result,sceneContext:{revision:snapshot.revision,selectedCount:snapshot.selectedIds.length,includedObjectCount:snapshot.includedObjectCount,totalObjectCount:snapshot.totalObjectCount,truncated:snapshot.objectsTruncated||snapshot.playersTruncated,attached:true,connectionChangedAfterAcceptance}};
   });
   handle('codex:interrupt',()=>bridge?.interrupt());
   handle('codex:respond',(id,result)=>bridge?.respond(id,result));

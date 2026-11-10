@@ -474,9 +474,11 @@ $('chat-form').addEventListener('submit',async event=>{
   busy=true;startActivity();updateChatControls();addMessage(text,'user');$('prompt').value='';streamMessage=null;
   try{
     const result=await bridge.sendPrompt(text,sceneContextForPrompt()),context=result?.sceneContext;
-    $('scene-context-status').textContent=context
-      ? `Scene context captured for this request: revision ${context.revision}, ${context.selectedCount} selected, ${context.includedObjectCount}/${context.totalObjectCount} objects${context.truncated?' (partial)':''}.`
-      : 'Scene context could not be confirmed for this request.';
+    $('scene-context-status').textContent=!context
+      ? 'Scene context could not be confirmed for this request.'
+      : context.connectionChangedAfterAcceptance
+        ? 'Request accepted, but the Codex connection changed before confirmation. Check the conversation before retrying.'
+        : `Scene context captured for this request: revision ${context.revision}, ${context.selectedCount} selected, ${context.includedObjectCount}/${context.totalObjectCount} objects${context.truncated?' (partial)':''}.`;
   }catch(error){
     $('scene-context-status').textContent='Scene context was not sent: '+error.message;
     addMessage(error.message,'error');$('activity-state').textContent='Error';
