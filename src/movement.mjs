@@ -137,13 +137,20 @@ export function movePlayer(world, current, command, deltaSeconds = 0.25) {
   for (let i = 1; i <= steps; i++) {
     const progress = i / steps;
     const grounded = velocityY === 0 && supportAt(objects, position.x, position.z, position.y) !== null;
+    const previousX = position.x, previousZ = position.z;
     position.x = sweepAxis(objects, position, 'x', start.x + (destination.x - start.x) * progress);
     position.z = sweepAxis(objects, position, 'z', start.z + (destination.z - start.z) * progress);
     if (!step) continue;
 
     if (grounded && velocityY === 0) {
       const surface = reachableSurfaceAt(objects, position.x, position.z, position.y);
-      if (surface !== null) { position.y = surface; continue; }
+      if (surface !== null) {
+        const ceiling = surface > position.y + EPSILON ? ceilingAt(objects, position.x, position.z, position.y, surface) : null;
+        if (ceiling !== null && surface > ceiling + EPSILON) {
+          position.x = previousX; position.z = previousZ; continue;
+        }
+        position.y = surface; continue;
+      }
     }
     const support = supportAt(objects, position.x, position.z, position.y);
     if (velocityY === 0 && support !== null) { position.y = support; continue; }
