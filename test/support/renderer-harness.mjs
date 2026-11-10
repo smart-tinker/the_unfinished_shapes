@@ -10,7 +10,8 @@ export function rendererHarness() {
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
       id, value: '', hidden: false, disabled: false, textContent: '', dataset: {}, style: {}, children: [], listeners: {},
-      addEventListener(name, listener) { this.listeners[name] = listener; },\n      setAttribute(name, value) { this[name] = value; },
+      addEventListener(name, listener) { this.listeners[name] = listener; },
+      setAttribute(name, value) { this[name] = value; },
       replaceChildren(...children) { this.children = []; children.forEach(child => this.append(child)); },
       append(child) { child.parent = this; this.children.push(child); },
       remove() { this.parent.children.splice(this.parent.children.indexOf(this), 1); },
@@ -27,7 +28,8 @@ export function rendererHarness() {
     assert.ok(from >= 0 && to > from, `Renderer test boundaries missing: ${start} … ${end}`);
     run(source.slice(from, to));
   }
-  function text() { return [...elements.values()].map(node => node.textContent).join('\n'); }
+  function text() { return [...elements.values()].map(node => node.textContent).join('
+'); }
   load('function refreshAgentStatus()', 'function populateAgentEfforts(');
   return { context, element, run, load, text, has: start => source.includes(start) };
 }
