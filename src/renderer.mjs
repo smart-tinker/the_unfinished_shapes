@@ -197,6 +197,16 @@ function canEditObject(object) {
 function placementHit(event, draft) {
   const ray = pointerRay(event); if (!ray) return null;
   const origin = draft.object.position;
+  if (['x', 'y', 'z'].includes(draft.plane)) {
+    const axis = draft.plane === 'x' ? new THREE.Vector3(1, 0, 0) : draft.plane === 'y' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+    const offset = ray.ray.origin.clone().sub(new THREE.Vector3(origin.x, origin.y, origin.z));
+    const dot = axis.dot(ray.ray.direction), denominator = 1 - dot * dot;
+    if (denominator < 1e-6) return null;
+    const distance = (axis.dot(offset) - dot * ray.ray.direction.dot(offset)) / denominator;
+    if (dot * distance - ray.ray.direction.dot(offset) < 0) return null;
+    const point = new THREE.Vector3(origin.x, origin.y, origin.z).addScaledVector(axis, distance);
+    return { point, surface: null };
+  }
   const plane = draft.plane === 'xy'
     ? new THREE.Plane(new THREE.Vector3(0, 0, 1), -origin.z)
     : draft.plane === 'yz'
