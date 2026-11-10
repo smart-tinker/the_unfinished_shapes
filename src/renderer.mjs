@@ -365,6 +365,7 @@ function renderWorld(state, movementVersion = localMovementVersion) {
     if (draft && !canEditObject(objectData.get(draft.objectId))) {
       clearMovePreview();
       fillInspector(selected);
+      $('remove').disabled = !selected || !canEditObject(selected);
       $('edit-message').textContent = 'Your permission to edit this shape changed; the local move preview was discarded.';
     } else {
       const canEdit = canEditObject(selected);
