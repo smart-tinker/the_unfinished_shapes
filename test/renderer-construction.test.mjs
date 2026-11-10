@@ -298,8 +298,8 @@ test('lamp mesh has a visible on/off emitter and a bounded point light without s
  const on=h.run('objectMesh(lamp)'),light=on.children.find(child=>child instanceof PointLight);
  assert.ok(light);assert.equal(light.intensity,3);assert.equal(light.distance,11);assert.equal(light.castShadow,false);
  assert.ok(on.userData.lampEmitter.material.emissiveIntensity>0);
- assert.ok(on.userData.lampEmitter.position.y-on.userData.lampEmitter.geometry.dimensions[0]>=lamp.size.y/2,'the complete emitter must sit above the opaque lamp body');
- assert.ok(light.position.y>lamp.size.y/2,'the point light must sit outside the opaque lamp body');
+ assert.ok(on.userData.lampEmitter.position.y-on.userData.lampEmitter.geometry.dimensions[0]>=h.context.lamp.size.y/2,'the complete emitter must sit above the opaque lamp body');
+ assert.ok(light.position.y>h.context.lamp.size.y/2,'the point light must sit outside the opaque lamp body');
  h.context.lamp={...h.context.lamp,on:false};const off=h.run('objectMesh(lamp)');
  assert.equal(off.userData.lampLight.intensity,0);assert.equal(off.userData.lampEmitter.material.emissiveIntensity,0);
 });
