@@ -21,6 +21,7 @@ function editingHarness() {
       objectData.set(body.id,object); return {revision:2,object};
     }`);
   h.context.selectedIds = new Set(['shape-1']);
+  h.load('function canEditObject(object) {', 'function placementHit(');
   h.load('function fillInspector(', 'function renderWorld(');
   h.load("$('edit-form').addEventListener('input'", 'function setFullscreenState(value)');
   h.context.objectFixture = { id: 'shape-1', type: 'block', ownerId: 'alice', position: { x: 0, y: 1, z: 0 }, size: { x: 2, y: 2, z: 2 }, color: '#c8a570', blocksMovement: true, supportsPlayer: true };
