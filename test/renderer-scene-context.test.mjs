@@ -91,3 +91,13 @@ test('chat treats a lost turn-start acknowledgment as uncertain and blocks a bli
   assert.match(h.element('scene-context-status').textContent,/outcome is unknown.*check the (?:Codex )?conversation before retrying/i);
   assert.doesNotMatch(h.element('scene-context-status').textContent,/was not sent/i);
 });
+
+test('scene context excludes a pending local drag proposal', () => {
+  const h = sceneHarness();
+  h.run('let movePreview = { previewPosition: { x: 99, y: 99, z: 99 } };');
+  h.load('function sceneContextForPrompt() {', "$('chat-form').addEventListener");
+  const captured = h.run('sceneContextForPrompt()');
+  assert.deepEqual(Object.keys(captured).sort(), ['camera', 'revision', 'selectedIds']);
+  assert.deepEqual(JSON.parse(JSON.stringify(captured.selectedIds)), ['object-1']);
+  assert.doesNotMatch(JSON.stringify(captured), /99/);
+});

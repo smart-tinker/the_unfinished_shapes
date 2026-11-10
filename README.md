@@ -2,7 +2,7 @@
 
 A shared 3D construction world, with your own Codex as your companion.
 
-**0.1-rc8 is an early playable vertical slice, not a production MMO.** Rendering runs on the player's machine. Models run only when the player sends a request, using their own installed and authenticated Codex. This project does not implement an agent harness or store model-provider credentials.
+**The game is an early playable vertical slice, not a production MMO.** Rendering runs on the player's machine. An ordinary Codex turn starts when the player sends a request; a native Goal, when supported, can continue making progress in that conversation. Pausing or clearing a Goal does not necessarily stop a turn already running; stop that turn separately. Players use their own installed and authenticated Codex. This project does not implement an agent harness or store model-provider credentials.
 
 ## Install or update
 
@@ -28,7 +28,7 @@ The desktop client starts a private loopback world, persists it under Electron's
 - Build blocks, bridges and ports using the palette.
 - Select an existing object to edit position, size, color, solid-side collision and whether its top supports players. Stale edits are rejected by the server rather than silently overwriting another change.
 - Inspect agent activity for requested actions, confirmed results and stop reasons, without private model reasoning.
-- Move with WASD, jump with Space, and navigate the camera with the mouse. The server resolves solid sides and walkable tops.
+- Move with WASD at up to 5 world units per second, jump with Space, and navigate the camera with the mouse. The server stops player movement at the 48×48 island edge and resolves solid sides and walkable tops. Agent movement uses the same server physics.
 - Ask Codex for an existing construction using app-server game tools.
 - Ask for an unknown mechanic to develop it in the local repository. It does **not** become server code automatically.
 

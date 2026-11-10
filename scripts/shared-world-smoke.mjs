@@ -45,8 +45,8 @@ async function worldCommand(id, command) {
   assert.equal(response.status, 200);
   return response.json();
 }
-async function waitForState(predicate, description) {
-  const deadline = Date.now() + 10000;
+async function waitForState(predicate, description, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
   let last;
   while (Date.now() < deadline) {
     const snapshot = await state();
@@ -83,6 +83,57 @@ async function focus(client) {
   await client.page.waitForFunction(() => document.hasFocus() && !document.querySelector('#settings').open);
 }
 async function select(client, object) { await selectObject(client.page, object); }
+async function projectPoint(page, position) {
+  return page.evaluate(async value => {
+    const THREE = await import('three');
+    const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, .1, 220);
+    camera.position.set(33, 28, 38); camera.lookAt(0, 0, 0); camera.updateMatrixWorld();
+    const p = new THREE.Vector3(value.x, value.y, value.z).project(camera);
+    return { x: (p.x + 1) * innerWidth / 2, y: (1 - p.y) * innerHeight / 2 };
+  }, position);
+}
+async function groundPoint(page, position) { return projectPoint(page, { ...position, y: 0 }); }
+async function dragObjectTo(page, object, destination, exactPoint = false) {
+  const start = await projectPoint(page, object.position), end = exactPoint ? await projectPoint(page, destination) : await groundPoint(page, destination);
+  const geometry = await page.evaluate(({ start, end }) => {
+    const canvas = document.querySelector('#viewport canvas');
+    window.__tusDragTrace = { counts: {}, events: [], last: null };
+    if (!canvas.dataset.tusDragTrace) {
+      canvas.dataset.tusDragTrace = 'true';
+      for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) canvas.addEventListener(type, event => {
+        const trace = window.__tusDragTrace, count = trace.counts[type] = (trace.counts[type] || 0) + 1;
+        const target = document.elementFromPoint(event.clientX, event.clientY);
+        const sample = { type, x: Math.round(event.clientX), y: Math.round(event.clientY), target: target?.id || target?.tagName, canvasTarget: target === canvas, selected: document.querySelector('#selection-label')?.textContent, preview: document.querySelector('#move-preview-status')?.textContent, previewHidden: document.querySelector('#move-preview-status')?.hidden };
+        trace.last = sample;
+        if (type !== 'pointermove' || count <= 2 || count === 100) trace.events.push(sample);
+      });
+    }
+    const at = point => { const target = document.elementFromPoint(point.x, point.y); return { x: Math.round(point.x), y: Math.round(point.y), target: target?.id || target?.tagName, canvasTarget: target === canvas }; };
+    const rect = canvas.getBoundingClientRect();
+    return { viewport: { width: innerWidth, height: innerHeight }, canvas: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, startTarget: at(start), endTarget: at(end) };
+  }, { start, end });
+  await page.mouse.move(start.x, start.y); await page.mouse.down();
+  for (let i = 1; i <= 100; i++) await page.mouse.move(start.x + (end.x - start.x) * i / 100, start.y + (end.y - start.y) * i / 100);
+  await page.mouse.up();
+  return { start, end, ...geometry };
+}
+async function waitForMovePreview(page, drag) {
+  try { await page.waitForFunction(() => document.querySelector('#move-preview-status')?.textContent.toLowerCase().includes('preview'), undefined, { timeout: 5000 }); }
+  catch {
+    const state = await page.evaluate(() => ({
+      selected: document.querySelector('#selection-label')?.textContent,
+      role: document.querySelector('#role')?.textContent,
+      editHidden: document.querySelector('#edit-form')?.hidden,
+      editDisabled: document.querySelector('#edit-fields')?.disabled,
+      editMessage: document.querySelector('#edit-message')?.textContent,
+      preview: document.querySelector('#move-preview-status')?.textContent,
+      previewHidden: document.querySelector('#move-preview-status')?.hidden,
+      position: ['x', 'y', 'z'].map(axis => document.querySelector('#edit-position-' + axis)?.value),
+      trace: window.__tusDragTrace,
+    }));
+    throw new Error('No local drag preview was created: ' + JSON.stringify({ drag, state }));
+  }
+}
 async function close(client) {
   if (!client.app) return;
   const app = client.app; client.app = null;
@@ -97,22 +148,26 @@ await withSmokeCleanup(async () => {
 
   alice.graphics.phase('agent movement observed by both clients');
   const agentMove = await worldCommand('alice', { type: 'move', position: { x: 12, y: 1, z: 0 } });
-  await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent === 'X 12.0 · Y 0.0 · Z 0.0');
+  assert.ok(agentMove.position.x > 0 && agentMove.position.x <= 1.25 + 1e-6, JSON.stringify(agentMove.position));
+  await alice.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, agentMove.revision);
+  const expectedAgentCoordinates = `X ${agentMove.position.x.toFixed(1)} · Y 0.0 · Z 0.0`;
+  await alice.page.waitForFunction(text => document.querySelector('#coordinates').textContent === text, expectedAgentCoordinates);
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, agentMove.revision);
-  const acceptedAgentPosition = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x === 12, 'the agent move to be visible in the shared state');
+  const acceptedAgentPosition = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x === agentMove.position.x, 'the agent move to be visible in the shared state');
+  const acceptedAgentX = acceptedAgentPosition.players.find(player => player.id === 'alice').position.x;
 
   await focus(alice);
   await alice.page.keyboard.down('d');
   let manualMove;
   try {
-    manualMove = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x > acceptedAgentPosition.players.find(player => player.id === 'alice').position.x, 'manual movement to continue from the agent position');
+    manualMove = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x > acceptedAgentX, 'manual movement to continue from the agent position');
   } finally {
     await alice.page.keyboard.up('d');
   }
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, manualMove.revision);
   const observedMove = (await state('bob')).players.find(player => player.id === 'alice');
-  assert.ok(observedMove.position.x > 12, 'the second client sees Alice beyond the agent destination');
-  assert.ok(Number((await alice.page.locator('#coordinates').textContent()).match(/X ([\d.-]+)/)?.[1]) > 12, 'the local GUI displays movement continuing from the agent destination');
+  assert.ok(observedMove.position.x > acceptedAgentPosition.players.find(player => player.id === 'alice').position.x, 'the second client sees Alice move farther under keyboard control');
+  await alice.page.waitForFunction(minimum => Number(document.querySelector('#coordinates').textContent.match(/X ([\d.-]+)/)?.[1]) > minimum, acceptedAgentX);
   alice.graphics.phase('manual shared construction');
   await alice.page.locator('#build-x').fill('16');
   await alice.page.locator('#build-z').fill('0');
@@ -123,8 +178,16 @@ await withSmokeCleanup(async () => {
   assert.deepEqual(built.position, { x: 16, y: 1, z: 0 });
 
   alice.graphics.phase('collision and jump onto a walkable top');
+  await focus(alice);
+  await alice.page.keyboard.down('d');
+  let reachedWall;
+  try {
+    reachedWall = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 14.68, 'Alice to reach the solid face at normal walking speed');
+  } finally {
+    await alice.page.keyboard.up('d');
+  }
   const blocked = await worldCommand('alice', { type: 'move', position: { x: 30, y: 999, z: 0 } });
-  assert.ok(blocked.position.x < 14.7, 'the server stops Alice at the solid side');
+  assert.ok(blocked.position.x >= 14.68 && blocked.position.x < 14.7, 'the server stops Alice at the solid side');
   assert.equal(blocked.position.y, 0, 'client coordinates cannot grant unsupported height');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, blocked.revision);
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('X 14.7'));
@@ -142,16 +205,93 @@ await withSmokeCleanup(async () => {
     return player?.position.y > 0 && player.velocityY > 0;
   }, 'the server to accept the jump while Alice is ascending');
   await alice.page.keyboard.up('Space');
-  await alice.page.waitForFunction(() => {
-    const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
-    const x = Number(xPart?.slice(2)), y = Number(yPart?.slice(2));
-    return x >= 15 && x <= 16.2 && y > 0;
-  }, undefined, { polling: 'raf', timeout: 5000 });
+  await waitForState(snapshot => {
+    const player = snapshot.players.find(item => item.id === 'alice');
+    return player?.position.x >= 15 && player.position.y > 0;
+  }, 'Alice to reach the platform while airborne');
   await alice.page.keyboard.up('d');
+  await alice.page.waitForFunction(() => {
+    const yPart = document.querySelector('#coordinates')?.textContent.split(' · ')[1];
+    return Number(yPart?.slice(2)) > 0;
+  }, undefined, { polling: 'raf', timeout: 5000 });
   const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('Y 2.0'), undefined, { timeout: 5000 });
+  // Drag stays local until Apply; the second client must never see the preview.
+  await focus(alice);
+  await alice.page.keyboard.down('a');
+  await waitForState(snapshot => {
+    const player = snapshot.players.find(item => item.id === 'alice');
+    return player?.position.y === 0 && player.position.x < 14;
+  }, 'Alice to leave the platform before moving it');
+  await alice.page.keyboard.up('a');
+  // Renderer movement sync runs every 250 ms; wait across two ticks after keyup.
+  let lastStoppedSnapshot = '', stableSamples = 0;
+  const beforePreview = await waitForState(snapshot => {
+    const current = `${snapshot.revision}:${JSON.stringify(snapshot.players)}`;
+    stableSamples = current === lastStoppedSnapshot ? stableSamples + 1 : 0;
+    lastStoppedSnapshot = current;
+    return stableSamples >= 5;
+  }, 'Alice movement to settle before the local preview');
+  await select(alice, built);
+  await alice.page.locator('#move-grid-step').fill('0.5');
+  await alice.page.locator('#move-plane').selectOption('x');
+  const firstDrag = await dragObjectTo(alice.page, built, { x: 20.2, y: 1, z: 0 }, true);
+  assert.equal(firstDrag.startTarget.canvasTarget, true, 'drag begins on a world object in the canvas');
+  assert.equal(firstDrag.endTarget.canvasTarget, false, 'drag continues to a target covered by the UI');
+  await waitForMovePreview(alice.page, firstDrag);
+  assert.deepEqual(await alice.page.locator('#edit-position-x').inputValue().then(async x => ({ x: Number(x), y: Number(await alice.page.locator('#edit-position-y').inputValue()), z: Number(await alice.page.locator('#edit-position-z').inputValue()) })), { x: 20, y: 1, z: 0 }, 'the visible 0.5 grid snaps an X-axis drag without changing other coordinates');
+  const previewState = await state();
+  assert.equal(previewState.revision, beforePreview.revision,
+    `pointer movement and preview do not mutate the server: ${JSON.stringify({
+      before: { revision: beforePreview.revision, players: beforePreview.players.map(({ id, position, velocityY }) => ({ id, position, velocityY })) },
+      after: { revision: previewState.revision, players: previewState.players.map(({ id, position, velocityY }) => ({ id, position, velocityY })) },
+    })}`);
+  assert.deepEqual(previewState.objects, beforePreview.objects);
+  assert.equal(await bob.page.locator('#move-preview-status').isHidden(), true, 'the peer does not receive the local preview');
+  await alice.page.evaluate(() => {
+    window.__tusEscapeEvent = null;
+    window.addEventListener('keydown', event => { if (event.code === 'Escape') window.__tusEscapeEvent = event; }, { capture: true, once: true });
+  });
+  await focus(alice);
+  await alice.page.keyboard.press('Escape');
+  try { await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.hidden, undefined, { timeout: 5000 }); }
+  catch {
+    const escapeState = await alice.page.evaluate(() => ({
+      event: window.__tusEscapeEvent && { code: window.__tusEscapeEvent.code, defaultPrevented: window.__tusEscapeEvent.defaultPrevented },
+      hasFocus: document.hasFocus(),
+      activeElement: document.activeElement?.id || document.activeElement?.tagName,
+      preview: document.querySelector('#move-preview-status')?.textContent,
+      previewHidden: document.querySelector('#move-preview-status')?.hidden,
+    }));
+    throw new Error('Escape did not cancel local preview: ' + JSON.stringify(escapeState));
+  }
+  assert.equal((await state()).revision, beforePreview.revision, 'Cancel discards only the local proposal');
+
+  await alice.page.locator('#move-snap-enabled').uncheck();
+  const unsnappedDrag = await dragObjectTo(alice.page, built, { x: 20.2, y: 1, z: 0 }, true);
+  await waitForMovePreview(alice.page, unsnappedDrag);
+  const unsnappedX = Number(await alice.page.locator('#edit-position-x').inputValue());
+  assert.ok(Math.abs(unsnappedX - 20.2) < 1e-6, 'disabling snap preserves exact pointer position');
+  await alice.page.locator('#move-cancel').click();
+  await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.hidden);
+  assert.equal((await state()).revision, beforePreview.revision, 'Cancel button discards only the local proposal');
+  await alice.page.locator('#move-snap-enabled').check();
+
+  await alice.page.locator('#move-plane').selectOption('xz');
+  const secondDrag = await dragObjectTo(alice.page, built, { x: 20, z: 10 });
+  await waitForMovePreview(alice.page, secondDrag);
+  assert.equal((await state()).revision, beforePreview.revision);
+  await alice.page.locator('#edit-apply').click();
+  await alice.page.waitForFunction(() => document.querySelector('#edit-message').textContent.includes('saved'));
+  const movedState = await state();
+  const movedObject = movedState.objects.find(item => item.id === built.id);
+  assert.deepEqual(movedObject.position, { x: 20, y: 1, z: 10 });
+  assert.equal(movedState.revision, beforePreview.revision + 1, 'Apply commits exactly one update');
+  await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, movedState.revision);
+  built.position = movedObject.position;
+
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, builtState.revision);
   await select(alice, built); await select(bob, built);
   assert.equal(await bob.page.locator('#edit-apply').isDisabled(), true, 'foreign object is read-only');
@@ -163,7 +303,8 @@ await withSmokeCleanup(async () => {
   assert.equal((await state('bob')).objects[0].size.x, 5);
   const denied = await fetch(url + '/command', { method: 'POST', headers: { Authorization: 'Bearer ' + tokens.bob, 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'remove', id: built.id }) });
   assert.equal(denied.status, 403, 'server rejects bypassing the disabled UI');
-  assert.equal((await state()).objects[0].id, built.id);
+  const beforeRestart = await state();
+  assert.equal(beforeRestart.objects[0].id, built.id);
 
   for (const client of clients) { client.graphics.phase('server restart'); await client.graphics.assertHealthy(); }
   await stopServer();
@@ -172,7 +313,7 @@ await withSmokeCleanup(async () => {
   for (const client of clients) await client.page.waitForFunction(() => document.querySelector('#connection').textContent.includes('World connected'));
   const restored = await state('bob');
   assert.equal(restored.objects[0].id, built.id); assert.equal(restored.objects[0].size.x, 5);
-  assert.equal(restored.players.find(player => player.id === 'alice').position.y, 2, 'server restart preserves the landing surface position');
+  assert.deepEqual(restored.players.find(player => player.id === 'alice').position, beforeRestart.players.find(player => player.id === 'alice').position, 'server restart preserves the last accepted player position');
   assert.deepEqual(restored.players.map(p => p.id).sort(), ['alice', 'bob']);
   await close(bob);
   const returning = await launch('bob');
@@ -189,6 +330,39 @@ await withSmokeCleanup(async () => {
     const settings = JSON.parse(await readFile(path.join(dir, id, 'settings.json'), 'utf8'));
     assert.equal(Object.hasOwn(settings, 'token'), false);
   }
+  alice.graphics.phase('shared island boundary');
+  await focus(alice);
+  await alice.page.keyboard.down('d');
+  let atEdge;
+  try {
+    atEdge = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 23.68 - 1e-6, 'Alice to reach the island edge at normal walking speed');
+  } finally {
+    await alice.page.keyboard.up('d');
+  }
+  const edgePosition = atEdge.players.find(player => player.id === 'alice').position;
+  assert.ok(edgePosition.x >= 23.68 - 1e-6 && edgePosition.x <= 23.68 + 1e-6, JSON.stringify(edgePosition));
+  await returning.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, atEdge.revision);
+  const outwardMove = await worldCommand('alice', { type: 'move', position: { x: 1000, y: 999, z: 0 } });
+  assert.deepEqual(outwardMove.position, edgePosition, 'an agent target beyond the island cannot move Alice past its edge');
+  await Promise.all([alice.page, returning.page].map(page => page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, outwardMove.revision)));
+  const [aliceEdge, bobEdge] = await Promise.all([state('alice'), state('bob')]);
+  assert.deepEqual(aliceEdge.players.find(player => player.id === 'alice').position, outwardMove.position);
+  assert.deepEqual(bobEdge.players.find(player => player.id === 'alice').position, outwardMove.position);
+
+  const beforeDisconnect = await state('alice');
+  const savedBobPosition = structuredClone(beforeDisconnect.players.find(player => player.id === 'bob').position);
+  assert.ok(beforeDisconnect.onlinePlayerIds.includes('bob'), 'Bob is present before disconnect');
+  const closedClientIndex = clients.indexOf(returning);
+  await close(returning);
+  clients.splice(closedClientIndex, 1);
+  const offlineBob = await waitForState(snapshot => Array.isArray(snapshot.onlinePlayerIds) && !snapshot.onlinePlayerIds.includes('bob'), 'Bob to disappear after disconnect', 15000);
+  assert.ok(offlineBob.players.some(player => player.id === 'bob'), 'offline player data remains saved');
+  assert.deepEqual(offlineBob.players.find(player => player.id === 'bob').position, savedBobPosition, 'disconnect preserves Bob’s last position');
+  const reconnectedBob = await launch('bob');
+  await waitForState(snapshot => snapshot.onlinePlayerIds.includes('bob'), 'Bob to reconnect');
+  assert.deepEqual((await state('alice')).players.find(player => player.id === 'bob').position, savedBobPosition, 'reconnect restores Bob at his saved position');
+  await reconnectedBob.graphics.assertHealthy();
+
   console.log('Shared-world acceptance passed: two real clients, UI build/select/edit/remove, owner permissions, server and client restart, shared persistence.');
 }, ...[() => Promise.allSettled(clients.map(close)).then(results => {
   const failures = results.filter(r => r.status === 'rejected').map(r => r.reason);

@@ -158,7 +158,7 @@ test('game guide supports legacy resumed tools without automatic conversation re
 
 function goalContextRendererHarness() {
   const h = rendererHarness();
-  h.run("let agentControlState = null, goalMessageContextId = 'goal-1', settings = { threadId: 'saved', agentControlThreadId: 'saved', agentModelId: '', agentEffort: '' }; function populateAgentEfforts() {} function updateAgentControlButtons() {}");
+  h.run("let agentControlState = null, goalMessageContextId = 'goal-1', settings = { threadId: 'saved', agentControlThreadId: 'saved', agentModelId: '', agentEffort: '' }, connected = true, busy = false; function populateAgentEfforts() {} function updateAgentControlButtons() {}");
   h.load('function renderAgentControls(state) {', 'async function refreshAgentControls() {');
   return h;
 }
@@ -172,9 +172,21 @@ test('a completed native Goal no longer tags later assistant messages as Goal up
   assert.equal(h.run('goalMessageContextId'), null);
 });
 
+
+test('refreshing paused Goal controls preserves the in-flight Goal turn context', () => {
+  const h = goalContextRendererHarness();
+  h.run('busy = true');
+  h.run(`renderAgentControls({
+    threadId: 'saved', threadStatus: 'active', pendingApprovals: 0, turnId: 'turn-1',
+    runtime: null, currentModel: null, currentEffort: null, goalSupported: true,
+    models: [], goal: { id: 'goal-1', status: 'paused', objective: 'Build the test object' },
+  })`);
+  assert.equal(h.run('goalMessageContextId'), 'goal-1');
+});
+
 function goalNotificationRendererHarness() {
   const h = rendererHarness();
-  h.run("let settings = { threadId: 'saved' }, agentControlState = { goal: { id: 'goal-1', status: 'active' } }, goalMessageContextId = 'goal-1'; function addMessage() {} function refreshAgentControls() {} function notificationActivity() {} function updateChatControls() {}");
+  h.run("let settings = { threadId: 'saved' }, agentControlState = { goal: { id: 'goal-1', status: 'active' } }, goalMessageContextId = 'goal-1', connected = true, busy = false, agentControlRead = 0; function addMessage() {} function refreshAgentControls() {} function notificationActivity() {} function updateChatControls() {}");
   h.load('function codexEvent(event) {', 'try { initScene(); }');
   return h;
 }

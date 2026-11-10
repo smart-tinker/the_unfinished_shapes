@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
@@ -17,6 +17,15 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld;
 if (!app.requestSingleInstanceLock()) app.quit();
 const settings = () => loadSettings(app.getPath('userData'));
+async function readBuildIdentity() {
+  const version = app.getVersion();
+  if (!app.isPackaged) return { version, sourceSha: null };
+  try {
+    const info = JSON.parse(await readFile(path.join(app.getAppPath(), 'build-info.json'), 'utf8'));
+    if (info.version === version && /^[a-f0-9]{40}$/.test(info.sourceSha || '')) return { version, sourceSha: info.sourceSha };
+  } catch { /* Unidentified or older packages must not look like verified releases. */ }
+  return { version, sourceSha: null };
+}
 const attachQuitGuard = installQuitGuard({
   app,
   getWindow: () => win && !win.isDestroyed() ? win : null,
@@ -66,6 +75,7 @@ app.whenReady().then(async()=>{
   const localToken = randomBytes(32).toString('hex');
   localServer = await createWorldServer({dataPath:path.join(app.getPath('userData'),'world.json'),users:{[localToken]:{id:'local-player',role:'admin'}},host:'127.0.0.1',port:4317});
   await new Promise((resolve,reject)=>localServer.once('error',reject).listen(0,'127.0.0.1',resolve));
+  handle('app:build-info', readBuildIdentity);
   const localUrl = `http://127.0.0.1:${localServer.address().port}`;
   handle('settings:load', async()=>{const current=await settings();return {...current,serverUrl:current.serverUrl||localUrl,token:current.serverUrl?'':localToken};});
   handle('settings:save', async(s)=>{ const clean={...s,serverUrl:serverUrl(s.serverUrl||localUrl) === localUrl ? '' : serverUrl(s.serverUrl)}; await saveSettings(app.getPath('userData'),clean); });

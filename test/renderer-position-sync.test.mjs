@@ -15,7 +15,7 @@ function syncHarness() {
   Object.assign(h.context, {
     scene: {}, bridge: {}, playerPosition: { x: 0, y: 0, z: 0 }, meId: null,
     settingsGeneration: 0, pollRunning: false, moveRunning: false, jumpRequested: false, playerVelocityY: 0, localMovementVersion: 0, latestStateRevision: -1, worldRevision: -1, objectSnapshot: '[]',
-    role: 'viewer', objectData: new Map(), meshes: new Map(), otherPlayers: new Map(),
+    role: 'viewer', selectedId: null, objectData: new Map(), meshes: new Map(), otherPlayers: new Map(),
     sceneRoot: {}, sent,
     request: async (...args) => { sent.push(args); return { revision: 10 }; },
   });

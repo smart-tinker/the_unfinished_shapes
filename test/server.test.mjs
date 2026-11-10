@@ -7,9 +7,9 @@ import {createWorldServer} from '../src/server.mjs';
 const token='test-only-alice-token';
 const users={[token]:{id:'alice',role:'builder'},'test-only-bob-token':{id:'bob',role:'viewer'}};
 const command={type:'build',objectType:'port',position:{x:1,y:0,z:1}};
-async function fixture(t) {
+async function fixture(t, options={}) {
  const dir=await mkdtemp(path.join(tmpdir(),'shapes-test-')); const dataPath=path.join(dir,'world.json');
- const app=await createWorldServer({dataPath,users,port:0});await app.start();
+ const app=await createWorldServer({dataPath,users,port:0,...options});await app.start();
  t.after(async()=>{if(app.listening)await app.shutdown();await rm(dir,{recursive:true,force:true});});
  const url=`http://127.0.0.1:${app.address().port}`;
  const send=(body,auth=token)=>fetch(url+'/command',{method:'POST',headers:{Authorization:`Bearer ${auth}`,'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -90,4 +90,42 @@ test('HTTP movement enforces collision and server-owned height for every caller'
  assert.equal(invalid.status,400);
  assert.equal((await invalid.json()).error,'invalid_command');
  assert.equal(JSON.parse(await readFile(f.dataPath,'utf8')).revision,hit.revision);
+});
+
+
+test('legacy out-of-bounds player and objects survive server restart without teleporting the player',async t=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'shapes-legacy-edge-'));
+ const dataPath=path.join(dir,'world.json');
+ const legacy={version:1,revision:7,
+  objects:[{id:'legacy-remote',type:'block',position:{x:500,y:1,z:-400},size:{x:2,y:2,z:2},color:'#c8a570',ownerId:'alice'}],
+  players:[{id:'alice',position:{x:31,y:0,z:0},velocityY:0}]};
+ await writeFile(dataPath,JSON.stringify(legacy));
+ let app=await createWorldServer({dataPath,users,port:0}); await app.start();
+ t.after(async()=>{if(app.listening)await app.shutdown();await rm(dir,{recursive:true,force:true});});
+ let url=`http://127.0.0.1:${app.address().port}`;
+ const state=async()=>{const r=await fetch(url+'/state',{headers:{Authorization:`Bearer ${token}`}});assert.equal(r.status,200);return r.json();};
+ const sendMove=async x=>{const r=await fetch(url+'/command',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({type:'move',position:{x,y:0,z:0}})});assert.equal(r.status,200);return r.json();};
+ let saved=await state();
+ assert.deepEqual(saved.objects[0].position,{x:500,y:1,z:-400});
+ assert.deepEqual(saved.players[0].position,{x:31,y:0,z:0});
+ assert.deepEqual((await sendMove(32)).position,{x:31,y:0,z:0});
+ await new Promise(resolve=>setTimeout(resolve,260));
+ const recovered=await sendMove(29.5);
+ assert.ok(recovered.position.x<31,JSON.stringify(recovered.position));
+ assert.ok(recovered.position.x>=29.75-1e-6,JSON.stringify(recovered.position));
+ await app.shutdown();
+ app=await createWorldServer({dataPath,users,port:0}); await app.start(); url=`http://127.0.0.1:${app.address().port}`;
+ saved=await state();
+ assert.deepEqual(saved.objects[0].position,{x:500,y:1,z:-400});
+ assert.deepEqual(saved.players.find(player=>player.id==='alice').position,recovered.position);
+});
+
+test('reports persistence phase timings only after the atomic world write when observed',async t=>{
+ const samples=[];const f=await fixture(t,{onPersistenceSample:sample=>samples.push(sample)});
+ const response=await f.send(command);assert.equal(response.status,200);
+ assert.equal(samples.length,1);
+ const sample=samples[0];
+ assert.equal(sample.commandType,'build');assert.equal(sample.objects,1);assert.equal(sample.players,0);
+ assert.equal(sample.bytes,Buffer.byteLength(await readFile(f.dataPath,'utf8')));
+ for(const phase of ['serializeMs','writeMs','renameMs'])assert.ok(Number.isFinite(sample[phase])&&sample[phase]>=0,phase);
 });

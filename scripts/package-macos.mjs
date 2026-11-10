@@ -3,6 +3,7 @@ import { packager } from '@electron/packager';
 if (process.platform !== 'darwin' || process.arch !== 'arm64') {
   throw new Error('Build this target natively on macOS arm64. A cross-build is not native validation.');
 }
+await import('./write-build-info.mjs');
 const outputs = await packager({
   dir: '.', name: 'TheUnfinishedShapes', platform: 'darwin', arch: 'arm64',
   appBundleId: 'com.smarttinker.theunfinishedshapes', out: 'dist', overwrite: true,
