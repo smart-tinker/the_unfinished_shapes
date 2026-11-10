@@ -119,6 +119,34 @@ test('beacon labels stay within range and only the eight nearest are visible',()
  assert.deepEqual(labels.map(label=>label.visible),[true,true,true,true,true,true,true,true,false,false]);
 });
 
+test('beacon labels stay within range and only the eight nearest are visible',()=>{
+ const source=readFileSync(new URL('../src/renderer.mjs',import.meta.url),'utf8');
+ const start=source.indexOf('const BEACON_LABEL_RANGE'),end=source.indexOf('function clearBuildPreview()',start);
+ assert.ok(start>=0&&end>start,'beacon label visibility policy is implemented');
+ const labels=Array.from({length:10},()=>({visible:true}));
+ const distances=[5,3,2,1,6,7,8,9,10,41];
+ const beaconLabels=new Map(labels.map((label,index)=>[String(index),{mesh:{position:{distance:distances[index]}},label}]));
+ const update=runInNewContext(`(()=>{${source.slice(start,end)};return updateBeaconLabels})()`,{
+  camera:{position:{distanceTo:position=>position.distance}},beaconLabels
+ });
+ update();
+ assert.deepEqual(labels.map(label=>label.visible),[true,true,true,true,true,true,true,true,false,false]);
+});
+
+test('long landmark text is clipped to a readable number of canvas lines',()=>{
+ const source=readFileSync(new URL('../src/renderer.mjs',import.meta.url),'utf8');
+ const start=source.indexOf('function labelTexture('),end=source.indexOf('function objectMesh(',start);
+ assert.ok(start>=0&&end>start,'landmark labels use a canvas text renderer');
+ const drawn=[],context={fillRect(){},fillText(value){drawn.push(value)}};
+ const labelTexture=runInNewContext(`(()=>{${source.slice(start,end)};return labelTexture})()`,{
+  document:{createElement:()=>({getContext:()=>context})},
+  THREE:{CanvasTexture:class {},SRGBColorSpace:'srgb'}
+ });
+ labelTexture('x'.repeat(240),'#fff');
+ assert.equal(drawn.length,6);
+ assert.match(drawn.at(-1),/…$/);
+});
+
 test('client exposes bounded sign and beacon inputs and previews the complete landmark set before Apply',async()=>{
  const html=readFileSync(new URL('../src/index.html',import.meta.url),'utf8');
  for(const kind of ['sign','beacon'])assert.match(html,new RegExp('data-kind="'+kind+'"'));
