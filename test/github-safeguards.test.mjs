@@ -6,6 +6,7 @@ const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8'
 test('public CI security checks use least-permission pinned actions', () => {
   const workflow = read('.github/workflows/security.yml');
   assert.match(workflow, /github\.event\.repository\.private == false/);
+  assert.ok(workflow.includes("if: github.event.repository.private == false && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)"));
   assert.match(workflow, /runs-on: ubuntu-24\.04/);
   assert.match(workflow, /fail-on-severity: high/);
   assert.doesNotMatch(workflow, /pull_request_target|secrets: inherit|pull-requests: write|contents: write|upload-artifact/);
