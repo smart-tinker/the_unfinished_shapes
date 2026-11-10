@@ -14,6 +14,7 @@ function fullscreenHarness({ focusedTag = 'BODY', fullscreen = true, dragging = 
     let isFullscreen = ${fullscreen}, cancelled = 0;
     function cancelMovePreview() { dragCandidate = null; movePreview = null; cancelled++; }
     const bridge = { toggleFullscreen: () => { toggleCalls.push('toggle'); isFullscreen = !isFullscreen; } };
+    function requestFullscreenToggle() { bridge.toggleFullscreen(); }
     if (${dragging}) movePreview = { objectId: 'shape-1' };`);
   h.load("window.addEventListener('keydown', event => {", "window.addEventListener('keyup'");
   return { h, keydown: listeners.keydown };
