@@ -247,7 +247,7 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25, context
       if (object.version !== command.expectedTargetVersion && object.state !== button.targetState) fail('conflict','The target changed since it was read. Refresh before using the button.',409);
       if (object.state === button.targetState) changed = false;
       else {
-        if (button.targetState === 'closed' && passageOccupied(next,object,actor,context)) fail('occupied','Cannot close a door or gate while a player occupies its passage.',409);
+        if (button.targetState === 'closed' && passageOccupied(next,object,context)) fail('occupied','Cannot close a door or gate while a player occupies its passage.',409);
         if (object.version >= Number.MAX_SAFE_INTEGER) fail('revision_exhausted','Object version limit reached.',409);
         object.state = button.targetState; object.version++; object.blocksMovement = button.targetState === 'closed';
       }

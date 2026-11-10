@@ -260,6 +260,7 @@ function objectMesh(object) {
       label.position.set(0,y*.62,0);label.scale.set(4,1.1,1);label.visible=true;group.add(label);group.userData.beaconLabel=label;
     }
   }
+  if (['door','gate'].includes(object.type) && object.state === 'open') group.rotation.y = Math.PI / 2;
   group.position.set(object.position.x, object.position.y, object.position.z); return group;
 }
 function updateBeaconLabels() {
@@ -292,7 +293,7 @@ function showAgentBuildPreview(value, threadId = settings.threadId) {
   const meshes=[];
   try {
     for(const design of value.objects){
-      if(!design||!['block','bridge','port','stairs','ramp','sign','beacon'].includes(design.objectType)||!design.position||!design.size)throw new Error('Invalid preview object.');
+      if(!design||!['block','bridge','port','stairs','ramp','sign','beacon','door','gate','button'].includes(design.objectType)||!design.position||!design.size)throw new Error('Invalid preview object.');
       const mesh=objectMesh({type:design.objectType,direction:design.direction,position:design.position,size:design.size,color:design.color,text:design.text,name:design.name});
       mesh.traverse(child=>{if(!child.material)return;child.material=child.material.clone();child.material.color.set('#efbd61');child.material.transparent=true;child.material.opacity=.48;child.material.depthWrite=false;});
       meshes.push(mesh);scene.add(mesh);
@@ -327,6 +328,9 @@ function buildDesign() {
     column: { type: 'block', size: { x: 1, y: 4, z: 1 } },
     bridge: { type: 'bridge', size: { x: 10, y: 1, z: 3 } },
     port: { type: 'port', size: { x: 12, y: 1, z: 8 } },
+    door: { type: 'door', size: { x: 1, y: 3, z: .25 } },
+    gate: { type: 'gate', size: { x: 4, y: 2, z: .5 } },
+    button: { type: 'button', size: { x: .5, y: .5, z: .25 } },
     stairs: { type: 'stairs', size: SHAPE_DEFAULT_SIZES.stairs },
     ramp: { type: 'ramp', size: SHAPE_DEFAULT_SIZES.ramp },
     sign: { type: 'sign', size: { x: 3, y: 2, z: .5 } },
@@ -575,11 +579,27 @@ function fillInspector(object) {
   $('edit-color').value = object.color;
   $('edit-sign-row').hidden=object.type!=='sign';$('edit-sign-text').disabled=object.type!=='sign';$('edit-sign-text').required=object.type==='sign';$('edit-sign-text').value=object.type==='sign'?object.text:'';
   $('edit-beacon-row').hidden=object.type!=='beacon';$('edit-beacon-name').disabled=object.type!=='beacon';$('edit-beacon-name').required=object.type==='beacon';$('edit-beacon-name').value=object.type==='beacon'?object.name:'';
+  const interactive=['door','gate','button'].includes(object.type), doorway=['door','gate'].includes(object.type), button=object.type==='button';
+  const canEdit=role==='admin'||(role==='builder'&&object.ownerId===meId),canUse=item=>role==='admin'||item.ownerId===meId||item.usePolicy==='all_players';
+  $('edit-use-policy').value=interactive?object.usePolicy:'owner_admin';
+  $('edit-interaction-row').hidden=!interactive;$('edit-button-row').hidden=!button;$('edit-target-state-row').hidden=!button;
+  $('edit-physics-options').hidden=interactive;
+  const targetSelect=$('edit-target-id'),targets=(worldState.objects||[]).filter(item=>['door','gate'].includes(item.type));
+  targetSelect.replaceChildren();
+  const none=document.createElement('option');none.value='';none.textContent='No target';targetSelect.append(none);
+  for(const target of targets){const option=document.createElement('option');option.value=target.id;option.textContent=target.type+' '+target.id;targetSelect.append(option);}
+  if(button&&object.targetId&&!targets.some(target=>target.id===object.targetId)){const option=document.createElement('option');option.value=object.targetId;option.textContent='Missing target · '+object.targetId;targetSelect.append(option);}
+  targetSelect.value=button?(object.targetId??''):'';
+  $('edit-target-state').value=button?object.targetState:'open';
   $('edit-blocks-movement').checked = object.blocksMovement;
   $('edit-supports-player').checked = object.supportsPlayer;
-  const canEdit = role === 'admin' || (role === 'builder' && object.ownerId === meId);
   $('edit-fields').disabled = editing || !canEdit;
-  $('edit-message').textContent = !canEdit ? 'Read-only: you do not have permission to edit this shape.' : 'Changes are checked by the world server.';
+  $('interactive-actions').hidden=!interactive;
+  $('edit-open').hidden=!doorway;$('edit-close').hidden=!doorway;$('edit-use-button').hidden=!button;
+  $('edit-open').disabled=editing||!canUse(object);$('edit-close').disabled=editing||!canUse(object);
+  const target=button?targets.find(item=>item.id===object.targetId):null;
+  $('edit-use-button').disabled=editing||!canUse(object)||!target||!canUse(target);
+  $('edit-message').textContent = !canEdit ? 'Read-only: you do not have permission to edit this object.' : 'Changes are checked by the world server.';
 }
 function updateMovePreviewFromInspector() {
   const draft = movePreview;
@@ -723,6 +743,39 @@ async function syncPosition() {
 }
 async function command(body) { const result = await request('/command', 'POST', body); if (result.error) throw new Error(result.message || result.error); await poll(); return result; }
 
+async function applyInteractiveAction(object, body) {
+  if (editing) return;
+  editing = true;
+  for (const id of ['edit-open','edit-close','edit-use-button']) $(id).disabled = true;
+  const generation = settingsGeneration;
+  try {
+    const result = await command(body);
+    if (generation !== settingsGeneration) return;
+    if (result.object) objectData.set(object.id, result.object);
+    feedback('Interactive action applied.');
+  } catch (error) {
+    if (generation === settingsGeneration) feedback(error.message + ' Refresh world state before retrying.', true);
+  } finally {
+    editing = false;
+    if (inspectorBase?.id === object.id && generation === settingsGeneration) fillInspector(objectData.get(object.id) ?? object);
+  }
+}
+$('edit-open').addEventListener('click', () => {
+  const object=inspectorBase&&(objectData.get(inspectorBase.id)??inspectorBase);
+  if(object&&['door','gate'].includes(object.type))return applyInteractiveAction(object,{type:'set_state',id:object.id,state:'open',expectedVersion:object.version});
+});
+$('edit-close').addEventListener('click', () => {
+  const object=inspectorBase&&(objectData.get(inspectorBase.id)??inspectorBase);
+  if(object&&['door','gate'].includes(object.type))return applyInteractiveAction(object,{type:'set_state',id:object.id,state:'closed',expectedVersion:object.version});
+});
+$('edit-use-button').addEventListener('click', () => {
+  const button=inspectorBase&&(objectData.get(inspectorBase.id)??inspectorBase);
+  if(!button||button.type!=='button')return;
+  const target=(worldState.objects||[]).find(item=>item.id===button.targetId&&['door','gate'].includes(item.type));
+  if(!target){feedback('The button target is missing. Refresh the world before retrying.',true);return;}
+  return applyInteractiveAction(button,{type:'use',id:button.id,expectedVersion:button.version,expectedTargetVersion:target.version});
+});
+
 for (const button of document.querySelectorAll('[data-kind]')) button.addEventListener('click', () => {
   if (editing) return;
   selectedKind = button.dataset.kind; selectedPreset = button.dataset.preset || selectedKind;
@@ -779,7 +832,7 @@ async function applyGroupMove() {
 $('group-move-apply').addEventListener('click', applyGroupMove);
 $('edit-form').addEventListener('input', event => {
   const id = event?.target?.id;
-  if (!id?.startsWith('edit-position-') && !id?.startsWith('edit-size-') && !['edit-color', 'edit-blocks-movement', 'edit-supports-player','edit-sign-text','edit-beacon-name'].includes(id)) return;
+  if (!id?.startsWith('edit-position-') && !id?.startsWith('edit-size-') && !['edit-color', 'edit-blocks-movement', 'edit-supports-player','edit-sign-text','edit-beacon-name','edit-use-policy','edit-target-id','edit-target-state'].includes(id)) return;
   inspectorDirty = true;
   if (id.startsWith('edit-position-')) updateMovePreviewFromInspector();
 });
@@ -794,9 +847,15 @@ $('edit-form').addEventListener('submit', async event => {
   if ($('edit-color').value !== baseline.color) body.color = $('edit-color').value;
   if(baseline.type==='sign'&&$('edit-sign-text').value!==baseline.text)body.text=$('edit-sign-text').value;
   if(baseline.type==='beacon'&&$('edit-beacon-name').value!==baseline.name)body.name=$('edit-beacon-name').value;
-  for (const [field, input] of [['blocksMovement', 'edit-blocks-movement'], ['supportsPlayer', 'edit-supports-player']]) {
+  if (!['door','gate','button'].includes(baseline.type)) for (const [field, input] of [['blocksMovement', 'edit-blocks-movement'], ['supportsPlayer', 'edit-supports-player']]) {
     const checked = $(input).checked;
     if (checked !== baseline[field]) body[field] = checked;
+  }
+  if(['door','gate','button'].includes(baseline.type)&&$('edit-use-policy').value!==baseline.usePolicy)body.usePolicy=$('edit-use-policy').value;
+  if(baseline.type==='button'){
+    const targetId=$('edit-target-id').value||null,targetState=$('edit-target-state').value;
+    if(targetId!==baseline.targetId)body.targetId=targetId;
+    if(targetState!==baseline.targetState)body.targetState=targetState;
   }
   const fields = Object.keys(body).filter(key => !['type', 'id'].includes(key));
   if (!fields.length) { $('edit-message').textContent = 'No changes to apply.'; return; }

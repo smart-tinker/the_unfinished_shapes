@@ -57,9 +57,12 @@ export function captureSceneSnapshot(state, view, worldConnectionId) {
         typeof object.blocksMovement!=='boolean'||typeof object.supportsPlayer!=='boolean')throw new Error('World state contains an invalid object.');
     objectIds.add(object.id);
     if((object.type==='sign'&&!validLandmarkLabel(object.text,240,true))||(object.type==='beacon'&&!validLandmarkLabel(object.name,48)))throw new Error('World state contains an invalid landmark label.');
-    const oriented=SHAPE_TYPES.includes(object.type);
+    const oriented=SHAPE_TYPES.includes(object.type),doorOrGate=['door','gate'].includes(object.type),interactive=doorOrGate||object.type==='button';
     if(oriented&&!SHAPE_DIRECTIONS.includes(object.direction))throw new Error('World state contains an invalid shape direction.');
-    return {id:object.id,type:object.type,ownerId:object.ownerId,color:object.color,position:vector(object.position,1000),size:vector(object.size,50,0.25),blocksMovement:object.blocksMovement,supportsPlayer:object.supportsPlayer,...(oriented?{direction:object.direction}:{}),...(object.type==='sign'?{text:object.text}:{}),...(object.type==='beacon'?{name:object.name}:{})};
+    if(interactive&&(!Number.isSafeInteger(object.version)||object.version<0||!['owner_admin','all_players'].includes(object.usePolicy)))throw new Error('World state contains an invalid interactive object version or access policy.');
+    if(doorOrGate&&!['open','closed'].includes(object.state))throw new Error('World state contains an invalid door or gate state.');
+    if(object.type==='button'&&((object.targetId!==null&&(typeof object.targetId!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(object.targetId)))||!['open','closed'].includes(object.targetState)))throw new Error('World state contains an invalid button target or state.');
+    return {id:object.id,type:object.type,ownerId:object.ownerId,color:object.color,position:vector(object.position,1000),size:vector(object.size,50,0.25),blocksMovement:object.blocksMovement,supportsPlayer:object.supportsPlayer,...(oriented?{direction:object.direction}:{}),...(doorOrGate?{state:object.state}:{}),...(interactive?{usePolicy:object.usePolicy,version:object.version}:{}),...(object.type==='button'?{targetId:object.targetId,targetState:object.targetState}:{}),...(object.type==='sign'?{text:object.text}:{}),...(object.type==='beacon'?{name:object.name}:{})};
   });
   const selectedSet=new Set(view.selectedIds);
   if(view.selectedIds.some(id=>!objectIds.has(id)))throw new Error('A selected object no longer exists; refresh the world before sending.');
@@ -83,7 +86,7 @@ export function captureSceneSnapshot(state, view, worldConnectionId) {
     totalPlayerCount:players.length,includedPlayerCount:Math.min(players.length,MAX_SCENE_PLAYERS),playersTruncated:players.length>MAX_SCENE_PLAYERS};
 }
 
-const BUILD_TYPES = ['block','bridge','port','sign','beacon',...SHAPE_TYPES];
+const BUILD_TYPES = ['block','bridge','port','sign','beacon','door','gate','button',...SHAPE_TYPES];
 function buildDesign(value) {
   if (!record(value)) throw new Error('Invalid object design.');
   const directional = SHAPE_TYPES.includes(value.objectType), labelField=value.objectType==='sign'?'text':value.objectType==='beacon'?'name':null;
