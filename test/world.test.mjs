@@ -409,7 +409,7 @@ test('button links one stable target and access settings are owner/admin-control
  assert.equal(opened.result.object.state,'open');
  assert.equal(opened.result.object.blocksMovement,false);
  assert.throws(()=>applyCommand(linked.state,{id:'bob',role:'viewer'},{type:'update',id:button.id,targetId:'another-door',expected:{targetId:door.id}}),{code:'forbidden'});
- assert.throws(()=>applyCommand(linked.state,builder,{type:'update',id:button.id,targetId:'missing',expected:{targetId:null}}),{code:'invalid_target'});
+ assert.throws(()=>applyCommand(linked.state,builder,{type:'update',id:button.id,targetId:'missing',expected:{targetId:door.id}}),{code:'invalid_target'});
  validateWorld(linked.state);
 });
 
