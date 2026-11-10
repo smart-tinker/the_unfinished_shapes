@@ -350,6 +350,29 @@ test('world lighting Preview and Cancel are local; Apply sends one versioned com
  assert.deepEqual(h.context.worldState.lighting,{version:3,ambientIntensity:1.2,sunIntensity:2.4});
 });
 
+test('a later successful poll releases a lighting Apply locked after refresh fails',async()=>{
+ const h=rendererHarness();
+ h.context.worldLightingPreview={version:1,baseline:{version:1,ambientIntensity:2.6,sunIntensity:3.1},ambientIntensity:1,sunIntensity:2,attempted:false};
+ h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};h.context.latestStateRevision=5;h.context.settingsGeneration=0;
+ h.context.worldState={revision:5,lighting:{version:1,ambientIntensity:2.6,sunIntensity:3.1}};
+ h.context.request=async(path,method)=>{throw new Error(method==='POST'?'timed out':'offline');};
+ h.context.renderWorld=()=>{throw new Error('must not render unavailable state');};
+ h.context.feedback=()=>{};h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1};h.context.renderer={shadowMap:{enabled:true}};h.context.controls={target:{x:0,y:0,z:0}};
+ h.load('function updateLightingControls(','function labelTexture(');
+ await h.run('applyWorldLightingPreview()');
+ assert.equal(h.context.worldLightingPreview.attempted,true);
+ assert.equal(h.element('world-light-cancel').disabled,true);
+ h.context.bridge={};h.context.pollRunning=false;h.context.localMovementVersion=0;h.context.scene={};
+ h.context.renderWorld=state=>{h.context.worldState=state;h.context.latestStateRevision=state.revision;};
+ h.context.$('connection').classList={remove(){},add(){}};
+ h.context.request=async()=>({revision:6,lighting:{version:2,ambientIntensity:1,sunIntensity:2},objects:[],players:[]});
+ h.load('async function poll()','function positionKey(');
+ await h.run('poll()');
+ assert.equal(h.context.worldLightingPreview,null);
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.worldState.lighting)),{version:2,ambientIntensity:1,sunIntensity:2});
+ assert.match(h.element('world-light-message').textContent,/confirmed|refreshed/i);
+});
+
 test('connection settings cannot change while a shared lighting Apply is unresolved',async()=>{
  const h=rendererHarness(),effects=[];
  h.context.editing=false;h.context.settingsGeneration=0;h.context.worldLightingPreview={attempted:true};
