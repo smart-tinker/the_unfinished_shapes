@@ -187,3 +187,40 @@ test('world_state returns the latest authoritative state and scopes it to this c
     assert.equal(otherWorld.worldConnectionId,'connection-2');
   } finally {await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
 });;
+
+
+test('agent construction remains local until a trusted approval applies the exact set once',async t=>{
+ assert.equal(typeof gameTools.createGameToolSession,'function','game tools must expose a per-connection preview approval gate');
+ const dir=await mkdtemp(path.join(os.tmpdir(),'tus-agent-preview-'));
+ const token='builder-secret-preview-12345';
+ const server=await createWorldServer({dataPath:path.join(dir,'world.json'),users:{[token]:{id:'alice',role:'builder'}}});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ const connection={url:`http://127.0.0.1:${server.address().port}`,token,connectionId:'connection-1'};
+ const session=gameTools.createGameToolSession(connection),threadId='thread-1';
+ const objects=[
+  {objectType:'block',position:{x:0,y:1,z:0},size:{x:2,y:2,z:2},color:'#123456'},
+  {objectType:'bridge',position:{x:8,y:1,z:0},size:{x:10,y:1,z:3},color:'#654321'},
+ ];
+ try {
+  const preview=await session.execute({name:'world_preview',threadId,arguments:{objects}});
+  assert.equal(preview.success,true);
+  const proposed=JSON.parse(preview.contentItems[0].text);
+  assert.equal(typeof proposed.previewId,'string');assert.deepEqual(proposed.objects,objects);
+  const state=await (await fetch(connection.url+'/state',{headers:{Authorization:`Bearer ${token}`}})).json();
+  assert.equal(state.revision,0);assert.equal(state.objects.length,0);
+  const early=await session.execute({name:'world_apply',threadId,arguments:{previewId:proposed.previewId}});
+  assert.equal(early.success,false);assert.match(early.contentItems[0].text,/approval/i);
+  assert.equal((await (await fetch(connection.url+'/state',{headers:{Authorization:`Bearer ${token}`}})).json()).objects.length,0);
+  assert.throws(()=>session.decide(proposed.previewId,'apply','another-thread'),/thread|conversation/i);
+  session.decide(proposed.previewId,'apply',threadId);
+  const applied=await session.execute({name:'world_apply',threadId,arguments:{previewId:proposed.previewId}});
+  assert.equal(applied.success,true);const result=JSON.parse(applied.contentItems[0].text);
+  assert.equal(result.revision,1);assert.equal(result.objects.length,2);
+  assert.deepEqual(result.objects.map(object=>object.ownerId),['alice','alice']);
+  assert.equal((await session.execute({name:'world_apply',threadId,arguments:{previewId:proposed.previewId}})).success,false,'an approved preview is one-use');
+  assert.equal((await executeGameTool({name:'world_build',arguments:objects[0]},connection)).success,false);
+  assert.equal((await executeGameTool({name:'world_command',threadId,arguments:{command:{type:'build',...objects[0]}}},connection)).success,false);
+  const final=await (await fetch(connection.url+'/state',{headers:{Authorization:`Bearer ${token}`}})).json();
+  assert.equal(final.revision,1);assert.equal(final.objects.length,2);
+ } finally {session.clear();await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
+});

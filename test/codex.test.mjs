@@ -276,3 +276,18 @@ test('a turn-start timeout is uncertain and cannot be blindly retried',async()=>
   await assert.rejects(f.bridge.send('Retry build'),/Connect Codex first/);
   assert.equal(f.requests.filter(request=>request.method==='turn/start').length,1);
 });
+
+
+test('agent construction exposes preview and gated apply, never direct build',()=>{
+ const preview=WORLD_TOOLS.find(tool=>tool.name==='world_preview')?.inputSchema;
+ assert.ok(preview,'agent construction must start with a world_preview tool');
+ assert.deepEqual(preview.required,['objects']);assert.equal(preview.additionalProperties,false);
+ assert.equal(preview.properties.objects.type,'array');assert.equal(preview.properties.objects.minItems,1);assert.equal(preview.properties.objects.maxItems,32);
+ assert.deepEqual(preview.properties.objects.items.required,['objectType','position','size','color']);
+ assert.equal(preview.properties.objects.items.additionalProperties,false);
+ const apply=WORLD_TOOLS.find(tool=>tool.name==='world_apply')?.inputSchema;
+ assert.ok(apply,'agent must have a separate post-approval world_apply tool');
+ assert.deepEqual(apply.required,['previewId']);assert.deepEqual(Object.keys(apply.properties),['previewId']);assert.equal(apply.additionalProperties,false);
+ assert.equal(WORLD_TOOLS.some(tool=>tool.name==='world_build'),false);
+ assert.equal(WORLD_TOOLS.find(tool=>tool.name==='world_command').inputSchema.properties.command.properties.type.enum.includes('build'),false);
+});

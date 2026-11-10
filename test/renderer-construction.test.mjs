@@ -95,3 +95,31 @@ test('stairs and ramps render as four-step and continuous profiles in their save
  assert.deepEqual([...new Set(stairs.children[0].geometry.shape.points.map(point=>point[1]))].sort((a,b)=>a-b),[-1,-.5,0,.5,1]);
  assert.equal(stairs.rotation.y,0);
 });
+
+test('agent build preview is visible locally and only its approval button grants Apply',async()=>{
+ const h=rendererHarness();
+ assert.ok(h.has('function showAgentBuildPreview'), 'renderer must show agent proposals as a local preview');
+ h.context.agentBuildPreview=null;h.context.settings={threadId:'thread-1'};h.context.connected=true;h.context.busy=false;
+ h.context.added=[];h.context.removed=[];h.context.decisions=[];h.context.commands=[];
+ h.context.scene={add(mesh){h.context.added.push(mesh);},remove(mesh){h.context.removed.push(mesh);}};
+ h.context.objectMesh=object=>({object,traverse(callback){callback({material:{clone(){return {color:{set(){}},transparent:false,opacity:1,depthWrite:true};}}});}});
+ h.context.disposeGroup=()=>{};h.context.feedback=()=>{};h.context.updateChatControls=()=>{};h.context.startActivity=()=>{};
+ h.context.command=async(...args)=>h.context.commands.push(args);
+ h.context.bridge={decideBuildPreview:async(...args)=>h.context.decisions.push(args)};
+ h.load('function addMessage(text, kind =', 'function updateChatControls()');
+ h.load('function clearAgentBuildPreview()', 'function buildDesign()');
+ const objects=[
+  {objectType:'block',position:{x:0,y:1,z:0},size:{x:2,y:2,z:2},color:'#123456'},
+  {objectType:'bridge',position:{x:8,y:1,z:0},size:{x:10,y:1,z:3},color:'#654321'},
+ ];
+ h.context.preview={previewId:'preview-1',objects};
+ h.run('showAgentBuildPreview(preview)');
+ assert.equal(h.context.added.length,2);
+ const card=h.element('chat').children[0];
+ assert.match(card.textContent,/approve|look right/i);
+ const apply=card.children.find(node=>/approve/i.test(node.textContent));
+ assert.ok(apply);
+ await apply.listeners.click();
+ assert.deepEqual(h.context.decisions,[['preview-1','apply','thread-1']]);
+ assert.equal(h.context.commands.length,0,'the renderer must ask the agent to apply, never write directly');
+});
