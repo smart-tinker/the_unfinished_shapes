@@ -584,7 +584,7 @@ function fillInspector(object) {
   $('edit-use-policy').value=interactive?object.usePolicy:'owner_admin';
   $('edit-interaction-row').hidden=!interactive;$('edit-button-row').hidden=!button;$('edit-target-state-row').hidden=!button;
   $('edit-physics-options').hidden=interactive;
-  const targetSelect=$('edit-target-id'),targets=(worldState.objects||[]).filter(item=>['door','gate'].includes(item.type));
+  const targetSelect=$('edit-target-id'),targets=(typeof worldState==='undefined'?[]:worldState.objects||[]).filter(item=>['door','gate'].includes(item.type));
   targetSelect.replaceChildren();
   const none=document.createElement('option');none.value='';none.textContent='No target';targetSelect.append(none);
   for(const target of targets){const option=document.createElement('option');option.value=target.id;option.textContent=target.type+' '+target.id;targetSelect.append(option);}
