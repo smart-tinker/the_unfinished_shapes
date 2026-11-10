@@ -28,8 +28,7 @@ export function rendererHarness() {
     assert.ok(from >= 0 && to > from, `Renderer test boundaries missing: ${start} … ${end}`);
     run(source.slice(from, to));
   }
-  function text() { return [...elements.values()].map(node => node.textContent).join('
-'); }
+  function text() { return [...elements.values()].map(node => node.textContent).join('\\n'); }
   load('function refreshAgentStatus()', 'function populateAgentEfforts(');
   return { context, element, run, load, text, has: start => source.includes(start) };
 }
