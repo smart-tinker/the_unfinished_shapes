@@ -7,7 +7,7 @@ const $ = id => document.getElementById(id);
 const bridge = window.tus;
 let settings = { serverUrl: 'http://127.0.0.1:4317', token: '' };
 let selectedKind = 'block', selectedId = null, worldRevision = -1, connected = false, busy = false;
-let settingsGeneration = 0;
+let settingsGeneration = 0, ordinaryTurn = false;
 let agentControlState = null, agentControlRead = 0, agentControlLoading = false, agentControlBusy = false, goalMessageContextId = null;
 let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 0, z: 0 }, playerVelocityY = 0, jumpRequested = false, meId = null, localMovementVersion = 0, latestStateRevision = -1;
 let worldState = { objects: [] };
@@ -49,7 +49,7 @@ function updateChatControls() {
 function refreshAgentStatus() {
   const goalActive = agentControlState?.goal?.status === 'active' || Boolean(goalMessageContextId);
   const status = !connected ? 'Codex disconnected'
-    : busy ? (goalActive ? 'Native Goal working…' : 'Working on your request…')
+    : busy ? (goalActive ? 'Codex turn in progress' : 'Working on your request…')
     : agentControlState?.pendingApprovals ? 'Waiting for an approval decision'
     : agentControlState?.goal?.status === 'active' ? 'Native Goal active'
     : agentControlState?.goal?.status === 'paused' ? 'Native Goal paused'
@@ -708,7 +708,7 @@ function sceneContextForPrompt() {
 $('chat-form').addEventListener('submit',async event=>{
   event.preventDefault();const text=$('prompt').value.trim();
   if(!text||!connected||busy)return;
-  busy=true;startActivity();updateChatControls();addMessage(text,'user');$('prompt').value='';streamMessage=null;
+  ordinaryTurn=true;busy=true;startActivity();updateChatControls();addMessage(text,'user');$('prompt').value='';streamMessage=null;
   try{
     const result=await bridge.sendPrompt(text,sceneContextForPrompt()),context=result?.sceneContext;
     $('scene-context-status').textContent=!context
@@ -722,7 +722,7 @@ $('chat-form').addEventListener('submit',async event=>{
       : 'Scene context was not sent: '+error.message;
     addMessage(error.message,'error');$('activity-state').textContent='Error';
     $('agent-stop-reason').textContent='Request could not be confirmed: '+error.message;
-    busy=false;updateChatControls();
+    ordinaryTurn=false;busy=false;updateChatControls();
   }
 });
 $('interrupt').addEventListener('click', async () => { $('interrupt').disabled = true; try { stopRequested = true; $('activity-state').textContent = 'Stopping'; $('agent-stop-reason').textContent = 'Stop requested; waiting for Codex to confirm interruption.'; await bridge.interrupt(); } catch (error) { addMessage(error.message, 'error'); $('interrupt').disabled = !busy; } });
@@ -739,7 +739,7 @@ function codexEvent(event) {
   if (event.type === 'tool-start' || event.type === 'tool-result') toolActivity(event);
   if (event.type === 'connected') { activityThread(event.threadId); connected = true; settings.threadId = event.threadId; agentControlState = null; goalMessageContextId = null; refreshAgentStatus(); void refreshAgentControls(); }
   if (event.type === 'error') addMessage(event.message || 'Codex reported an error.', 'error');
-  if (event.type === 'disconnected') { const activityUnknown = busy || Boolean(agentControlState?.goal) || Boolean(goalMessageContextId); agentControlRead++; agentControlState = null; $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; busy = false; $('agent-status').textContent = activityUnknown ? 'Codex disconnected · activity unknown' : 'Codex disconnected'; $('agent-goal-summary').hidden = true; addMessage(event.message || 'Codex disconnected.', 'error'); if ($('agent-controls').open) void refreshAgentControls(); }
+  if (event.type === 'disconnected') { const activityUnknown = busy || Boolean(agentControlState?.goal) || Boolean(goalMessageContextId); agentControlRead++; agentControlState = null; $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; ordinaryTurn = false; busy = false; $('agent-status').textContent = activityUnknown ? 'Codex disconnected · activity unknown' : 'Codex disconnected'; $('agent-goal-summary').hidden = true; addMessage(event.message || 'Codex disconnected.', 'error'); if ($('agent-controls').open) void refreshAgentControls(); }
   if (event.type === 'approval') {
     if ($('agent-controls').open) void refreshAgentControls();
     $('activity-state').textContent = 'Needs decision'; $('agent-stop-reason').textContent = 'Waiting for your response to an approval request; no approval has been granted.';
@@ -768,9 +768,9 @@ function codexEvent(event) {
     }
     notificationActivity(event.method, p);
     if (event.method === 'turn/started') { busy = true; refreshAgentStatus(); }
-    if (event.method === 'item/agentMessage/delta') { if (!streamMessage) streamMessage = addMessage('', goalMessageContextId ? 'goal' : 'assistant'); const body = streamMessage.querySelector('.chat-message-body'); if (body) body.textContent += p.delta || ''; else streamMessage.textContent += p.delta || ''; $('chat').scrollTop = $('chat').scrollHeight; }
+    if (event.method === 'item/agentMessage/delta') { if (!streamMessage) streamMessage = addMessage('', ordinaryTurn || !goalMessageContextId ? 'assistant' : 'goal'); const body = streamMessage.querySelector('.chat-message-body'); if (body) body.textContent += p.delta || ''; else streamMessage.textContent += p.delta || ''; $('chat').scrollTop = $('chat').scrollHeight; }
     if (event.method === 'item/completed' && p.item?.type === 'agentMessage') { if (streamMessage) { const body = streamMessage.querySelector('.chat-message-body'); if (body) body.textContent = p.item.text || body.textContent; else streamMessage.textContent = p.item.text || streamMessage.textContent; } else if (p.item.text) addMessage(p.item.text, goalMessageContextId ? 'goal' : 'assistant'); streamMessage = null; }
-    if (event.method === 'turn/completed') { busy = false; if (p.turn?.error?.message) addMessage(p.turn.error.message, 'error'); if (goalMessageContextId && agentControlState?.goal?.status !== 'active') goalMessageContextId = null; refreshAgentStatus(); if ($('agent-controls').open) void refreshAgentControls(); }
+    if (event.method === 'turn/completed') { ordinaryTurn = false; busy = false; if (p.turn?.error?.message) addMessage(p.turn.error.message, 'error'); if (goalMessageContextId && agentControlState?.goal?.status !== 'active') goalMessageContextId = null; refreshAgentStatus(); if ($('agent-controls').open) void refreshAgentControls(); }
     if (event.method === 'error') addMessage(p.error?.message || p.message || 'Codex reported an error.', 'error');
   }
   updateChatControls();

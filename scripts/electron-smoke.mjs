@@ -34,6 +34,7 @@ await withSmokeCleanup(async()=>{
  await launch('first launch');
  if(process.platform==='darwin') assert.equal(await app.evaluate(()=>process.argv.includes('--no-sandbox')),false,'native macOS must not disable the sandbox');
  const page=await app.firstWindow();graphics=await observeGraphics(page,{label:'first launch'});
+ await page.waitForFunction(() => document.querySelector('#build-version')?.getAttribute('title') !== 'Loading build metadata');
  assert.equal(await page.locator('#build-version').count(),1,'packaged UI exposes one build version label');
  assert.equal(await page.locator('#build-version').innerText(),expectedBuildLabel,'packaged UI version and short source SHA match the candidate metadata');
  assert.equal(await page.locator('#build-version').getAttribute('title'),expectedBuildTitle,'build label identifies the exact source or marks it unknown');

@@ -50,6 +50,7 @@ async function launch(executablePath, label) {
   await gpu.attach(instance);
   const page = await instance.firstWindow();
   graphics = await observeGraphics(page, { label });
+  await page.waitForFunction(() => document.querySelector('#build-version')?.getAttribute('title') !== 'Loading build metadata');
   assert.equal(await page.locator('#build-version').innerText(), expectedBuildLabel, 'installed UI version and short source SHA match the candidate');
   assert.equal(await page.locator('#build-version').getAttribute('title'), expectedBuildTitle, 'installed build identifies exact source or marks it unknown');
   graphics.phase('world connection');
