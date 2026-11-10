@@ -226,7 +226,13 @@ await withSmokeCleanup(async () => {
     return player?.position.y === 0 && player.position.x < 14;
   }, 'Alice to leave the platform before moving it');
   await alice.page.keyboard.up('a');
-  const beforePreview = await state();
+  let lastStoppedSnapshot = '';
+  const beforePreview = await waitForState(snapshot => {
+    const current = `${snapshot.revision}:${JSON.stringify(snapshot.players)}`;
+    const stable = current === lastStoppedSnapshot;
+    lastStoppedSnapshot = current;
+    return stable;
+  }, 'Alice movement to settle before the local preview');
   await select(alice, built);
   await alice.page.locator('#move-grid-step').fill('0.5');
   await alice.page.locator('#move-plane').selectOption('x');
