@@ -278,6 +278,7 @@ async function applyWorldLightingPreview() {
       }
     }catch(refreshError){
       if(generation!==settingsGeneration)return;
+      if(worldLightingPreview===preview)preview.needsReconcile=true;
       $('world-light-message').textContent='Apply outcome remains unknown. No retry was sent; reconnect or reload to refresh before trying again. '+error.message;
       updateLightingControls();
     }
@@ -824,7 +825,7 @@ function renderWorld(state, movementVersion = localMovementVersion) {
 async function poll() {
   if (pollRunning || !bridge) return; pollRunning = true;
   const generation = settingsGeneration, movementVersion = localMovementVersion;
-  try { const state = await request('/state'); if (generation !== settingsGeneration) return; if (state.error) throw new Error(state.message || state.error); if (scene) renderWorld(state, movementVersion); $('connection').textContent = '● World connected'; $('connection').classList.remove('offline'); }
+  try { const state = await request('/state'); if (generation !== settingsGeneration) return; if (state.error) throw new Error(state.message || state.error); if (scene) renderWorld(state, movementVersion); if(worldLightingPreview?.needsReconcile&&worldState===state){worldLightingPreview=null;$('world-light-message').textContent='World state confirmed after the Apply outcome became unknown. Review current lighting before changing connections.';updateLightingControls(true);} $('connection').textContent = '● World connected'; $('connection').classList.remove('offline'); }
   catch (error) { if (generation !== settingsGeneration) return; $('connection').textContent = '○ World offline'; $('connection').classList.add('offline'); feedback(error.message, true); }
   finally { pollRunning = false; }
 }
