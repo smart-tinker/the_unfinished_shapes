@@ -4,7 +4,8 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {createWorldServer} from '../src/server.mjs';
-import {executeGameTool} from '../src/game-tools.mjs';
+import * as gameTools from '../src/game-tools.mjs';
+const {executeGameTool}=gameTools;
 test('app-server dynamic tool handler builds through real authoritative HTTP and enforces roles',async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'tus-tool-'));
  const server=await createWorldServer({dataPath:path.join(dir,'world.json'),users:{'builder-secret-12345':{id:'one',role:'builder'},'viewer-secret-12345':{id:'two',role:'viewer'}}});
@@ -76,3 +77,84 @@ test('world_build keeps authoritative validation, roles and explicit nondefault 
   const legacy=await executeGameTool({name:'world_command',arguments:{command:{type:'build',objectType:'block',position:{x:0,y:0,z:0}}}},connection);assert.equal(legacy.success,true);assert.equal(JSON.parse(legacy.contentItems[0].text).object.color,'#c8a570');
  } finally {await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
 });
+
+
+const sceneCamera = {
+  position:{x:0,y:2,z:10}, target:{x:0,y:2,z:0},
+  fov:42, aspect:1.5, near:0.1, far:220,
+  viewport:{width:900,height:600},
+};
+const sceneObject = (id, position) => ({
+  id, type:'block', ownerId:'alice', color:'#123456',
+  position, size:{x:1,y:1,z:1}, blocksMovement:true, supportsPlayer:true,
+});
+const sceneWorld = (objects, players = []) => ({
+  version:1, revision:7, objects,
+  players:[{id:'alice',position:{x:0,y:0,z:0},velocityY:0},...players],
+  me:{id:'alice',role:'builder'}, mechanics:['block','bridge','port'],
+});
+const sceneView = (revision=7, selectedIds=[]) => ({revision,selectedIds,camera:structuredClone(sceneCamera)});
+
+test('scene snapshots distinguish camera-frustum objects from selected objects', () => {
+  assert.equal(typeof gameTools.captureSceneSnapshot, 'function', 'scene snapshot helper must be implemented');
+  const state = sceneWorld([
+    sceneObject('visible', {x:0,y:0,z:0}),
+    sceneObject('selected-behind-camera', {x:0,y:2,z:12}),
+  ]);
+  const snapshot = gameTools.captureSceneSnapshot(state, sceneView(7,['selected-behind-camera']), 'connection-1');
+  assert.equal(snapshot.worldConnectionId, 'connection-1');
+  assert.equal(snapshot.revision, 7);
+  assert.deepEqual(snapshot.selectedIds, ['selected-behind-camera']);
+  assert.equal(snapshot.objects.find(o => o.id === 'visible').inCameraView, true);
+  assert.equal(snapshot.objects.find(o => o.id === 'selected-behind-camera').inCameraView, false);
+  assert.equal(snapshot.objects.find(o => o.id === 'selected-behind-camera').selected, true);
+  assert.equal(snapshot.totalObjectCount, 2);
+  assert.equal(snapshot.objectsTruncated, false);
+  assert.equal(JSON.stringify(snapshot).includes('token'), false);
+});
+
+test('scene snapshots bound context and never silently drop selected IDs', () => {
+  assert.equal(typeof gameTools.captureSceneSnapshot, 'function', 'scene snapshot helper must be implemented');
+  const visible = Array.from({length:70}, (_,i) => sceneObject(`visible-${i}`, {x:(i%5)*0.2,y:2,z:0}));
+  const selected = sceneObject('selected-outside-view', {x:100,y:2,z:0});
+  const players = Array.from({length:40}, (_,i) => ({id:`player-${i}`,position:{x:i,y:0,z:0}}));
+  const snapshot = gameTools.captureSceneSnapshot(sceneWorld([...visible,selected],players), sceneView(7,['selected-outside-view']), 'connection-1');
+  assert.equal(snapshot.objects.length, 64);
+  assert.equal(snapshot.objectsTruncated, true);
+  assert.equal(snapshot.totalObjectCount, 71);
+  assert.equal(snapshot.objects.some(o => o.id === 'selected-outside-view' && o.selected), true);
+  assert.equal(snapshot.players.length <= 32, true);
+  assert.equal(snapshot.playersTruncated, true);
+});
+
+test('scene capture rejects stale revisions, invalid cameras, and missing selections', () => {
+  assert.equal(typeof gameTools.captureSceneSnapshot, 'function', 'scene snapshot helper must be implemented');
+  const state = sceneWorld([sceneObject('existing',{x:0,y:0,z:0})]);
+  assert.throws(() => gameTools.captureSceneSnapshot(state, sceneView(6,[]), 'connection-1'), /revision/i);
+  assert.throws(() => gameTools.captureSceneSnapshot(state, sceneView(7,['missing']), 'connection-1'), /selected/i);
+  const invalid = sceneView();
+  invalid.camera.position.x = Infinity;
+  assert.throws(() => gameTools.captureSceneSnapshot(state, invalid, 'connection-1'), /camera|finite/i);
+});
+
+test('world_state returns the latest authoritative state and scopes it to this connection', async () => {
+  const dir=await mkdtemp(path.join(os.tmpdir(),'tus-tool-scene-'));
+  const connection={url:'',token:'builder-secret-12345',connectionId:'connection-1'};
+  const server=await createWorldServer({dataPath:path.join(dir,'world.json'),users:{[connection.token]:{id:'alice',role:'builder'}}});
+  await new Promise(r=>server.listen(0,'127.0.0.1',r));connection.url=`http://127.0.0.1:${server.address().port}`;
+  try {
+    await executeGameTool({name:'world_build',arguments:{objectType:'block',position:{x:0,y:1,z:0},size:{x:1,y:1,z:1},color:'#123456'}},connection);
+    const before=JSON.parse((await executeGameTool({name:'world_state'},connection)).contentItems[0].text);
+    assert.equal(before.worldConnectionId,'connection-1');
+    assert.equal(before.objects.length,1);
+    const later=await executeGameTool({name:'world_build',arguments:{objectType:'bridge',position:{x:3,y:1,z:0},size:{x:1,y:1,z:1},color:'#654321'}},connection);
+    assert.equal(later.success,true);
+    const current=JSON.parse((await executeGameTool({name:'world_state'},connection)).contentItems[0].text);
+    assert.equal(current.worldConnectionId,'connection-1');
+    assert.ok(current.revision>before.revision);
+    assert.equal(current.objects.length,2);
+    assert.equal(JSON.stringify(current).includes(connection.token),false);
+    const otherWorld=JSON.parse((await executeGameTool({name:'world_state'},{...connection,connectionId:'connection-2'})).contentItems[0].text);
+    assert.equal(otherWorld.worldConnectionId,'connection-2');
+  } finally {await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
+});;

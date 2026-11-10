@@ -139,6 +139,22 @@ test('explicit send, duplicate send protection, interrupt, completion',async()=>
   await f.bridge.send('Next request'); f.bridge.stop();
 });
 
+test('a scene snapshot is sent with its player request and is not carried into a later turn',async()=>{
+  const f=fixture(); await f.start();
+  const snapshot={worldConnectionId:'connection-1',revision:7,selectedIds:['shape-1']};
+  await f.bridge.send('Build a bridge',{},snapshot);
+  const first=f.requests.filter(request=>request.method==='turn/start').at(-1);
+  assert.equal(first.params.input.length,1);
+  assert.match(first.params.input[0].text,/Build a bridge/);
+  assert.ok(first.params.input[0].text.includes(JSON.stringify(snapshot)));
+  f.reply({method:'turn/completed',params:{threadId:'new-thread',turn:{id:'turn1'}}});
+  await f.bridge.send('Next request');
+  const second=f.requests.filter(request=>request.method==='turn/start').at(-1);
+  assert.match(second.params.input[0].text,/Next request/);
+  assert.equal(second.params.input[0].text.includes('connection-1'),false);
+  f.bridge.stop();
+});
+
 test('server approvals stay pending until an explicit matching response',async()=>{
   const f=fixture(); await f.start(); const events=[]; f.bridge.on('event',e=>events.push(e));
   const before=f.requests.length;
@@ -236,4 +252,25 @@ test('world_build requires every design field and general command cannot adverti
  assert.deepEqual(build.properties.objectType.enum,['block','bridge','port']);assert.equal(build.properties.color.type,'string');
  const command=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command;
  assert.equal(command.properties.type.enum.includes('build'),false);
+});
+
+test('an accepted turn is returned if the conversation changes before its start response',async()=>{
+  let f;
+  f=fixture(request=>{
+    if(request.method==='turn/start')f.bridge.threadId='replacement-thread';
+  });
+  await f.start();
+  const result=await f.bridge.send('Build one thing');
+  assert.equal(result.turn.id,'turn1');
+  assert.equal(f.bridge.turnId,null);
+  f.bridge.stop();
+});
+
+test('a turn-start timeout is uncertain and cannot be blindly retried',async()=>{
+  const f=fixture(request=>request.method==='turn/start'?false:undefined,35);
+  await f.start();
+  await assert.rejects(f.bridge.send('Build one thing'),/Turn outcome is unknown.*check the conversation before retrying/i);
+  assert.equal(f.requests.filter(request=>request.method==='turn/start').length,1);
+  await assert.rejects(f.bridge.send('Retry build'),/Connect Codex first/);
+  assert.equal(f.requests.filter(request=>request.method==='turn/start').length,1);
 });

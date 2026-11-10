@@ -28,5 +28,5 @@ export function rendererHarness() {
     run(source.slice(from, to));
   }
   function text() { return [...elements.values()].map(node => node.textContent).join('\n'); }
-  return { context, element, run, load, text };
+  return { context, element, run, load, text, has: start => source.includes(start) };
 }

@@ -204,7 +204,7 @@ function selectObject(id, fromPoll = false) {
 }
 function renderWorld(state, movementVersion = localMovementVersion) {
   if (state.revision < latestStateRevision) return;
-  latestStateRevision = state.revision; worldState = state;
+  latestStateRevision = state.revision; worldState = state; worldRevision = state.revision;
   const firstState = meId !== state.me.id, savedPlayer = state.players.find(p => p.id === state.me.id);
   if (savedPlayer && movementVersion === localMovementVersion && !moveRunning && (firstState || positionKey(playerPosition) === lastPosition)) { playerPosition = { ...savedPlayer.position }; playerVelocityY = savedPlayer.velocityY ?? 0; lastPosition = positionKey(savedPlayer.position); }
   meId = state.me.id; role = state.me.role; $('role').textContent = `Role: ${state.me.role}`; $('revision').textContent = `REV ${state.revision}`;
@@ -213,7 +213,7 @@ function renderWorld(state, movementVersion = localMovementVersion) {
     for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear();
     objectData.clear();
     for (const object of state.objects) { objectData.set(object.id, object); const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh); }
-    selectObject(meshes.has(selectedId) ? selectedId : null, true); worldRevision = state.revision; objectSnapshot = nextSnapshot;
+    selectObject(meshes.has(selectedId) ? selectedId : null, true); objectSnapshot = nextSnapshot;
   }
   const live = new Set();
   for (const remote of state.players) {
@@ -460,7 +460,34 @@ $('agent-model-save').addEventListener('click', async () => {
   } catch (error) { $('agent-controls-message').textContent = error.message; }
   finally { agentControlBusy = false; updateAgentControlButtons(); }
 });
-$('chat-form').addEventListener('submit', async event => { event.preventDefault(); const text = $('prompt').value.trim(); if (!text || !connected || busy) return; busy = true; startActivity(); updateChatControls(); addMessage(text, 'user'); $('prompt').value = ''; streamMessage = null; try { await bridge.sendPrompt(text); } catch (error) { addMessage(error.message, 'error'); $('activity-state').textContent = 'Error'; $('agent-stop-reason').textContent = 'Request could not be confirmed: ' + error.message; busy = false; updateChatControls(); } });
+function sceneContextForPrompt() {
+  const point = value => ({ x:value.x, y:value.y, z:value.z });
+  return {
+    revision:worldRevision, selectedIds:selectedId ? [selectedId] : [],
+    camera:{position:point(camera.position),target:point(controls.target),fov:camera.fov,aspect:camera.aspect,near:camera.near,far:camera.far,
+      viewport:{width:renderer.domElement.clientWidth,height:renderer.domElement.clientHeight}},
+  };
+}
+$('chat-form').addEventListener('submit',async event=>{
+  event.preventDefault();const text=$('prompt').value.trim();
+  if(!text||!connected||busy)return;
+  busy=true;startActivity();updateChatControls();addMessage(text,'user');$('prompt').value='';streamMessage=null;
+  try{
+    const result=await bridge.sendPrompt(text,sceneContextForPrompt()),context=result?.sceneContext;
+    $('scene-context-status').textContent=!context
+      ? 'Scene context could not be confirmed for this request.'
+      : context.connectionChangedAfterAcceptance
+        ? 'Request accepted, but the Codex connection changed before confirmation. Check the conversation before retrying.'
+        : `Scene context captured for this request: revision ${context.revision}, ${context.selectedCount} selected, ${context.includedObjectCount}/${context.totalObjectCount} objects${context.truncated?' (partial)':''}.`;
+  }catch(error){
+    $('scene-context-status').textContent=/^Turn outcome is unknown:/i.test(error.message)
+      ? 'Turn outcome is unknown; check the Codex conversation before retrying.'
+      : 'Scene context was not sent: '+error.message;
+    addMessage(error.message,'error');$('activity-state').textContent='Error';
+    $('agent-stop-reason').textContent='Request could not be confirmed: '+error.message;
+    busy=false;updateChatControls();
+  }
+});
 $('interrupt').addEventListener('click', async () => { $('interrupt').disabled = true; try { stopRequested = true; $('activity-state').textContent = 'Stopping'; $('agent-stop-reason').textContent = 'Stop requested; waiting for Codex to confirm interruption.'; await bridge.interrupt(); } catch (error) { addMessage(error.message, 'error'); $('interrupt').disabled = !busy; } });
 function codexEvent(event) {
   if (event.type === 'history') {

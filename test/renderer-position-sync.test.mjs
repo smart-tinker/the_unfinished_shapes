@@ -175,3 +175,14 @@ test('a poll received during an older move request is adopted after that request
   assert.equal(moveRequests.length, 1, 'the stale local position is not sent again');
   assert.equal(h.run('playerPosition.x'), 12, 'the latest server snapshot replaces the superseded local position');
 });
+
+
+test('world revision follows player-only server updates with unchanged objects', () => {
+  const h = syncHarness();
+  h.context.initial = state(1, 0);
+  h.context.moved = state(2, 4);
+  h.run('renderWorld(initial)');
+  assert.equal(h.run('worldRevision'), 1);
+  h.run('renderWorld(moved)');
+  assert.equal(h.run('worldRevision'), 2);
+});
