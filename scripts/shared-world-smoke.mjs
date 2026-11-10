@@ -148,9 +148,12 @@ await withSmokeCleanup(async () => {
 
   alice.graphics.phase('agent movement observed by both clients');
   const agentMove = await worldCommand('alice', { type: 'move', position: { x: 12, y: 1, z: 0 } });
-  await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent === 'X 12.0 · Y 0.0 · Z 0.0');
+  assert.ok(agentMove.position.x > 0 && agentMove.position.x <= 1.25 + 1e-6, JSON.stringify(agentMove.position));
+  await alice.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, agentMove.revision);
+  const expectedAgentCoordinates = `X ${agentMove.position.x.toFixed(1)} · Y 0.0 · Z 0.0`;
+  await alice.page.waitForFunction(text => document.querySelector('#coordinates').textContent === text, expectedAgentCoordinates);
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, agentMove.revision);
-  const acceptedAgentPosition = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x === 12, 'the agent move to be visible in the shared state');
+  const acceptedAgentPosition = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x === agentMove.position.x, 'the agent move to be visible in the shared state');
 
   await focus(alice);
   await alice.page.keyboard.down('d');
@@ -162,7 +165,7 @@ await withSmokeCleanup(async () => {
   }
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, manualMove.revision);
   const observedMove = (await state('bob')).players.find(player => player.id === 'alice');
-  assert.ok(observedMove.position.x > 12, 'the second client sees Alice beyond the agent destination');
+  assert.ok(observedMove.position.x > acceptedAgentPosition.players.find(player => player.id === 'alice').position.x, 'the second client sees Alice move farther under keyboard control');
   assert.ok(Number((await alice.page.locator('#coordinates').textContent()).match(/X ([\d.-]+)/)?.[1]) > 12, 'the local GUI displays movement continuing from the agent destination');
   alice.graphics.phase('manual shared construction');
   await alice.page.locator('#build-x').fill('16');
