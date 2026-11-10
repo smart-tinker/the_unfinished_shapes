@@ -563,7 +563,7 @@ $('move-snap-enabled').addEventListener('change', () => { $('move-grid-step').di
 $('move-grid-step').addEventListener('input', refreshMovePreview);
 $('move-cancel').addEventListener('click', cancelMovePreview);
 $('box-select-toggle').addEventListener('click', () => setBoxSelectionMode(!boxSelectMode));
-$('group-move-apply').addEventListener('click', async () => {
+async function applyGroupMove() {
   const draft = movePreview;
   if (!draft || draft.objects?.length < 2 || !draft.changes?.length || editing) return;
   const generation = settingsGeneration, button = $('group-move-apply');
@@ -595,7 +595,8 @@ $('group-move-apply').addEventListener('click', async () => {
   } finally {
     editing = false; button.disabled = !movePreview;
   }
-});
+}
+$('group-move-apply').addEventListener('click', applyGroupMove);
 $('edit-form').addEventListener('input', event => {
   const id = event?.target?.id;
   if (!id?.startsWith('edit-position-') && !id?.startsWith('edit-size-') && !['edit-color', 'edit-blocks-movement', 'edit-supports-player'].includes(id)) return;
