@@ -24,5 +24,5 @@ test('chat submission sends one immutable scene snapshot with the player request
 
   assert.equal(calls.length, 1, 'scene context travels in the same native request, not a second turn');
   assert.equal(calls[0][0], 'Make this taller');
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1])), snapshot);
+  assert.deepEqual(calls[0][1], snapshot);
 });
