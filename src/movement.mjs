@@ -5,6 +5,13 @@ export const SHAPE_DIRECTIONS = ['north','east','south','west'];
 export const SHAPE_DEFAULT_SIZES = {stairs:{x:8,y:2,z:4},ramp:{x:4,y:2,z:8}};
 const PLAYER_RADIUS = 0.32;
 const PLAYER_HEIGHT = 1.62;
+
+export function playerOccupiesObject(player, object) {
+  const p = player?.position, o = object?.position, s = object?.size;
+  return Boolean(p && o && s && p.x + PLAYER_RADIUS > o.x - s.x / 2 + EPSILON && p.x - PLAYER_RADIUS < o.x + s.x / 2 - EPSILON &&
+    p.z + PLAYER_RADIUS > o.z - s.z / 2 + EPSILON && p.z - PLAYER_RADIUS < o.z + s.z / 2 - EPSILON &&
+    p.y < o.y + s.y / 2 - EPSILON && p.y + PLAYER_HEIGHT > o.y - s.y / 2 + EPSILON);
+}
 const JUMP_SPEED = 9.5;
 const GRAVITY = 18;
 const MAX_STEP_HEIGHT = 0.5;

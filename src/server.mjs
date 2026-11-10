@@ -77,7 +77,9 @@ export async function createWorldServer({dataPath, users, host = '127.0.0.1', po
       const operation = queue.then(async()=>{
         const movedAt=Date.now(), previousMove=movementTimes.get(actor.id);
         const deltaSeconds=command?.type==='move'&&previousMove!==undefined ? Math.min(.25,Math.max(0,(movedAt-previousMove)/1000)) : 0;
-        const update = applyCommand(state,actor,command,deltaSeconds);
+        for (const [id,seenAt] of presence) if (movedAt-seenAt>=10_000) presence.delete(id);
+        presence.set(actor.id,movedAt);
+        const update = applyCommand(state,actor,command,deltaSeconds,{onlinePlayerIds:[...presence.keys()]});
         await save(update.state,command.type);
         state=update.state;
         if(command?.type==='move')movementTimes.set(actor.id,movedAt);

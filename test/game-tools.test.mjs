@@ -4,6 +4,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {createWorldServer} from '../src/server.mjs';
+import {WORLD_TOOLS} from '../src/codex.mjs';
 import * as gameTools from '../src/game-tools.mjs';
 const {executeGameTool}=gameTools;
 async function approvedBuild(session,objects,threadId='thread-1') {
@@ -237,4 +238,50 @@ test('agent construction remains local until a trusted approval applies the exac
   const unchanged=await (await fetch(connection.url+'/state',{headers:{Authorization:`Bearer ${token}`}})).json();
   assert.equal(unchanged.revision,1);assert.equal(unchanged.objects.length,2);
  } finally {session.clear();await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
+});
+
+
+test('agent schemas expose interactive objects and explicit versioned use commands',()=>{
+ const preview=WORLD_TOOLS.find(tool=>tool.name==='world_preview').inputSchema.properties.objects.items.properties;
+ for(const type of ['door','gate','button'])assert.ok(preview.objectType.enum.includes(type));
+ const command=WORLD_TOOLS.find(tool=>tool.name==='world_command').inputSchema.properties.command;
+ for(const type of ['set_state','use'])assert.ok(command.properties.type.enum.includes(type));
+ for(const field of ['state','expectedVersion','expectedTargetVersion','usePolicy','targetId','targetState'])assert.ok(command.properties[field],field);
+ for(const field of ['usePolicy','targetId','targetState'])assert.ok(command.properties.expected.properties[field],field);
+});
+
+test('approved interactive previews build doors, gates and unlinked buttons with private defaults',async()=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'tus-interactive-preview-'));
+ const token='builder-secret-12345',server=await createWorldServer({dataPath:path.join(dir,'world.json'),users:{[token]:{id:'alice',role:'builder'}}});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ const connection={url:'http://127.0.0.1:'+server.address().port,token},session=gameTools.createGameToolSession(connection),threadId='interactive-preview';
+ const designs=[
+  {objectType:'door',position:{x:0,y:1.5,z:0},size:{x:1,y:3,z:.25},color:'#3366aa'},
+  {objectType:'gate',position:{x:8,y:1,z:0},size:{x:4,y:2,z:.5},color:'#3366aa'},
+  {objectType:'button',position:{x:1,y:.25,z:0},size:{x:.5,y:.5,z:.25},color:'#3366aa'},
+ ];
+ try{
+  const preview=await session.execute({name:'world_preview',threadId,arguments:{objects:designs}});
+  assert.equal(preview.success,true);
+  const {previewId}=JSON.parse(preview.contentItems[0].text);
+  assert.equal((await (await fetch(connection.url+'/state',{headers:{Authorization:'Bearer '+token}})).json()).objects.length,0);
+  session.decide(previewId,'apply',threadId);
+  assert.equal((await session.execute({name:'world_apply',threadId,arguments:{previewId}})).success,true);
+  const world=await (await fetch(connection.url+'/state',{headers:{Authorization:'Bearer '+token}})).json();
+  assert.deepEqual(world.objects.map(object=>object.type),['door','gate','button']);
+  for(const object of world.objects.filter(item=>item.type==='door'||item.type==='gate')){
+   assert.equal(object.state,'closed');assert.equal(object.usePolicy,'owner_admin');assert.equal(object.version,0);
+  }
+  assert.equal(world.objects[2].targetId,null);assert.equal(world.objects[2].targetState,'open');assert.equal(world.objects[2].usePolicy,'owner_admin');
+ }finally{session.clear();await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
+});
+
+test('scene snapshots preserve validated interaction state and stable button targets',()=>{
+ const door={...sceneObject('door-1',{x:0,y:1.5,z:0}),type:'door',supportsPlayer:false,state:'closed',usePolicy:'all_players',version:4};
+ const button={...sceneObject('button-1',{x:1,y:.25,z:0}),type:'button',blocksMovement:false,supportsPlayer:false,targetId:'removed-door',targetState:'open',usePolicy:'owner_admin',version:3};
+ const snapshot=gameTools.captureSceneSnapshot(sceneWorld([door,button]),sceneView(7,['door-1','button-1']),'connection-1');
+ assert.deepEqual(snapshot.objects.map(({id,state,version,usePolicy,targetId,targetState})=>({id,state,version,usePolicy,targetId,targetState})),[
+  {id:'door-1',state:'closed',version:4,usePolicy:'all_players',targetId:undefined,targetState:undefined},
+  {id:'button-1',state:undefined,version:3,usePolicy:'owner_admin',targetId:'removed-door',targetState:'open'},
+ ]);
 });

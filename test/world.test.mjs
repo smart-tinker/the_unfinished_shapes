@@ -364,3 +364,61 @@ test('stair and ramp size edits cannot persist geometry beyond their traversal l
   assert.deepEqual(built.state,before);
  }
 });
+
+test('doors and gates persist an explicit, versioned open state without toggling on retry',()=>{
+ const world=emptyWorld();
+ const door=applyCommand(world,builder,{type:'build',objectType:'door',position:{x:0,y:1.5,z:0},size:{x:1.5,y:3,z:.25}});
+ const gate=applyCommand(door.state,builder,{type:'build',objectType:'gate',position:{x:8,y:1,z:0},size:{x:4,y:2,z:.5}});
+ assert.ok(mechanics.includes('door'));assert.ok(mechanics.includes('gate'));
+ for(const object of gate.state.objects){
+  assert.equal(object.state,'closed');
+  assert.equal(object.usePolicy,'owner_admin');
+  assert.equal(object.version,0);
+  assert.equal(object.blocksMovement,true);
+  assert.equal(object.supportsPlayer,false);
+ }
+ const opened=applyCommand(gate.state,builder,{type:'set_state',id:door.result.object.id,state:'open',expectedVersion:0});
+ assert.equal(opened.result.object.state,'open');
+ assert.equal(opened.result.object.blocksMovement,false);
+ assert.equal(opened.result.object.version,1);
+ const retry=applyCommand(opened.state,builder,{type:'set_state',id:door.result.object.id,state:'open',expectedVersion:0});
+ assert.equal(retry.result.revision,opened.result.revision);
+ assert.equal(retry.result.object.version,1);
+ assert.throws(()=>applyCommand(retry.state,builder,{type:'set_state',id:door.result.object.id,state:'closed',expectedVersion:0}),{code:'conflict',status:409});
+ const closed=applyCommand(retry.state,builder,{type:'set_state',id:door.result.object.id,state:'closed',expectedVersion:1});
+ assert.equal(closed.result.object.blocksMovement,true);
+ assert.equal(closed.result.object.version,2);
+ validateWorld(closed.state);
+});
+
+test('button links one stable target and access settings are owner/admin-controlled',()=>{
+ let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'door',position:{x:2,y:1.5,z:0},size:{x:1.5,y:3,z:.25}}).state;
+ const door=world.objects[0];
+ world=applyCommand(world,builder,{type:'build',objectType:'button',position:{x:1,y:.25,z:0},size:{x:.5,y:.5,z:.25}}).state;
+ const button=world.objects[1];
+ assert.deepEqual({targetId:button.targetId,targetState:button.targetState,usePolicy:button.usePolicy,version:button.version},
+  {targetId:null,targetState:'open',usePolicy:'owner_admin',version:0});
+ world=applyCommand(world,builder,{type:'update',id:door.id,usePolicy:'all_players',expected:{usePolicy:'owner_admin'}}).state;
+ const linked=applyCommand(world,builder,{type:'update',id:button.id,targetId:door.id,targetState:'closed',usePolicy:'all_players',
+  expected:{targetId:null,targetState:'open',usePolicy:'owner_admin'}});
+ assert.equal(linked.result.object.targetId,door.id);
+ assert.equal(linked.result.object.targetState,'closed');
+ assert.equal(linked.result.object.usePolicy,'all_players');
+ assert.equal(linked.result.object.version,1);
+ const opened=applyCommand(linked.state,{id:'bob',role:'viewer'},{type:'set_state',id:door.id,state:'open',expectedVersion:1});
+ assert.equal(opened.result.object.state,'open');
+ assert.equal(opened.result.object.blocksMovement,false);
+ assert.throws(()=>applyCommand(linked.state,{id:'bob',role:'viewer'},{type:'update',id:button.id,targetId:'another-door',expected:{targetId:door.id}}),{code:'forbidden'});
+ assert.throws(()=>applyCommand(linked.state,builder,{type:'update',id:button.id,targetId:'missing',expected:{targetId:door.id}}),{code:'invalid_target'});
+ validateWorld(linked.state);
+});
+
+test('closed doors block player movement and the open state makes the same passage traversable',()=>{
+ let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'door',position:{x:2,y:1.5,z:0},size:{x:.5,y:3,z:.5}}).state;
+ world=move(world,{x:0,y:0,z:0});
+ for(let i=0;i<3;i++)world=move(world,{x:10,y:0,z:0});
+ assert.ok(player(world).position.x<=1.43+1e-6,JSON.stringify(player(world).position));
+ const opened=applyCommand(world,builder,{type:'set_state',id:world.objects[0].id,state:'open',expectedVersion:0});
+ world=move(opened.state,{x:10,y:0,z:0});
+ assert.ok(player(world).position.x>2,JSON.stringify(player(world).position));
+});

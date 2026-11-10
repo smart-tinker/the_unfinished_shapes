@@ -130,10 +130,11 @@ test('agent build preview is visible locally and only its approval button grants
  const objects=[
   {objectType:'block',position:{x:0,y:1,z:0},size:{x:2,y:2,z:2},color:'#123456'},
   {objectType:'bridge',position:{x:8,y:1,z:0},size:{x:10,y:1,z:3},color:'#654321'},
+  {objectType:'door',position:{x:12,y:1.5,z:0},size:{x:1,y:3,z:.25},color:'#886644'},
  ];
  h.context.preview={previewId:'preview-1',objects};
  h.run('showAgentBuildPreview(preview)');
- assert.equal(h.context.added.length,2);
+ assert.equal(h.context.added.length,3);
  const card=h.element('chat').children[0];
  assert.match(card.textContent,/approve|look right/i);
  const apply=card.children.find(node=>/approve/i.test(node.textContent));
@@ -141,4 +142,137 @@ test('agent build preview is visible locally and only its approval button grants
  await apply.listeners.click();
  assert.deepEqual(h.context.decisions,[['preview-1','apply','thread-1']]);
  assert.equal(h.context.commands.length,0,'the renderer must ask the agent to apply, never write directly');
+});
+
+
+test('interactive object palette and inspector controls are present in the client',()=>{
+ const html=readFileSync(new URL('../src/index.html',import.meta.url),'utf8');
+ for(const kind of ['door','gate','button'])assert.match(html,new RegExp('data-kind="'+kind+'"'));
+ for(const id of ['edit-use-policy','edit-target-id','edit-target-state','interactive-actions','edit-open','edit-close','edit-use-button'])assert.match(html,new RegExp('id="'+id+'"'));
+});
+
+test('interactive palette designs use safe default dimensions',()=>{
+ const h=rendererHarness();
+ h.element('build-x').value='2';h.element('build-z').value='3';
+ h.load('function buildDesign()','function previewSelectedBuild()');
+ for(const [type,size] of [['door',{x:1,y:3,z:.25}],['gate',{x:4,y:2,z:.5}],['button',{x:.5,y:.5,z:.25}]]){
+  h.context.selectedPreset=type;
+  const design=h.run('buildDesign()');
+  assert.equal(design.objectType,type);
+  assert.deepEqual(JSON.parse(JSON.stringify(design.size)),size);
+  assert.equal(design.position.y,size.y/2);
+ }
+});
+
+test('open doors and gates render visibly different from closed objects',()=>{
+ class Group{constructor(){this.children=[];this.userData={};this.position={set(){}};this.rotation={y:0};}add(child){this.children.push(child);}traverse(callback){callback(this);for(const child of this.children)callback(child);}}
+ class BoxGeometry{constructor(...dimensions){this.dimensions=dimensions;}}
+ class Material{constructor(options){this.color=options.color;this.roughness=options.roughness;}}
+ class Mesh{constructor(geometry,material){this.geometry=geometry;this.material=material;this.userData={};this.position={set(){}};}}
+ const h=rendererHarness();h.context.THREE={Group,BoxGeometry,Mesh,MeshStandardMaterial:Material};
+ h.load('function objectMesh(object)','function pointerRay(');
+ h.context.door={id:'door-1',type:'door',position:{x:0,y:1.5,z:0},size:{x:1,y:3,z:.25},color:'#886644',state:'closed'};
+ const closed=h.run('objectMesh(door)');
+ h.context.door={...h.context.door,state:'open'};
+ const open=h.run('objectMesh(door)');
+ assert.notEqual(open.rotation.y,closed.rotation.y);
+});
+
+
+test('inspector exposes each object policy and retains a missing button target',()=>{
+ const h=rendererHarness();
+ const door={id:'door-1',type:'door',ownerId:'alice',color:'#886644',position:{x:0,y:1.5,z:0},size:{x:1,y:3,z:.25},blocksMovement:true,supportsPlayer:false,state:'closed',usePolicy:'all_players',version:4};
+ const button={id:'button-1',type:'button',ownerId:'alice',color:'#886644',position:{x:1,y:.25,z:0},size:{x:.5,y:.5,z:.25},blocksMovement:false,supportsPlayer:false,targetId:'removed-door',targetState:'open',usePolicy:'owner_admin',version:2};
+ const target={...door,id:'gate-1',type:'gate'};
+ h.context.role='admin';h.context.meId='alice';h.context.editing=false;h.context.worldState={objects:[door,target,button]};
+ h.load('function fillInspector(object)','function updateMovePreviewFromInspector()');
+ h.context.current=door;h.run('fillInspector(current)');
+ assert.equal(h.element('edit-use-policy').value,'all_players');
+ assert.equal(h.element('interactive-actions').hidden,false);
+ assert.equal(h.element('edit-open').hidden,false);
+ h.context.current=button;h.run('fillInspector(current)');
+ assert.equal(h.element('edit-target-id').value,'removed-door');
+ assert.ok(h.element('edit-target-id').children.some(option=>option.value==='removed-door'&&/missing/i.test(option.textContent)));
+ assert.equal(h.element('edit-use-button').hidden,false);
+});
+ 
+test('viewer owner can manage interactive access without editing object geometry',()=>{
+ const html=readFileSync(new URL('../src/index.html',import.meta.url),'utf8');
+ assert.match(html,/<fieldset id="edit-interaction-fields"/);
+ assert.match(html,/id="edit-interaction-apply"/);
+ const h=rendererHarness();
+ const door={id:'door-1',type:'door',ownerId:'alice',color:'#886644',position:{x:0,y:1.5,z:0},size:{x:1,y:3,z:.25},blocksMovement:true,supportsPlayer:false,state:'closed',usePolicy:'owner_admin',version:0};
+ h.context.role='viewer';h.context.meId='alice';h.context.editing=false;h.context.worldState={objects:[door]};
+ h.load('function fillInspector(object)','function updateMovePreviewFromInspector()');
+ h.context.current=door;h.run('fillInspector(current)');
+ assert.equal(h.element('edit-fields').disabled,true);
+ assert.equal(h.element('edit-interaction-fields').hidden,false);
+ assert.equal(h.element('edit-interaction-fields').disabled,false);
+ assert.equal(h.element('edit-open').disabled,false);
+ h.context.meId='bob';h.run('fillInspector(current)');
+ assert.equal(h.element('edit-interaction-fields').disabled,true);
+ assert.equal(h.element('edit-open').disabled,true);
+});
+
+test('interactive controls send explicit state and button versions without client positions',async()=>{
+ const h=rendererHarness(),sent=[];
+ h.context.request=async(path,method,body)=>{sent.push(JSON.parse(JSON.stringify(body)));return body.type==='use'?{object:{id:'door-1',type:'door',state:'open',version:5},button:{id:'button-1',type:'button',targetId:'door-1',version:4}}:{object:{id:body.id,type:'door',state:body.state??'open',version:body.expectedVersion+1}};};
+ h.context.poll=async()=>{};h.context.feedback=()=>{};h.context.editing=false;
+ h.context.inspectorBase={id:'door-1',type:'door',version:4};
+ h.context.worldState={objects:[{id:'button-1',type:'button',version:3,targetId:'door-1'},{id:'door-1',type:'door',version:4}]};
+ h.context.selectedId='door-1';h.context.objectData=new Map([['door-1',{id:'door-1',type:'door',version:4}],['button-1',{id:'button-1',type:'button',version:3,targetId:'door-1'}]]);h.context.fillInspector=()=>{};
+ h.context.document.querySelectorAll=()=>[];h.context.settingsGeneration=0;
+ h.load('async function command(body)',"for (const button of document.querySelectorAll(");
+ assert.equal(typeof h.element('edit-open').listeners.click,'function','open action must be wired');
+ await h.element('edit-open').listeners.click();
+ h.context.inspectorBase={id:'button-1',type:'button',version:3,targetId:'door-1'};
+ await h.element('edit-use-button').listeners.click();
+ assert.equal(sent.length,2);
+ assert.equal(JSON.stringify(sent[0]),JSON.stringify({type:'set_state',id:'door-1',state:'open',expectedVersion:4}));
+ assert.equal(JSON.stringify(sent[1]),JSON.stringify({type:'use',id:'button-1',expectedVersion:3,expectedTargetVersion:4}));
+ assert.equal(h.context.objectData.get('door-1').version,5);
+ assert.equal(h.context.objectData.get('button-1').type,'button');assert.equal(h.context.objectData.get('button-1').version,4);
+ assert.ok(sent.every(command=>!Object.hasOwn(command,'position')));
+});
+ 
+test('interactive action does not retry when the response outcome is unknown',async()=>{
+ const h=rendererHarness(),sent=[],messages=[];
+ const door={id:'door-1',type:'door',version:0};
+ h.context.settingsGeneration=0;h.context.editing=false;h.context.inspectorBase=door;h.context.objectData=new Map([[door.id,door]]);
+ h.context.command=async body=>{sent.push(JSON.parse(JSON.stringify(body)));throw new Error('Connection timed out');};
+ h.context.feedback=message=>messages.push(message);h.context.fillInspector=()=>{};
+ h.context.object=door;h.context.body={type:'set_state',id:door.id,state:'open',expectedVersion:0};
+ h.load('async function applyInteractiveAction(object, body)',"$('edit-open').addEventListener");
+ await h.run('applyInteractiveAction(object, body)');
+ assert.equal(sent.length,1);assert.match(messages[0],/Refresh world state before retrying/);
+});
+
+test('inspector submits access and button links with exact current values',async()=>{
+ async function submit(baseline,changes,role='admin'){
+  const h=rendererHarness(),sent=[];
+  h.context.selectedId=baseline.id;h.context.inspectorBase=structuredClone(baseline);h.context.objectData=new Map([[baseline.id,structuredClone(baseline)]]);
+  h.context.role=role;h.context.meId='alice';h.context.editing=false;h.context.settingsGeneration=0;h.context.inspectorDirty=false;
+  h.context.command=async body=>{sent.push(JSON.parse(JSON.stringify(body)));return {object:{...baseline,...changes,version:baseline.version+1}};};
+  h.context.clearMovePreview=()=>{};h.context.fillInspector=()=>{};h.context.feedback=()=>{};h.context.request=async()=>({error:'unexpected'});
+  for(const field of ['position','size'])for(const axis of ['x','y','z'])h.element('edit-'+field+'-'+axis).value=String(baseline[field][axis]);
+  h.element('edit-color').value=baseline.color;
+  h.element('edit-blocks-movement').checked=baseline.blocksMovement;h.element('edit-supports-player').checked=baseline.supportsPlayer;
+  h.element('edit-use-policy').value=changes.usePolicy??baseline.usePolicy;
+  h.element('edit-target-id').value=changes.targetId??baseline.targetId??'';
+  h.element('edit-target-state').value=changes.targetState??baseline.targetState??'open';
+  h.load("$('edit-form').addEventListener('submit'","function setFullscreenState(");
+  await h.element('edit-form').listeners.submit({preventDefault(){}});
+  return sent[0];
+ }
+ const door={id:'door-1',type:'door',ownerId:'alice',color:'#886644',position:{x:0,y:1.5,z:0},size:{x:1,y:3,z:.25},blocksMovement:true,supportsPlayer:false,state:'closed',usePolicy:'owner_admin',version:0};
+ const policy=await submit(door,{usePolicy:'all_players'});
+ assert.ok(policy,'access policy changes must produce a server command');
+ assert.equal(policy.usePolicy,'all_players');assert.deepEqual(policy.expected,{usePolicy:'owner_admin'});
+ const button={id:'button-1',type:'button',ownerId:'alice',color:'#886644',position:{x:1,y:.25,z:0},size:{x:.5,y:.5,z:.25},blocksMovement:false,supportsPlayer:false,targetId:null,targetState:'open',usePolicy:'owner_admin',version:0};
+ const link=await submit(button,{targetId:'door-1',targetState:'closed'});
+ assert.ok(link,'button link changes must produce a server command');
+ assert.equal(link.targetId,'door-1');assert.equal(link.targetState,'closed');
+ assert.deepEqual(link.expected,{targetId:null,targetState:'open'});
+ const viewerPolicy=await submit(door,{usePolicy:'all_players'},'viewer');
+ assert.deepEqual(viewerPolicy.expected,{usePolicy:'owner_admin'});
 });

@@ -74,3 +74,29 @@ test('manual and agent clients share movement speed, island bounds, and persiste
   assert.deepEqual(restored.players.find(player=>player.id==='alice').position,manualStep.position);
   assert.deepEqual(restored.players.find(player=>player.id==='bob').position,agentStep.position);
 });
+
+
+test('two clients observe identical door state and the open state survives restart',async t=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'tus-shared-door-'));
+ const users={'synthetic-alice-token':{id:'alice',role:'builder'},'synthetic-bob-token':{id:'bob',role:'builder'}};
+ const config={dataPath:path.join(dir,'world.json'),users,port:0};
+ let server=await createWorldServer(config);await server.start();
+ const session=createGameToolSession({url:'http://127.0.0.1:'+server.address().port,token:'synthetic-alice-token'});
+ t.after(async()=>{session.clear();if(server.listening)await server.shutdown();await rm(dir,{recursive:true,force:true});});
+ let url='http://127.0.0.1:'+server.address().port;
+ const state=async id=>{const result=await executeGameTool({name:'world_state',arguments:{}},{url,token:'synthetic-'+id+'-token'});assert.equal(result.success,true);return JSON.parse(result.contentItems[0].text);};
+ const preview=await session.execute({name:'world_preview',threadId:'alice-door',arguments:{objects:[
+  {objectType:'door',position:{x:0,y:1.5,z:0},size:{x:1,y:3,z:.25},color:'#886644'},
+ ]}});
+ assert.equal(preview.success,true);
+ const {previewId}=JSON.parse(preview.contentItems[0].text);session.decide(previewId,'apply','alice-door');
+ assert.equal((await session.execute({name:'world_apply',threadId:'alice-door',arguments:{previewId} })).success,true);
+ const before=await state('bob'),door=before.objects.find(object=>object.type==='door');
+ assert.equal(door.state,'closed');assert.equal(door.blocksMovement,true);
+ const opened=await executeGameTool({name:'world_command',arguments:{command:{type:'set_state',id:door.id,state:'open',expectedVersion:door.version}}},{url,token:'synthetic-alice-token'});
+ assert.equal(opened.success,true);
+ const [alice,bob]=await Promise.all([state('alice'),state('bob')]);
+ for(const world of [alice,bob]){const shared=world.objects.find(object=>object.id===door.id);assert.equal(shared.state,'open');assert.equal(shared.blocksMovement,false);}
+ await server.shutdown();server=await createWorldServer(config);await server.start();url='http://127.0.0.1:'+server.address().port;
+ for(const id of ['alice','bob']){const restored=await state(id);const shared=restored.objects.find(object=>object.id===door.id);assert.equal(shared.state,'open');assert.equal(shared.version,1);}
+});
