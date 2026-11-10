@@ -445,7 +445,8 @@ function applySelection(ids, primary = null, fromPoll = false) {
   const old = [...selectedIds], changed = old.length !== next.size || old.some(id => !next.has(id));
   if (!changed && !fromPoll) return true;
   if (!fromPoll && inspectorDirty && !window.confirm('Discard unapplied changes to this shape?')) return false;
-  if (!fromPoll && changed && (movePreview || dragCandidate?.started)) clearMovePreview();
+  const draft = movePreview ?? dragCandidate;
+  if ((fromPoll && draft?.objects?.some(object => !next.has(object.id))) || (!fromPoll && changed && (movePreview || dragCandidate?.started))) clearMovePreview();
   selectedIds.clear(); for (const id of next) selectedIds.add(id);
   const previousPrimary = selectedId;
   selectedId = next.has(primary) ? primary : next.has(previousPrimary) ? previousPrimary : [...next].at(-1) ?? null;
