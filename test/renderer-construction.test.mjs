@@ -290,14 +290,16 @@ test('lamp mesh has a visible on/off emitter and a bounded point light without s
  class BoxGeometry{constructor(...dimensions){this.dimensions=dimensions;}dispose(){}}
  class SphereGeometry{constructor(...dimensions){this.dimensions=dimensions;}dispose(){}}
  class Material{constructor(options){this.options=options;this.color={value:options.color,set(value){this.value=value;}};this.emissive=options.emissive;this.emissiveIntensity=options.emissiveIntensity??0;}dispose(){}}
- class Mesh{constructor(geometry,material){this.geometry=geometry;this.material=material;this.userData={};this.position={set(){}};}}
- class PointLight{constructor(color,intensity,distance,decay){this.color=color;this.intensity=intensity;this.distance=distance;this.decay=decay;this.visible=true;this.castShadow=false;this.position={set(){}};}}
+ class Mesh{constructor(geometry,material){this.geometry=geometry;this.material=material;this.userData={};this.position={x:0,y:0,z:0,set(x,y,z){this.x=x;this.y=y;this.z=z;}};}}
+ class PointLight{constructor(color,intensity,distance,decay){this.color=color;this.intensity=intensity;this.distance=distance;this.decay=decay;this.visible=true;this.castShadow=false;this.position={x:0,y:0,z:0,set(x,y,z){this.x=x;this.y=y;this.z=z;}};}}
  const h=rendererHarness();h.context.THREE={Group,BoxGeometry,SphereGeometry,Mesh,PointLight,MeshStandardMaterial:Material};
  h.load('function objectMesh(object)','function updateBeaconLabels()');
  h.context.lamp={id:'lamp-1',type:'lamp',position:{x:0,y:1,z:0},size:{x:1,y:2,z:1},color:'#ffcc66',on:true,intensity:3,range:11};
  const on=h.run('objectMesh(lamp)'),light=on.children.find(child=>child instanceof PointLight);
  assert.ok(light);assert.equal(light.intensity,3);assert.equal(light.distance,11);assert.equal(light.castShadow,false);
  assert.ok(on.userData.lampEmitter.material.emissiveIntensity>0);
+ assert.ok(on.userData.lampEmitter.position.y-on.userData.lampEmitter.geometry.dimensions[0]>=lamp.size.y/2,'the complete emitter must sit above the opaque lamp body');
+ assert.ok(light.position.y>lamp.size.y/2,'the point light must sit outside the opaque lamp body');
  h.context.lamp={...h.context.lamp,on:false};const off=h.run('objectMesh(lamp)');
  assert.equal(off.userData.lampLight.intensity,0);assert.equal(off.userData.lampEmitter.material.emissiveIntensity,0);
 });
