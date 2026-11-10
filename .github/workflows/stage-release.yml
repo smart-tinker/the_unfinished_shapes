@@ -62,6 +62,8 @@ jobs:
     # This entire trusted job has write permission, including build and test steps.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       VERSION: ${{ needs.preflight.outputs.version }}
@@ -97,12 +99,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
         run: node scripts/release-candidate.mjs stage windows dist/candidate $env:RELEASE_ID
+      - name: Attest the tested candidate files
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: dist/candidate/*
   macos:
     needs: [preflight, create-draft]
     runs-on: macos-15
     timeout-minutes: 20
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
       CANDIDATE_RUN_ATTEMPT: ${{ needs.create-draft.outputs.run_attempt }}
@@ -139,12 +147,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
         run: node scripts/release-candidate.mjs stage macos dist/candidate "$RELEASE_ID"
+      - name: Attest the tested candidate files
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: dist/candidate/*
   linux:
     needs: [preflight, create-draft]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
       CANDIDATE_RUN_ATTEMPT: ${{ needs.create-draft.outputs.run_attempt }}
@@ -177,3 +191,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
         run: node scripts/release-candidate.mjs stage linux dist/candidate "$RELEASE_ID"
+      - name: Attest the tested candidate files
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: dist/candidate/*
