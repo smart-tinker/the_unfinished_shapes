@@ -29,3 +29,11 @@ test('invalid or future settings are not overwritten while loading',async()=>{
   assert.throws(()=>cleanSettings({threadId:{id:'oops'}}));
  }finally{await rm(dir,{recursive:true,force:true});}
 });
+
+
+test('lighting quality is a local setting with a safe full-quality default',()=>{
+ assert.equal(cleanSettings().lightingQuality,'full');
+ assert.equal(cleanSettings({lightingQuality:'reduced'}).lightingQuality,'reduced');
+ assert.equal(cleanSettings({lightingQuality:'full'}).lightingQuality,'full');
+ assert.throws(()=>cleanSettings({lightingQuality:'unbounded'}),/lighting quality/i);
+});

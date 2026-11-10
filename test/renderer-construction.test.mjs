@@ -276,3 +276,81 @@ test('inspector submits access and button links with exact current values',async
  const viewerPolicy=await submit(door,{usePolicy:'all_players'},'viewer');
  assert.deepEqual(viewerPolicy.expected,{usePolicy:'owner_admin'});
 });
+
+
+test('lamp and lighting controls are exposed in the client',()=>{
+ const html=readFileSync(new URL('../src/index.html',import.meta.url),'utf8');
+ assert.match(html,/data-kind="lamp"/);
+ for(const id of ['edit-lamp-intensity','edit-lamp-range','edit-lamp-on','edit-lamp-off','world-light-ambient','world-light-sun','world-light-preview','world-light-apply','world-light-cancel','world-light-message','lighting-quality'])
+  assert.match(html,new RegExp('id="'+id+'"'));
+});
+
+test('lamp mesh has a visible on/off emitter and a bounded point light without shadows',()=>{
+ class Group{constructor(){this.children=[];this.userData={};this.position={set(){}};this.rotation={y:0};}add(child){this.children.push(child);}traverse(callback){callback(this);for(const child of this.children)child.traverse?child.traverse(callback):callback(child);}}
+ class BoxGeometry{constructor(...dimensions){this.dimensions=dimensions;}dispose(){}}
+ class SphereGeometry{constructor(...dimensions){this.dimensions=dimensions;}dispose(){}}
+ class Material{constructor(options){this.options=options;this.color={value:options.color,set(value){this.value=value;}};this.emissive=options.emissive;this.emissiveIntensity=options.emissiveIntensity??0;}dispose(){}}
+ class Mesh{constructor(geometry,material){this.geometry=geometry;this.material=material;this.userData={};this.position={set(){}};}}
+ class PointLight{constructor(color,intensity,distance,decay){this.color=color;this.intensity=intensity;this.distance=distance;this.decay=decay;this.visible=true;this.castShadow=false;this.position={set(){}};}}
+ const h=rendererHarness();h.context.THREE={Group,BoxGeometry,SphereGeometry,Mesh,PointLight,MeshStandardMaterial:Material};
+ h.load('function objectMesh(object)','function updateBeaconLabels()');
+ h.context.lamp={id:'lamp-1',type:'lamp',position:{x:0,y:1,z:0},size:{x:1,y:2,z:1},color:'#ffcc66',on:true,intensity:3,range:11};
+ const on=h.run('objectMesh(lamp)'),light=on.children.find(child=>child instanceof PointLight);
+ assert.ok(light);assert.equal(light.intensity,3);assert.equal(light.distance,11);assert.equal(light.castShadow,false);
+ assert.ok(on.userData.lampEmitter.material.emissiveIntensity>0);
+ h.context.lamp={...h.context.lamp,on:false};const off=h.run('objectMesh(lamp)');
+ assert.equal(off.userData.lampLight.intensity,0);assert.equal(off.userData.lampEmitter.material.emissiveIntensity,0);
+});
+
+test('local quality caps nearest enabled lamps and reduced mode removes sun shadows',()=>{
+ const h=rendererHarness();assert.ok(h.has('function updateWorldLighting('),'renderer must apply shared and local lighting settings');
+ h.context.worldLightingPreview=null;h.context.role='admin';h.context.settings={lightingQuality:'full'};
+ h.context.ambientLight={intensity:0};h.context.sunLight={intensity:0,castShadow:false};h.context.renderer={shadowMap:{enabled:false}};
+ h.context.controls={target:{x:0,y:0,z:0}};h.context.lampLights=new Map();
+ for(let i=0;i<10;i++){
+  const id='lamp-'+i,object={id,type:'lamp',on:true,intensity:2,range:20,position:{x:i+1,y:0,z:0}};
+  h.context.lampLights.set(id,{object,light:{visible:false},emitter:{material:{emissiveIntensity:0}}});
+ }
+ h.context.lampLights.get('lamp-0').object.on=false;
+ h.context.worldState={lighting:{version:0,ambientIntensity:1.25,sunIntensity:2.5}};
+ h.load('function updateWorldLighting(','function updateBeaconLabels()');
+ h.run('updateWorldLighting(worldState)');
+ assert.equal(h.context.ambientLight.intensity,1.25);assert.equal(h.context.sunLight.intensity,2.5);
+ assert.equal([...h.context.lampLights].filter(([,item])=>item.light.visible).length,8);
+ assert.equal(h.context.lampLights.get('lamp-0').light.visible,false);
+ assert.equal(h.context.sunLight.castShadow,true);assert.equal(h.context.renderer.shadowMap.enabled,true);
+ h.context.settings.lightingQuality='reduced';h.run('updateWorldLighting(worldState)');
+ assert.equal([...h.context.lampLights].filter(([,item])=>item.light.visible).length,4);
+ assert.equal(h.context.sunLight.castShadow,false);assert.equal(h.context.renderer.shadowMap.enabled,false);
+});
+
+test('world lighting Preview and Cancel are local; Apply sends one versioned command',async()=>{
+ const h=rendererHarness();assert.ok(h.has('function previewWorldLighting('),'lighting controls must support a local preview');
+ h.context.worldLightingPreview=null;h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};
+ h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1,castShadow:true};h.context.renderer={shadowMap:{enabled:true}};
+ h.context.controls={target:{x:0,y:0,z:0}};h.context.lampLights=new Map();
+ h.context.worldState={revision:7,lighting:{version:2,ambientIntensity:2.6,sunIntensity:3.1}};
+ h.context.request=async(path,method,body)=>{h.context.requests.push({path,method,body});return {revision:8,lighting:{version:3,ambientIntensity:1.2,sunIntensity:2.4}};};
+ h.context.requests=[];h.context.feedback=()=>{};h.context.updateLightingControls=()=>{};
+ h.element('world-light-ambient').value='1.2';h.element('world-light-sun').value='2.4';
+ h.load('function updateWorldLighting(','function updateBeaconLabels()');
+ h.run('previewWorldLighting()');
+ assert.equal(h.context.requests.length,0);assert.equal(h.context.ambientLight.intensity,1.2);assert.match(h.element('world-light-message').textContent,/preview/i);
+ h.run('cancelWorldLightingPreview()');
+ assert.equal(h.context.requests.length,0);assert.equal(h.context.ambientLight.intensity,2.6);
+ h.run('previewWorldLighting()');await h.run('applyWorldLightingPreview()');
+ assert.equal(h.context.requests.length,1);
+ assert.deepEqual(h.context.requests[0],{path:'/command',method:'POST',body:{type:'set_lighting',ambientIntensity:1.2,sunIntensity:2.4,expectedVersion:2}});
+ assert.deepEqual(h.context.worldState.lighting,{version:3,ambientIntensity:1.2,sunIntensity:2.4});
+});
+
+test('unknown lighting Apply outcome is never retried automatically',async()=>{
+ const h=rendererHarness();assert.ok(h.has('async function applyWorldLightingPreview('));
+ h.context.worldLightingPreview={version:1,ambientIntensity:1,sunIntensity:2};h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};
+ h.context.worldState={lighting:{version:1,ambientIntensity:2.6,sunIntensity:3.1}};h.context.requests=0;
+ h.context.request=async()=>{h.context.requests++;throw new Error('timed out');};h.context.feedback=()=>{};h.context.updateLightingControls=()=>{};
+ h.load('function updateWorldLighting(','function updateBeaconLabels()');
+ await h.run('applyWorldLightingPreview()');
+ assert.equal(h.context.requests,1);assert.ok(h.context.worldLightingPreview);
+ assert.match(h.element('world-light-message').textContent,/no retry|refresh/i);
+});

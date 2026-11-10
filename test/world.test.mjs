@@ -462,3 +462,11 @@ test('only an admin can set versioned world lighting within the documented range
   assert.throws(()=>applyCommand(state,admin,{type:'set_lighting',ambientIntensity,sunIntensity,expectedVersion:0}));
  }
 });
+
+
+test('lamp interaction also checks the server-owned use range',()=>{
+ const built=applyCommand(emptyWorld(),builder,{type:'build',objectType:'lamp',position:{x:0,y:.5,z:0},size:{x:.5,y:1,z:.5}});
+ const configured=applyCommand(built.state,builder,{type:'update',id:built.result.object.id,usePolicy:'all_players',expected:{usePolicy:'owner_admin'}});
+ const far={...configured.state,players:[{id:'bob',position:{x:10,y:0,z:0},velocityY:0}]};
+ assert.throws(()=>applyCommand(far,{id:'bob',role:'builder'},{type:'set_state',id:built.result.object.id,state:'off',expectedVersion:1}),{code:'out_of_range',status:403});
+});

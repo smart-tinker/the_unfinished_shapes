@@ -178,6 +178,28 @@ await withSmokeCleanup(async () => {
   assert.equal(built.ownerId, 'alice');
   assert.deepEqual(built.position, { x: 16, y: 1, z: 0 });
 
+   alice.graphics.phase('shared lamp preview and state');
+   const beforeLampPreview=await state();
+   await alice.page.locator('[data-kind="lamp"]').click();
+   await alice.page.locator('#build-x').fill('2');await alice.page.locator('#build-z').fill('0');
+   await alice.page.locator('#build-preview').click();
+   assert.equal((await state()).revision,beforeLampPreview.revision,'lamp preview stays local');
+   await alice.page.locator('#build-apply').click();
+   await alice.page.waitForFunction(()=>document.querySelector('#world-message').textContent.includes('Shape added to the shared world.'));
+   let lampState=await state();const lamp=lampState.objects.find(object=>object.type==='lamp');
+   assert.ok(lamp);assert.equal(lamp.on,true);assert.equal(lamp.usePolicy,'owner_admin');
+   await Promise.all(clients.map(client=>client.page.waitForFunction(revision=>Number(document.querySelector('#revision').textContent.split(' ')[1])>=revision,lampState.revision)));
+   await select(alice,lamp);
+   await alice.page.locator('#edit-lamp-off').click();
+   await alice.page.waitForFunction(()=>document.querySelector('#world-message').textContent.includes('applied'));
+   lampState=await waitForState(snapshot=>snapshot.objects.find(object=>object.id===lamp.id)?.on===false,'lamp off state to persist');
+   await bob.page.waitForFunction(revision=>Number(document.querySelector('#revision').textContent.split(' ')[1])>=revision,lampState.revision);
+   assert.equal((await state('bob')).objects.find(object=>object.id===lamp.id).on,false,'the second client sees the lamp turned off');
+   await alice.page.locator('#edit-lamp-on').click();
+   await alice.page.waitForFunction(()=>document.querySelector('#world-message').textContent.includes('applied'));
+   lampState=await waitForState(snapshot=>snapshot.objects.find(object=>object.id===lamp.id)?.on===true,'lamp on state to persist');
+   assert.equal(lampState.objects.find(object=>object.id===lamp.id).version,2);
+
   alice.graphics.phase('collision and jump onto a walkable top');
   await focus(alice);
   await alice.page.keyboard.down('d');
@@ -306,6 +328,7 @@ await withSmokeCleanup(async () => {
   assert.equal(denied.status, 403, 'server rejects bypassing the disabled UI');
   const beforeRestart = await state();
   assert.equal(beforeRestart.objects[0].id, built.id);
+  assert.equal(beforeRestart.objects.find(object=>object.id===lamp.id).on,true,'the live lamp state remains shared before server restart');
 
   for (const client of clients) { client.graphics.phase('server restart'); await client.graphics.assertHealthy(); }
   await stopServer();
@@ -314,6 +337,7 @@ await withSmokeCleanup(async () => {
   for (const client of clients) await client.page.waitForFunction(() => document.querySelector('#connection').textContent.includes('World connected'));
   const restored = await state('bob');
   assert.equal(restored.objects[0].id, built.id); assert.equal(restored.objects[0].size.x, 5);
+  assert.equal(restored.objects.find(object=>object.id===lamp.id).on,true,'lamp state persists across server restart');
   assert.deepEqual(restored.players.find(player => player.id === 'alice').position, beforeRestart.players.find(player => player.id === 'alice').position, 'server restart preserves the last accepted player position');
   assert.deepEqual(restored.players.map(p => p.id).sort(), ['alice', 'bob']);
   await close(bob);
@@ -326,7 +350,10 @@ await withSmokeCleanup(async () => {
   await alice.page.locator('#remove').click();
   await alice.page.waitForFunction(() => document.querySelector('#world-message').textContent.includes('removed'));
   await returning.page.waitForFunction(() => document.querySelector('#selection-label').textContent === 'No shape selected');
-  assert.equal((await state('bob')).objects.length, 0);
+  assert.equal((await state('bob')).objects.length, 1);
+  await select(alice,lamp);await alice.page.locator('#remove').click();
+  await alice.page.waitForFunction(()=>document.querySelector('#world-message').textContent.includes('removed'));
+  assert.equal((await state('bob')).objects.length,0,'removing the lamp also removes its rendered light');
   for (const id of ['alice', 'bob']) {
     const settings = JSON.parse(await readFile(path.join(dir, id, 'settings.json'), 'utf8'));
     assert.equal(Object.hasOwn(settings, 'token'), false);
