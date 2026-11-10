@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
+import * as THREE from 'three';
 import {emptyWorld,applyCommand,validateWorld,mechanics} from '../src/world.mjs';
 import {captureSceneSnapshot,createGameToolSession} from '../src/game-tools.mjs';
 import {WORLD_TOOLS} from '../src/codex.mjs';
@@ -119,6 +120,21 @@ test('beacon labels stay within range and only the eight nearest are visible',()
  });
  update();
  assert.deepEqual(labels.map(label=>label.visible),[true,true,true,true,true,true,true,true,false,false]);
+});
+
+test('sign label is not hidden behind an opaque full-size body',()=>{
+ const source=readFileSync(new URL('../src/renderer.mjs',import.meta.url),'utf8');
+ const start=source.indexOf('function objectMesh(object)'),end=source.indexOf('function updateBeaconLabels()',start);
+ assert.ok(start>=0&&end>start,'object mesh renderer is implemented');
+ const objectMesh=runInNewContext(`(()=>{${source.slice(start,end)};return objectMesh})()`,{
+  THREE,labelTexture:()=>new THREE.Texture()
+ });
+ const sign=objectMesh({id:'sign-1',type:'sign',position:{x:0,y:1,z:0},size:{x:3,y:2,z:.5},color:'#123456',text:'Welcome'});
+ const opaqueBody=sign.children.find(child=>child.geometry?.type==='BoxGeometry'&&child.geometry.parameters.width===3&&child.geometry.parameters.height===2&&child.geometry.parameters.depth===.5);
+ assert.equal(opaqueBody,undefined,'a full-size opaque box sits in front of the sign face');
+ const face=sign.children.find(child=>child.isSprite);
+ assert.ok(face,'the sign has a rendered text face');
+ assert.ok(face.position.z>.09,'the text face sits in front of the sign board');
 });
 
 test('long landmark text is clipped to a readable number of canvas lines',()=>{
