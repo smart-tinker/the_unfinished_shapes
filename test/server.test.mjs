@@ -129,3 +129,41 @@ test('reports persistence phase timings only after the atomic world write when o
  assert.equal(sample.bytes,Buffer.byteLength(await readFile(f.dataPath,'utf8')));
  for(const phase of ['serializeMs','writeMs','renameMs'])assert.ok(Number.isFinite(sample[phase])&&sample[phase]>=0,phase);
 });
+
+
+test('HTTP group movement is atomic, persisted once, and visible to both clients',async t=>{
+ const bobToken='test-only-bob-builder-token';
+ const f=await fixture(t,{users:{...users,[bobToken]:{id:'bob',role:'builder'}}});
+ const aliceA=await (await f.send({type:'build',objectType:'block',position:{x:0,y:1,z:0}})).json();
+ const aliceB=await (await f.send({type:'build',objectType:'bridge',position:{x:4,y:.5,z:0}})).json();
+ const bobObject=await (await f.send({type:'build',objectType:'block',position:{x:8,y:1,z:0}},bobToken)).json();
+ const read=async auth=>fetch(f.url+'/state',{headers:{Authorization:'Bearer '+auth}}).then(response=>response.json());
+ const before=await read(token);
+ const changes=[aliceA.object,aliceB.object].map(object=>({
+  id:object.id,
+  position:{x:object.position.x+2,y:object.position.y,z:object.position.z-1},
+  expectedPosition:object.position,
+ }));
+ const denied=await f.send({type:'move_group',changes:[...changes,{
+  id:bobObject.object.id,position:{x:10,y:1,z:-1},expectedPosition:bobObject.object.position,
+ }]});
+ assert.equal(denied.status,403);
+ const unchanged=await Promise.all([read(token),read(bobToken)]);
+ for(const state of unchanged) {
+  assert.equal(state.revision,before.revision);
+  assert.deepEqual(state.objects.map(object=>object.position),before.objects.map(object=>object.position));
+ }
+ const accepted=await f.send({type:'move_group',changes});
+ assert.equal(accepted.status,200);
+ const result=await accepted.json();
+ assert.equal(result.revision,before.revision+1);
+ assert.equal(result.objects.length,2);
+ const after=await Promise.all([read(token),read(bobToken)]);
+ assert.deepEqual(after[0].objects,after[1].objects);
+ assert.deepEqual(after[0].objects.filter(object=>[aliceA.object.id,aliceB.object.id].includes(object.id)).map(object=>object.position),[
+  {x:2,y:1,z:-1},{x:6,y:.5,z:-1},
+ ]);
+ const saved=JSON.parse(await readFile(f.dataPath,'utf8'));
+ assert.equal(saved.revision,before.revision+1);
+ assert.deepEqual(saved.objects,after[0].objects);
+});
