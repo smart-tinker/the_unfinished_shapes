@@ -258,7 +258,7 @@ function updateObjectDrag(event) {
   const draft = dragCandidate;
   if (!draft || draft.pointerId !== event.pointerId || (!draft.started && Math.hypot(event.clientX - draft.startX, event.clientY - draft.startY) <= 5)) return;
   const object = objectData.get(draft.objectId);
-  if (!canEditObject(object) || editing || (selectedId === draft.objectId && inspectorDirty)) { controls.enabled = true; dragCandidate = null; return; }
+  if (!canEditObject(object) || editing || (!draft.started && selectedId === draft.objectId && inspectorDirty)) { controls.enabled = true; dragCandidate = null; return; }
   if (!draft.started) {
     if (!selectObject(draft.objectId)) { controls.enabled = true; dragCandidate = null; return; }
     draft.object = structuredClone(object); draft.ghost = objectMesh(object);
