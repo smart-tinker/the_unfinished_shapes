@@ -253,7 +253,7 @@ test('world construction is proposed as an explicit object set and apply takes o
  assert.deepEqual(preview.required,['objects']);assert.equal(preview.additionalProperties,false);
  assert.equal(preview.properties.objects.minItems,1);assert.equal(preview.properties.objects.maxItems,32);
  const item=preview.properties.objects.items;assert.deepEqual(item.required,['objectType','position','size','color']);assert.equal(item.additionalProperties,false);
- assert.deepEqual(item.properties.objectType.enum,['block','bridge','port','stairs','ramp','sign','beacon','door','gate','button']);assert.deepEqual(item.properties.direction.enum,['north','east','south','west']);assert.match(item.properties.direction.description,/required for stairs and ramps/i);
+ assert.deepEqual(item.properties.objectType.enum,['block','bridge','port','stairs','ramp','sign','beacon','door','gate','button','lamp']);assert.deepEqual(item.properties.direction.enum,['north','east','south','west']);assert.match(item.properties.direction.description,/required for stairs and ramps/i);
  const apply=WORLD_TOOLS.find(t=>t.name==='world_apply').inputSchema;assert.deepEqual(apply.required,['previewId']);assert.deepEqual(Object.keys(apply.properties),['previewId']);
  const command=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command;
  assert.equal(command.properties.type.enum.includes('build'),false);

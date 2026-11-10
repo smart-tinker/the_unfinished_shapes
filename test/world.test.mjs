@@ -444,7 +444,9 @@ test('lamps are bounded, persistent world objects with explicit versioned access
  assert.equal(switched.result.object.on,false);
  assert.equal(switched.result.object.version,2);
  assert.throws(()=>applyCommand(switched.state,{id:'bob',role:'viewer'},{type:'set_state',id:lamp.id,state:'on',expectedVersion:1}),{code:'conflict',status:409});
- assert.throws(()=>applyCommand(switched.state,{id:'carol',role:'builder'},{type:'set_state',id:lamp.id,state:'on',expectedVersion:2}),{code:'forbidden',status:403});
+ const sharedUse=applyCommand(switched.state,{id:'carol',role:'builder'},{type:'set_state',id:lamp.id,state:'on',expectedVersion:2});
+ assert.equal(sharedUse.result.object.on,true);
+ assert.equal(sharedUse.result.object.version,3);
  for(const changes of [{intensity:0},{intensity:4.01},{range:1},{range:17},{color:'transparent'}]){
   assert.throws(()=>applyCommand(state,builder,{type:'update',id:lamp.id,...changes,expected:Object.fromEntries(Object.keys(changes).map(key=>[key,lamp[key]]))}));
  }

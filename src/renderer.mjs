@@ -659,8 +659,9 @@ function fillInspector(object) {
   $('edit-color').value = object.color;
   $('edit-sign-row').hidden=object.type!=='sign';$('edit-sign-text').disabled=object.type!=='sign';$('edit-sign-text').required=object.type==='sign';$('edit-sign-text').value=object.type==='sign'?object.text:'';
   $('edit-beacon-row').hidden=object.type!=='beacon';$('edit-beacon-name').disabled=object.type!=='beacon';$('edit-beacon-name').required=object.type==='beacon';$('edit-beacon-name').value=object.type==='beacon'?object.name:'';
+  const lamp=object.type==='lamp';
   $('edit-lamp-row').hidden=!lamp;$('edit-lamp-intensity').disabled=!lamp;$('edit-lamp-range').disabled=!lamp;$('edit-lamp-intensity').value=lamp?object.intensity:'';$('edit-lamp-range').value=lamp?object.range:'';
-  const lamp=object.type==='lamp',interactive=['door','gate','button','lamp'].includes(object.type), doorway=['door','gate'].includes(object.type), button=object.type==='button';
+  const interactive=['door','gate','button','lamp'].includes(object.type), doorway=['door','gate'].includes(object.type), button=object.type==='button';
   const canEdit=role==='admin'||(role==='builder'&&object.ownerId===meId),canManageInteraction=interactive&&(role==='admin'||object.ownerId===meId),canUse=item=>role==='admin'||item.ownerId===meId||item.usePolicy==='all_players';
   $('edit-use-policy').value=interactive?object.usePolicy:'owner_admin';
   $('edit-interaction-row').hidden=!interactive;$('edit-button-row').hidden=!button;$('edit-target-state-row').hidden=!button;

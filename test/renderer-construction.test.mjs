@@ -338,6 +338,7 @@ test('world lighting Preview and Cancel are local; Apply sends one versioned com
  assert.equal(h.context.requests.length,0);assert.equal(h.context.ambientLight.intensity,1.2);assert.match(h.element('world-light-message').textContent,/preview/i);
  h.run('cancelWorldLightingPreview()');
  assert.equal(h.context.requests.length,0);assert.equal(h.context.ambientLight.intensity,2.6);
+ h.element('world-light-ambient').value='1.2';h.element('world-light-sun').value='2.4';
  h.run('previewWorldLighting()');await h.run('applyWorldLightingPreview()');
  assert.equal(h.context.requests.length,1);
  assert.deepEqual(h.context.requests[0],{path:'/command',method:'POST',body:{type:'set_lighting',ambientIntensity:1.2,sunIntensity:2.4,expectedVersion:2}});
