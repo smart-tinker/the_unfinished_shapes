@@ -250,10 +250,12 @@ function cancelWorldLightingPreview() {
 async function applyWorldLightingPreview() {
   const preview=worldLightingPreview;
   if(!preview||preview.attempted||role!=='admin'||editing)return;
+  const generation=settingsGeneration;
   preview.attempted=true;updateLightingControls();
   const command={type:'set_lighting',ambientIntensity:preview.ambientIntensity,sunIntensity:preview.sunIntensity,expectedVersion:preview.version};
   try{
     const result=await request('/command','POST',command);
+    if(generation!==settingsGeneration)return;
     if(result?.error)throw new Error(result.message||result.error);
     const baseline=preview.baseline??worldState.lighting??{ambientIntensity:2.6,sunIntensity:3.1};
     const expectedVersion=preview.version+(preview.ambientIntensity===baseline.ambientIntensity&&preview.sunIntensity===baseline.sunIntensity?0:1);
@@ -263,7 +265,7 @@ async function applyWorldLightingPreview() {
     worldLightingPreview=null;updateWorldLighting(worldState);updateLightingControls(true);
     $('world-light-message').textContent='Shared world lighting saved.';
   }catch(error){
-    const generation=settingsGeneration;
+    if(generation!==settingsGeneration)return;
     $('world-light-message').textContent='Apply outcome is unknown or conflicted. No retry was sent; refreshing the server state before another attempt. '+error.message;
     try{
       const state=await request('/state');
