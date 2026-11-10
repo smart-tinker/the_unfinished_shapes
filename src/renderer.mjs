@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { movePlayer } from './movement.mjs';
+import { placementPosition, positionUpdateCommand } from './placement.mjs';
 
 const $ = id => document.getElementById(id);
 const bridge = window.tus;
@@ -11,6 +12,7 @@ let agentControlState = null, agentControlRead = 0, agentControlLoading = false,
 let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 0, z: 0 }, playerVelocityY = 0, jumpRequested = false, meId = null, localMovementVersion = 0, latestStateRevision = -1;
 let worldState = { objects: [] };
 let scene, renderer, camera, controls, player, companion, selectionBox;
+let dragCandidate = null, movePreview = null;
 let objectSnapshot = '';
 let inspectorBase = null, inspectorDirty = false, editing = false, role = 'viewer';
 const objectData = new Map();
@@ -131,13 +133,14 @@ function initScene() {
   // The island is decoration. Authoritative object positions come only from the server.
   scene.add(sceneRoot); player = avatar('#f2e7cf'); scene.add(player);
   companion = new THREE.Mesh(new THREE.OctahedronGeometry(.46), new THREE.MeshStandardMaterial({ color: '#efbd61', roughness: .35, metalness: .3 })); companion.castShadow = true; scene.add(companion);
-  renderer.domElement.addEventListener('pointerdown', event => { renderer.domElement.dataset.startX = event.clientX; renderer.domElement.dataset.startY = event.clientY; });
-  renderer.domElement.addEventListener('pointerup', event => {
-    if (Math.hypot(event.clientX - Number(renderer.domElement.dataset.startX), event.clientY - Number(renderer.domElement.dataset.startY)) > 5) return;
-    const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(event.clientX / innerWidth * 2 - 1, -(event.clientY / innerHeight) * 2 + 1), camera);
-    const hit = ray.intersectObjects([...meshes.values()], true)[0]; let object = hit?.object;
-    while (object && !object.userData.worldId) object = object.parent;
-    selectObject(object?.userData.worldId ?? null);
+  renderer.domElement.addEventListener('pointerdown', beginObjectDrag);
+  renderer.domElement.addEventListener('pointermove', updateObjectDrag);
+  renderer.domElement.addEventListener('pointerup', finishObjectDrag);
+  renderer.domElement.addEventListener('pointercancel', event => {
+    if (dragCandidate?.pointerId !== event.pointerId) return;
+    const draft = dragCandidate; dragCandidate = null; controls.enabled = true;
+    if (draft.started && draft.previewPosition) movePreview = draft;
+    else if (draft.ghost) { scene.remove(draft.ghost); disposeGroup(draft.ghost); }
   });
   window.addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
   renderer.setAnimationLoop(() => {
@@ -178,6 +181,109 @@ function objectMesh(object) {
   }
   group.position.set(object.position.x, object.position.y, object.position.z); return group;
 }
+function pointerRay(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  const pointer = new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+  const ray = new THREE.Raycaster(); ray.setFromCamera(pointer, camera); return ray;
+}
+function objectIdForHit(object) {
+  while (object && !object.userData.worldId) object = object.parent;
+  return object?.userData.worldId ?? null;
+}
+function canEditObject(object) {
+  return Boolean(object && (role === 'admin' || (role === 'builder' && object.ownerId === meId)));
+}
+function placementHit(event, movingId) {
+  const ray = pointerRay(event); if (!ray) return null;
+  const ground = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
+  const target = ground ? { point: ground, surface: null } : null;
+  const surfaces = [...meshes.entries()].filter(([id]) => id !== movingId).map(([, mesh]) => mesh);
+  for (const hit of ray.intersectObjects(surfaces, true)) {
+    const id = objectIdForHit(hit.object), surface = objectData.get(id);
+    if (!surface?.supportsPlayer || meshes.get(id)?.children[0] !== hit.object) continue;
+    const normal = hit.face?.normal?.clone().transformDirection(hit.object.matrixWorld);
+    if (normal?.y > .9) return { point: hit.point, surface };
+  }
+  return target;
+}
+function clearMovePreview() {
+  for (const draft of [dragCandidate, movePreview]) if (draft?.ghost) { scene?.remove(draft.ghost); disposeGroup(draft.ghost); }
+  dragCandidate = null; movePreview = null;
+  if (controls) controls.enabled = true;
+  $('move-preview-status').hidden = true; $('move-preview-status').textContent = '';
+  $('move-cancel').hidden = true;
+}
+function cancelMovePreview() {
+  const draft = movePreview ?? dragCandidate, id = draft?.objectId;
+  clearMovePreview();
+  if (id && id === selectedId) fillInspector(objectData.get(id));
+  $('edit-message').textContent = 'Move preview cancelled; the shared world was not changed.';
+}
+function setMovePreviewPosition(draft, target) {
+  const step = $('move-snap-enabled').checked ? Number($('move-grid-step').value) : 0;
+  if ($('move-snap-enabled').checked && (!Number.isFinite(step) || step < .25 || step > 10)) {
+    $('move-preview-status').textContent = 'Grid step must be between 0.25 and 10.';
+    return;
+  }
+  const position = placementPosition(target.point, draft.object, target.surface, step);
+  draft.target = { point: { x: target.point.x, y: target.point.y, z: target.point.z }, surfaceId: target.surface?.id ?? null };
+  draft.previewPosition = position;
+  draft.ghost.position.set(position.x, position.y, position.z);
+  for (const axis of ['x', 'y', 'z']) $('edit-position-' + axis).value = String(position[axis]);
+  inspectorDirty = true;
+  $('move-preview-status').hidden = false;
+  $('move-preview-status').textContent = 'Local preview only. Apply changes to move the shared object; Cancel or Escape discards it.';
+  $('move-cancel').hidden = false;
+  $('edit-message').textContent = 'Preview only — nothing has been sent to the world server.';
+}
+function refreshMovePreview() {
+  const draft = movePreview ?? (dragCandidate?.started ? dragCandidate : null);
+  if (!draft?.target) return;
+  try {
+    const surface = draft.target.surfaceId ? objectData.get(draft.target.surfaceId) : null;
+    setMovePreviewPosition(draft, { point: draft.target.point, surface });
+  } catch (error) { $('move-preview-status').textContent = error.message; }
+}
+function beginObjectDrag(event) {
+  renderer.domElement.dataset.startX = event.clientX; renderer.domElement.dataset.startY = event.clientY;
+  if (event.button !== 0 || movePreview || editing || inspectorDirty) return;
+  const ray = pointerRay(event), hit = ray?.intersectObjects([...meshes.values()], true)[0];
+  const objectId = hit ? objectIdForHit(hit.object) : null;
+  if (!canEditObject(objectData.get(objectId))) return;
+  controls.enabled = false;
+  dragCandidate = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, objectId, started: false, ghost: null };
+}
+function updateObjectDrag(event) {
+  const draft = dragCandidate;
+  if (!draft || draft.pointerId !== event.pointerId || (!draft.started && Math.hypot(event.clientX - draft.startX, event.clientY - draft.startY) <= 5)) return;
+  const object = objectData.get(draft.objectId);
+  if (!canEditObject(object) || editing || (selectedId === draft.objectId && inspectorDirty)) { controls.enabled = true; dragCandidate = null; return; }
+  if (!draft.started) {
+    if (!selectObject(draft.objectId)) { controls.enabled = true; dragCandidate = null; return; }
+    draft.object = structuredClone(object); draft.ghost = objectMesh(object);
+    draft.ghost.traverse(child => {
+      if (!child.material) return;
+      child.material = child.material.clone(); child.material.color.set('#f3c969'); child.material.transparent = true; child.material.opacity = .42; child.material.depthWrite = false;
+    });
+    scene.add(draft.ghost); draft.started = true;
+    $('move-preview-status').hidden = false; $('move-preview-status').textContent = 'Drag preview — the shared world has not changed.';
+    $('move-cancel').hidden = false;
+  }
+  const target = placementHit(event, draft.objectId);
+  if (target) setMovePreviewPosition(draft, target);
+}
+function finishObjectDrag(event) {
+  const draft = dragCandidate;
+  if (draft && draft.pointerId === event.pointerId) {
+    dragCandidate = null; controls.enabled = true;
+    if (draft.started && draft.previewPosition) movePreview = draft;
+    else if (draft.ghost) { scene.remove(draft.ghost); disposeGroup(draft.ghost); }
+  }
+  if (Math.hypot(event.clientX - Number(renderer.domElement.dataset.startX), event.clientY - Number(renderer.domElement.dataset.startY)) > 5) return;
+  const ray = pointerRay(event), hit = ray?.intersectObjects([...meshes.values()], true)[0];
+  selectObject(hit ? objectIdForHit(hit.object) : null);
+}
 function disposeGroup(group) { group.traverse(child => { child.geometry?.dispose(); if (child.material) child.material.dispose(); }); }
 function fillInspector(object) {
   inspectorBase = object ? structuredClone(object) : null; inspectorDirty = false;
@@ -192,7 +298,9 @@ function fillInspector(object) {
   $('edit-message').textContent = !canEdit ? 'Read-only: you do not have permission to edit this shape.' : 'Changes are checked by the world server.';
 }
 function selectObject(id, fromPoll = false) {
-  if (!fromPoll && id !== selectedId && inspectorDirty && !window.confirm('Discard unapplied changes to this shape?')) return;
+  if (editing && id !== selectedId) return false;
+  if (!fromPoll && id !== selectedId && inspectorDirty && !window.confirm('Discard unapplied changes to this shape?')) return false;
+  if (id !== selectedId && (movePreview || dragCandidate?.started)) clearMovePreview();
   const changed = id !== selectedId; selectedId = id;
   if (selectionBox) { scene.remove(selectionBox); selectionBox.geometry.dispose(); selectionBox.material.dispose(); selectionBox = null; }
   if (id && meshes.has(id)) { selectionBox = new THREE.BoxHelper(meshes.get(id), '#ffe5a1'); scene.add(selectionBox); }
@@ -201,6 +309,7 @@ function selectObject(id, fromPoll = false) {
   $('remove').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId));
   if (changed || !inspectorDirty || !object) fillInspector(object);
   else if (JSON.stringify(object) !== JSON.stringify(inspectorBase)) $('edit-message').textContent = 'This shape changed on the server. Your unapplied values are preserved; Reset reloads the current shape.';
+  return true;
 }
 function renderWorld(state, movementVersion = localMovementVersion) {
   if (state.revision < latestStateRevision) return;
@@ -252,8 +361,12 @@ async function command(body) { const result = await request('/command', 'POST', 
 for (const button of document.querySelectorAll('[data-kind]')) button.addEventListener('click', () => { selectedKind = button.dataset.kind; document.querySelectorAll('[data-kind]').forEach(el => el.classList.toggle('selected', el === button)); });
 $('build-form').addEventListener('submit', async event => { event.preventDefault(); const button = event.submitter; button.disabled = true; try { await command({ type: 'build', objectType: selectedKind, position: { x: Number($('build-x').value), y: selectedKind === 'block' ? 1 : .5, z: Number($('build-z').value) } }); feedback(`${selectedKind[0].toUpperCase() + selectedKind.slice(1)} placed in the shared world.`); } catch (error) { feedback(error.message, true); } finally { button.disabled = false; } });
 $('remove').addEventListener('click', async () => { if (!selectedId) return; const id = selectedId; $('remove').disabled = true; try { await command({ type: 'remove', id }); feedback('Shape removed.'); } catch (error) { feedback(error.message, true); } finally { $('remove').disabled = !selectedId; } });
+$('move-grid-step').disabled = !$('move-snap-enabled').checked;
+$('move-snap-enabled').addEventListener('change', () => { $('move-grid-step').disabled = !$('move-snap-enabled').checked; refreshMovePreview(); });
+$('move-grid-step').addEventListener('input', refreshMovePreview);
+$('move-cancel').addEventListener('click', cancelMovePreview);
 $('edit-form').addEventListener('input', () => { inspectorDirty = true; });
-$('edit-reset').addEventListener('click', () => fillInspector(objectData.get(selectedId)));
+$('edit-reset').addEventListener('click', () => { if (movePreview || dragCandidate) cancelMovePreview(); else fillInspector(objectData.get(selectedId)); });
 $('edit-form').addEventListener('submit', async event => {
   event.preventDefault(); if (!selectedId || !inspectorBase || editing) return;
   const id = selectedId, baseline = inspectorBase, current = objectData.get(id), body = { type: 'update', id };
@@ -269,18 +382,45 @@ $('edit-form').addEventListener('submit', async event => {
   const fields = Object.keys(body).filter(key => !['type', 'id'].includes(key));
   if (!fields.length) { $('edit-message').textContent = 'No changes to apply.'; return; }
   if (!current || fields.some(field => JSON.stringify(current[field]) !== JSON.stringify(baseline[field]))) { $('edit-message').textContent = 'A field you edited also changed on the server. Reset to reload it before applying.'; return; }
-  body.expected = Object.fromEntries(fields.map(field => [field, structuredClone(baseline[field])]));
+  const movePrecondition = Object.hasOwn(body, 'position') ? positionUpdateCommand(current, body.position).expected : {};
+  body.expected = {
+    ...Object.fromEntries(fields.filter(field => field !== 'position').map(field => [field, structuredClone(baseline[field])])),
+    ...movePrecondition,
+  };
   inspectorDirty = true; editing = true; $('edit-fields').disabled = true; const generation = settingsGeneration;
   try {
     const result = await command(body);
     if (generation !== settingsGeneration) return;
     if (result.object) objectData.set(id, result.object);
+    clearMovePreview();
     if (selectedId === id) { inspectorDirty = false; fillInspector(objectData.get(id)); $('edit-message').textContent = 'Changes saved on the server.'; }
     feedback('Shape updated on the server.');
-  } catch (error) { if (generation === settingsGeneration) { await poll(); if (generation !== settingsGeneration) return; if (selectedId === id) $('edit-message').textContent = error.message + ' Your unapplied values are preserved. Reset to reload the server values.'; feedback(error.message, true); } }
+  } catch (error) {
+    if (generation !== settingsGeneration) return;
+    let confirmed = false;
+    try {
+      const snapshot = await request('/state');
+      if (generation !== settingsGeneration) return;
+      if (snapshot.error) throw new Error(snapshot.message || snapshot.error);
+      renderWorld(snapshot);
+      const latest = objectData.get(id);
+      confirmed = Boolean(latest && fields.every(field => JSON.stringify(latest[field]) === JSON.stringify(body[field])));
+    } catch { /* Preserve the draft when the server outcome cannot be confirmed. */ }
+    if (generation !== settingsGeneration) return;
+    if (confirmed) {
+      clearMovePreview();
+      if (selectedId === id) { inspectorDirty = false; fillInspector(objectData.get(id)); $('edit-message').textContent = 'Server state confirms the change; no retry was sent.'; }
+      feedback('Shape update confirmed from server state.');
+    } else {
+      if (selectedId === id) $('edit-message').textContent = error.message + ' The outcome may be unknown. Check the server state before retrying; your local proposal is preserved.';
+      $('move-preview-status').textContent = 'Server outcome not confirmed. Check the shared world before retrying.';
+      feedback(error.message, true);
+    }
+  }
   finally { editing = false; const object = objectData.get(selectedId); $('edit-fields').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId)); }
 });
 window.addEventListener('keydown', event => {
+  if (event.code === 'Escape' && (dragCandidate || movePreview)) { event.preventDefault(); cancelMovePreview(); return; }
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || document.querySelector('dialog[open]')) return;
   if (event.code === 'Space') { event.preventDefault(); if (!event.repeat) jumpRequested = true; return; }
   keys.add(event.key.toLowerCase());
@@ -302,6 +442,7 @@ function readSettings() { return { ...settings, workspacePath: $('workspace').va
 async function saveSettings() {
   const next = readSettings();
   const changed = ['workspacePath', 'codexPath', 'serverUrl', 'token'].some(key => next[key] !== settings[key]);
+  if (changed && (movePreview || dragCandidate)) cancelMovePreview();
   if (changed && (connected || settings.threadId)) {
     if (!settings.threadId) throw new Error('Cannot verify the current Codex conversation; reconnect before changing connection settings.');
     const state = await bridge.readAgentControls(settings.threadId);
