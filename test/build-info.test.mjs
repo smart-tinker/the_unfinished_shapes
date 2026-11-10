@@ -12,7 +12,7 @@ test('application version label is dynamic instead of a stale release literal', 
   assert.match(main, /app\.getVersion\(\)/, 'Electron package metadata is the version source');
   assert.match(main, /build-info\.json/, 'a packaged build reads its recorded source identity');
   assert.match(smoke, /expectedSourceSha/, 'packaged smoke compares the visible identity with the candidate commit');
-  const waitForBuildIdentity = /await page\\.waitForFunction\\(\\(\\) => document\\.querySelector\\('#build-version'\\)\\?\\.getAttribute\\('title'\\) !== 'Loading build metadata'/;
-  assert.match(smoke, waitForBuildIdentity, 'Linux and macOS smoke waits for build metadata before checking the label');
-  assert.match(windowsSmoke, waitForBuildIdentity, 'Windows smoke waits for build metadata before checking the label');
+  const waitForBuildIdentity = "await page.waitForFunction(() => document.querySelector('#build-version')?.getAttribute('title') !== 'Loading build metadata');";
+  assert.ok(smoke.includes(waitForBuildIdentity), 'Linux and macOS smoke waits for build metadata before checking the label');
+  assert.ok(windowsSmoke.includes(waitForBuildIdentity), 'Windows smoke waits for build metadata before checking the label');
 });
