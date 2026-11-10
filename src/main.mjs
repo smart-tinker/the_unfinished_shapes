@@ -14,7 +14,7 @@ const userData = process.env.TUS_DATA_DIR ? path.resolve(process.env.TUS_DATA_DI
 mkdirSync(userData,{recursive:true});
 app.setPath('userData',userData);
 const here = path.dirname(fileURLToPath(import.meta.url));
-let win, bridge, localServer, connectedWorld;
+let win, bridge, localServer, connectedWorld, fullscreenRestoreBounds;
 if (!app.requestSingleInstanceLock()) app.quit();
 const settings = () => loadSettings(app.getPath('userData'));
 async function readBuildIdentity() {
@@ -76,6 +76,14 @@ app.whenReady().then(async()=>{
   localServer = await createWorldServer({dataPath:path.join(app.getPath('userData'),'world.json'),users:{[localToken]:{id:'local-player',role:'admin'}},host:'127.0.0.1',port:4317});
   await new Promise((resolve,reject)=>localServer.once('error',reject).listen(0,'127.0.0.1',resolve));
   handle('app:build-info', readBuildIdentity);
+  handle('window:toggle-fullscreen', (...args) => {
+    if (args.length) throw new Error('Fullscreen toggle does not accept arguments.');
+    if (!win || win.isDestroyed()) throw new Error('The game window is unavailable.');
+    const entering = !win.isFullScreen();
+    if (process.platform === 'darwin' && entering) fullscreenRestoreBounds = win.getNormalBounds();
+    win.setFullScreen(entering);
+    return true;
+  });
   const localUrl = `http://127.0.0.1:${localServer.address().port}`;
   handle('settings:load', async()=>{const current=await settings();return {...current,serverUrl:current.serverUrl||localUrl,token:current.serverUrl?'':localToken};});
   handle('settings:save', async(s)=>{ const clean={...s,serverUrl:serverUrl(s.serverUrl||localUrl) === localUrl ? '' : serverUrl(s.serverUrl)}; await saveSettings(app.getPath('userData'),clean); });
@@ -188,6 +196,15 @@ app.whenReady().then(async()=>{
   attachQuitGuard(win);
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',(event)=>event.preventDefault());
+  win.on('enter-full-screen', () => {
+    if (process.platform === 'darwin' && !fullscreenRestoreBounds) fullscreenRestoreBounds = win.getNormalBounds();
+    win.webContents.send('window:fullscreen-changed', true);
+  });
+  win.on('leave-full-screen', () => {
+    if (process.platform === 'darwin' && fullscreenRestoreBounds) win.setSize(fullscreenRestoreBounds.width, fullscreenRestoreBounds.height);
+    fullscreenRestoreBounds = null;
+    win.webContents.send('window:fullscreen-changed', false);
+  });
   await win.loadFile(path.join(here,'index.html'));
 }).catch(error=>{dialog.showErrorBox('The Unfinished Shapes could not start',error.message+'\nYour saved settings and world have not been reset.');app.quit();});
 app.on('window-all-closed',()=>app.quit());

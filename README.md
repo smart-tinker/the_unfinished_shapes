@@ -29,6 +29,7 @@ The desktop client starts a private loopback world, persists it under Electron's
 - Select an existing object to edit position, size, color, solid-side collision and whether its top supports players. Stale edits are rejected by the server rather than silently overwriting another change.
 - Inspect agent activity for requested actions, confirmed results and stop reasons, without private model reasoning.
 - Move with WASD at up to 5 world units per second, jump with Space, and navigate the camera with the mouse. The server stops player movement at the 48×48 island edge and resolves solid sides and walkable tops. Agent movement uses the same server physics.
+- Use **Full screen** or **F11** to toggle the game window. **Escape** closes an open dialog or cancels a local drag before it exits fullscreen.
 - Ask Codex for an existing construction using app-server game tools.
 - Ask for an unknown mechanic to develop it in the local repository. It does **not** become server code automatically.
 
