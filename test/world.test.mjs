@@ -291,7 +291,7 @@ test('a north-facing ramp carries manual and agent movement up its continuous sl
 test('stairs provide four equal walkable rises toward their saved cardinal direction',()=>{
  const stair={type:'build',objectType:'stairs',direction:'east',position:{x:10,y:1,z:0},size:{x:8,y:2,z:4}};
  let world=applyCommand(emptyWorld(),builder,stair).state;
- world=move(world,{x:5,y:0,z:0});
+ world.players.push({id:'alice',position:{x:5,y:0,z:0},velocityY:0});
  const heights=[];
  for(const x of [6.25,7.5,8.5,9.5,10.5,11.5,12.5,13.5]){
   world=move(world,{x,y:0,z:0});
