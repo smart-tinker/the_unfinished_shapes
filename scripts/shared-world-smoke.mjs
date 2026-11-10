@@ -316,6 +316,25 @@ await withSmokeCleanup(async () => {
     const settings = JSON.parse(await readFile(path.join(dir, id, 'settings.json'), 'utf8'));
     assert.equal(Object.hasOwn(settings, 'token'), false);
   }
+  alice.graphics.phase('shared island boundary');
+  await focus(alice);
+  await alice.page.keyboard.down('d');
+  let atEdge;
+  try {
+    atEdge = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 23.68 - 1e-6, 'Alice to reach the island edge at normal walking speed');
+  } finally {
+    await alice.page.keyboard.up('d');
+  }
+  const edgePosition = atEdge.players.find(player => player.id === 'alice').position;
+  assert.ok(edgePosition.x >= 23.68 - 1e-6 && edgePosition.x <= 23.68 + 1e-6, JSON.stringify(edgePosition));
+  await returning.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, atEdge.revision);
+  const outwardMove = await worldCommand('alice', { type: 'move', position: { x: 1000, y: 999, z: 0 } });
+  assert.deepEqual(outwardMove.position, edgePosition, 'an agent target beyond the island cannot move Alice past its edge');
+  await Promise.all([alice.page, returning.page].map(page => page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, outwardMove.revision)));
+  const [aliceEdge, bobEdge] = await Promise.all([state('alice'), state('bob')]);
+  assert.deepEqual(aliceEdge.players.find(player => player.id === 'alice').position, outwardMove.position);
+  assert.deepEqual(bobEdge.players.find(player => player.id === 'alice').position, outwardMove.position);
+
   console.log('Shared-world acceptance passed: two real clients, UI build/select/edit/remove, owner permissions, server and client restart, shared persistence.');
 }, ...[() => Promise.allSettled(clients.map(close)).then(results => {
   const failures = results.filter(r => r.status === 'rejected').map(r => r.reason);
