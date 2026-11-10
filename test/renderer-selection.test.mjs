@@ -160,8 +160,8 @@ test('group move preview references only controls present in the renderer docume
  const end=source.indexOf('function refreshMovePreview(',start);
  assert.ok(start>=0&&end>start);
  const functionBody=source.slice(start,end);
- const documentIds=new Set([...html.matchAll(/\\bid="([^"]+)"/g)].map(match=>match[1]));
- for(const [,id] of functionBody.matchAll(/\\$\\('([^']+)'\\)/g)) {
+ const documentIds=new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match=>match[1]));
+ for(const [,id] of functionBody.matchAll(/\$\('([^']+)'\)/g)) {
   assert.ok(documentIds.has(id),`missing renderer element #${id}`);
  }
 });
