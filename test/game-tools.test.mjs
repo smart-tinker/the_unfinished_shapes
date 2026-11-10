@@ -101,6 +101,13 @@ test('world_build sends stair and ramp direction through server validation',asyn
  } finally {await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
 });
 
+test('scene snapshots preserve uphill directions for stair and ramp context',()=>{
+ const shapes=[['stairs','east'],['ramp','north']].map(([type,direction],index)=>({...sceneObject(type,{x:index*2,y:1,z:0}),type,direction}));
+ const state=sceneWorld(shapes);
+ const snapshot=gameTools.captureSceneSnapshot(state,sceneView(), 'connection-1');
+ assert.deepEqual(snapshot.objects.map(({type,direction})=>({type,direction})),shapes.map(({type,direction})=>({type,direction})));
+});
+
 const sceneCamera = {
   position:{x:0,y:2,z:10}, target:{x:0,y:2,z:0},
   fov:42, aspect:1.5, near:0.1, far:220,
