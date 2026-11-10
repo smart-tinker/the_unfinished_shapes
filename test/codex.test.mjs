@@ -236,7 +236,7 @@ test('tool calls cannot run outside an explicit turn, from another thread or nam
 test('world tool schema exposes explicit flat operations without ownership mutation',()=>{
  const command=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command;
  assert.equal(command.type,'object');assert.equal(command.oneOf,undefined);assert.equal(command.anyOf,undefined);
- assert.deepEqual(command.properties.type.enum,['move','move_group','update','remove']);
+ assert.deepEqual(command.properties.type.enum,['move','move_group','update','remove','set_state','use']);
  assert.match(command.properties.type.description,/move the player only/);
  assert.match(command.properties.type.description,/same island and physics limits/);
  assert.match(command.properties.position.description,/5 units\/second.*island boundary/);
@@ -253,7 +253,7 @@ test('world construction is proposed as an explicit object set and apply takes o
  assert.deepEqual(preview.required,['objects']);assert.equal(preview.additionalProperties,false);
  assert.equal(preview.properties.objects.minItems,1);assert.equal(preview.properties.objects.maxItems,32);
  const item=preview.properties.objects.items;assert.deepEqual(item.required,['objectType','position','size','color']);assert.equal(item.additionalProperties,false);
- assert.deepEqual(item.properties.objectType.enum,['block','bridge','port','stairs','ramp','sign','beacon']);assert.deepEqual(item.properties.direction.enum,['north','east','south','west']);assert.match(item.properties.direction.description,/required for stairs and ramps/i);
+ assert.deepEqual(item.properties.objectType.enum,['block','bridge','port','stairs','ramp','sign','beacon','door','gate','button']);assert.deepEqual(item.properties.direction.enum,['north','east','south','west']);assert.match(item.properties.direction.description,/required for stairs and ramps/i);
  const apply=WORLD_TOOLS.find(t=>t.name==='world_apply').inputSchema;assert.deepEqual(apply.required,['previewId']);assert.deepEqual(Object.keys(apply.properties),['previewId']);
  const command=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command;
  assert.equal(command.properties.type.enum.includes('build'),false);

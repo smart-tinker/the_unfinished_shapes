@@ -99,7 +99,7 @@ test('agent scene context keeps landmark labels and stable selected IDs; schemas
  assert.equal(snapshot.objects.find(object=>object.id==='beacon-1').name,'Gate');
  assert.equal(snapshot.objects.find(object=>object.id==='sign-1').selected,true);
  const preview=WORLD_TOOLS.find(tool=>tool.name==='world_preview').inputSchema.properties.objects.items;
- assert.deepEqual(preview.properties.objectType.enum,['block','bridge','port','stairs','ramp','sign','beacon']);
+ assert.deepEqual(preview.properties.objectType.enum,['block','bridge','port','stairs','ramp','sign','beacon','door','gate','button']);
  assert.equal(preview.properties.text.maxLength,240);
  assert.equal(preview.properties.name.maxLength,48);
  const update=WORLD_TOOLS.find(tool=>tool.name==='world_command').inputSchema.properties.command.properties;
