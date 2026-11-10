@@ -1,0 +1,23 @@
+name: Feature or improvement
+description: One bounded change with verifiable acceptance
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Problem and proposed outcome
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and non-goals
+      description: State undefined mechanics as decisions, not implicit requirements.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Definition of Done and tests
+      description: Cover authority, permissions, validation and persistence for world changes; distinguish CI from interactive acceptance.
+    validations:
+      required: true

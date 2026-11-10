@@ -1,0 +1,33 @@
+name: Bug report
+description: Reproducible behavior and acceptance evidence
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, private logs or personal world data. Check existing issues first.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Version and environment
+      description: Build/version, source SHA if known, OS, source or packaged application.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps, actual and expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and impact
+      description: Sanitized evidence, affected scenarios, facts versus hypotheses.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Definition of Done
+      description: Observable acceptance criteria and regression tests, including native or shared-world scenarios when relevant.
+    validations:
+      required: true
