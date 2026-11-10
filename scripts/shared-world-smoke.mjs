@@ -45,8 +45,8 @@ async function worldCommand(id, command) {
   assert.equal(response.status, 200);
   return response.json();
 }
-async function waitForState(predicate, description) {
-  const deadline = Date.now() + 10000;
+async function waitForState(predicate, description, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
   let last;
   while (Date.now() < deadline) {
     const snapshot = await state();
@@ -348,6 +348,20 @@ await withSmokeCleanup(async () => {
   const [aliceEdge, bobEdge] = await Promise.all([state('alice'), state('bob')]);
   assert.deepEqual(aliceEdge.players.find(player => player.id === 'alice').position, outwardMove.position);
   assert.deepEqual(bobEdge.players.find(player => player.id === 'alice').position, outwardMove.position);
+
+  const beforeDisconnect = await state('alice');
+  const savedBobPosition = structuredClone(beforeDisconnect.players.find(player => player.id === 'bob').position);
+  assert.ok(beforeDisconnect.onlinePlayerIds.includes('bob'), 'Bob is present before disconnect');
+  const closedClientIndex = clients.indexOf(returning);
+  await close(returning);
+  clients.splice(closedClientIndex, 1);
+  const offlineBob = await waitForState(snapshot => Array.isArray(snapshot.onlinePlayerIds) && !snapshot.onlinePlayerIds.includes('bob'), 'Bob to disappear after disconnect', 15000);
+  assert.ok(offlineBob.players.some(player => player.id === 'bob'), 'offline player data remains saved');
+  assert.deepEqual(offlineBob.players.find(player => player.id === 'bob').position, savedBobPosition, 'disconnect preserves Bob’s last position');
+  const reconnectedBob = await launch('bob');
+  await waitForState(snapshot => snapshot.onlinePlayerIds.includes('bob'), 'Bob to reconnect');
+  assert.deepEqual((await state('alice')).players.find(player => player.id === 'bob').position, savedBobPosition, 'reconnect restores Bob at his saved position');
+  await reconnectedBob.graphics.assertHealthy();
 
   console.log('Shared-world acceptance passed: two real clients, UI build/select/edit/remove, owner permissions, server and client restart, shared persistence.');
 }, ...[() => Promise.allSettled(clients.map(close)).then(results => {
