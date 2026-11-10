@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   codeql:
-    if: github.event.repository.private == false
+    if: github.event.repository.private == false && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     name: CodeQL JavaScript
     runs-on: ubuntu-24.04
     timeout-minutes: 20
