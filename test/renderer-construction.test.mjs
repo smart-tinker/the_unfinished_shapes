@@ -142,3 +142,24 @@ test('agent build preview is visible locally and only its approval button grants
  assert.deepEqual(h.context.decisions,[['preview-1','apply','thread-1']]);
  assert.equal(h.context.commands.length,0,'the renderer must ask the agent to apply, never write directly');
 });
+
+
+test('interactive object palette and inspector controls are present in the client',()=>{
+ const html=readFileSync(new URL('../src/index.html',import.meta.url),'utf8');
+ for(const kind of ['door','gate','button'])assert.match(html,new RegExp('data-kind="'+kind+'"'));
+ for(const id of ['edit-use-policy','edit-target-id','edit-target-state','interactive-actions','edit-open','edit-close','edit-use-button'])assert.match(html,new RegExp('id="'+id+'"'));
+});
+
+test('open doors and gates render visibly different from closed objects',()=>{
+ class Group{constructor(){this.children=[];this.userData={};this.position={set(){}};this.rotation={y:0};}add(child){this.children.push(child);}traverse(callback){callback(this);for(const child of this.children)callback(child);}}
+ class BoxGeometry{constructor(...dimensions){this.dimensions=dimensions;}}
+ class Material{constructor(options){this.color=options.color;this.roughness=options.roughness;}}
+ class Mesh{constructor(geometry,material){this.geometry=geometry;this.material=material;this.userData={};this.position={set(){}};}}
+ const h=rendererHarness();h.context.THREE={Group,BoxGeometry,Mesh,MeshStandardMaterial:Material};
+ h.load('function objectMesh(object)','function pointerRay(');
+ h.context.door={id:'door-1',type:'door',position:{x:0,y:1.5,z:0},size:{x:1,y:3,z:.25},color:'#886644',state:'closed'};
+ const closed=h.run('objectMesh(door)');
+ h.context.door={...h.context.door,state:'open'};
+ const open=h.run('objectMesh(door)');
+ assert.notEqual(open.rotation.y,closed.rotation.y);
+});
