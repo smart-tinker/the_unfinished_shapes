@@ -409,9 +409,10 @@ function renderWorld(state, movementVersion = localMovementVersion) {
     for (const object of state.objects) { objectData.set(object.id, object); const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh); }
     selectObject(meshes.has(selectedId) ? selectedId : null, true); objectSnapshot = nextSnapshot;
   }
+  const online = Array.isArray(state.onlinePlayerIds) ? new Set(state.onlinePlayerIds) : null;
   const live = new Set();
   for (const remote of state.players) {
-    if (remote.id === meId) continue; live.add(remote.id);
+    if (remote.id === meId || (online && !online.has(remote.id))) continue; live.add(remote.id);
     if (!otherPlayers.has(remote.id)) { const mesh = avatar('#8ba5c0'); otherPlayers.set(remote.id, mesh); scene.add(mesh); }
     otherPlayers.get(remote.id).position.set(remote.position.x, remote.position.y, remote.position.z);
   }
