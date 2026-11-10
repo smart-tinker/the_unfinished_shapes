@@ -127,7 +127,7 @@ test('renderer removes saved avatars as soon as the server omits them from onlin
     localMovementVersion=0,role='builder',selectedId=null,movePreview=null,dragCandidate=null,
     editing=false,inspectorDirty=false,inspectorBase=null,objectData=new Map(),objectSnapshot='[]',
     meshes=new Map(),otherPlayers=new Map(),scene={add(){},remove(){}},sceneRoot={remove(){}},
-    disposeGroup=()=>{},avatar=()=>({position:{set(){}}}),selectObject=()=>{},positionKey=p=>`${p.x},${p.y},${p.z}`,
+    disposeGroup=()=>{},avatar=()=>({position:{set(){}}}),selectObject=()=>{},positionKey=p=>String(p.x)+','+String(p.y)+','+String(p.z),
     fillInspector=()=>{};`);
   h.load('function renderWorld(state, movementVersion = localMovementVersion) {', 'async function poll()');
 
