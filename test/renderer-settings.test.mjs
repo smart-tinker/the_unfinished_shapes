@@ -4,11 +4,12 @@ import { rendererHarness } from './support/renderer-harness.mjs';
 
 function settingsHarness(controlState) {
   const h = rendererHarness();
+  Object.assign(h.context, { window: { confirm: () => true } });
   const state = JSON.stringify(controlState);
   h.run(`let settings = { workspacePath: '/old-workspace', codexPath: '/codex', serverUrl: 'http://world-a', token: 'session-token', threadId: 'game-thread' };
 let connected = true, busy = false, settingsGeneration = 0, worldRevision = 1, objectSnapshot = '', worldState = {}, meId = 'player';
 let playerPosition = { x: 1, y: 0, z: 1 }, playerVelocityY = 0, jumpRequested = false, lastPosition = '', latestStateRevision = 1, localMovementVersion = 0;
-let scene = null, calls = [], moveStarts = new Map(), movePreview = null, dragCandidate = null, cancelCount = 0;
+let scene = null, calls = [], moveStarts = new Map(), movePreview = null, dragCandidate = null, cancelCount = 0, inspectorDirty = false;
 function cancelMovePreview() { movePreview = null; dragCandidate = null; cancelCount++; }
 const liveControls = ${state};
 const bridge = {
@@ -80,6 +81,26 @@ test('an idle conversation can disconnect when native Goals are confirmed unsupp
   assert.equal(h.run('settings.workspacePath'), '/new-workspace');
   assert.equal(h.run('settings.threadId'), '');
 });
+
+for (const [kind, setup] of [
+  ['move preview', "movePreview = { objectId: 'shape-1' }"],
+  ['inspector edits', 'inspectorDirty = true'],
+]) {
+  test(`declining a connection change preserves ${kind}`, async () => {
+    const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'idle', turnId: null, pendingApprovals: 0, goalSupported: true, goal: null });
+    h.run(setup);
+    let prompt = '';
+    h.context.window.confirm = message => { prompt = message; return false; };
+    await assert.rejects(h.run('saveSettings()'), /cancel|discard|preserved/i);
+    assert.match(prompt, /unapplied|draft|world/i);
+    assert.equal(h.run('settings.workspacePath'), '/old-workspace');
+    assert.equal(h.run('settings.threadId'), 'game-thread');
+    assert.equal(h.run('cancelCount'), 0);
+    assert.equal(h.run('JSON.stringify(calls)'), '["read:game-thread"]');
+    if (kind === 'move preview') assert.ok(h.run('movePreview'));
+    else assert.equal(h.run('inspectorDirty'), true);
+  });
+}
 
 test('an idle conversation can disconnect after fresh state confirms no active Goal or turn', async () => {
   const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'idle', goalSupported: true, pendingApprovals: 0, turnId: null, goal: null });
