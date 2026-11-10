@@ -443,9 +443,9 @@ function refreshSelectionVisuals() {
 function applySelection(ids, primary = null, fromPoll = false) {
   const next = new Set([...ids].filter(id => objectData.has(id)).slice(0,MAX_GROUP_SELECTION));
   const old = [...selectedIds], changed = old.length !== next.size || old.some(id => !next.has(id));
-  if (!changed) return true;
+  if (!changed && !fromPoll) return true;
   if (!fromPoll && inspectorDirty && !window.confirm('Discard unapplied changes to this shape?')) return false;
-  if (!fromPoll && (movePreview || dragCandidate?.started)) clearMovePreview();
+  if (!fromPoll && changed && (movePreview || dragCandidate?.started)) clearMovePreview();
   selectedIds.clear(); for (const id of next) selectedIds.add(id);
   const previousPrimary = selectedId;
   selectedId = next.has(primary) ? primary : next.has(previousPrimary) ? previousPrimary : [...next].at(-1) ?? null;
@@ -486,7 +486,7 @@ function selectObject(id, fromPoll = false, additive = false) {
 function selectObjectsInBox(start,end,additive=false) {
   const rect = renderer.domElement.getBoundingClientRect(), left = Math.min(start.x,end.x), right = Math.max(start.x,end.x);
   const top = Math.min(start.y,end.y), bottom = Math.max(start.y,end.y), ids = [];
-  camera.updateMatrixWorld();
+  camera.updateMatrixWorld?.();
   for (const object of objectData.values()) {
     const point = new THREE.Vector3(object.position.x,object.position.y,object.position.z).project(camera);
     if (point.z < -1 || point.z > 1) continue;
@@ -505,26 +505,18 @@ function renderWorld(state, movementVersion = localMovementVersion) {
   if (savedPlayer && movementVersion === localMovementVersion && !moveRunning && (firstState || positionKey(playerPosition) === lastPosition)) { playerPosition = { ...savedPlayer.position }; playerVelocityY = savedPlayer.velocityY ?? 0; lastPosition = positionKey(savedPlayer.position); }
   const accessChanged = meId !== state.me.id || role !== state.me.role;
   meId = state.me.id; role = state.me.role; $('role').textContent = `Role: ${state.me.role}`; $('revision').textContent = `REV ${state.revision}`;
-  if (accessChanged && selectedId) {
-    const selected = objectData.get(selectedId), draft = movePreview ?? dragCandidate;
-    if (draft && !canEditObject(objectData.get(draft.objectId))) {
-      clearMovePreview();
-      fillInspector(selected);
-      $('remove').disabled = !selected || !canEditObject(selected);
-      $('edit-message').textContent = 'Your permission to edit this shape changed; the local move preview was discarded.';
-    } else {
-      const canEdit = canEditObject(selected);
-      $('edit-fields').disabled = editing || !canEdit;
-      $('remove').disabled = !selected || !canEdit;
-    }
+  const draft = movePreview ?? dragCandidate;
+  if (accessChanged && draft?.objects?.some(object => !canEditObject(objectData.get(object.id)))) {
+    clearMovePreview(); $('group-move-status').textContent = 'Your permission to edit a selected shape changed; the local move preview was discarded.';
   }
   const nextSnapshot = JSON.stringify(state.objects);
   if (objectSnapshot !== nextSnapshot) {
     for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear();
     objectData.clear();
     for (const object of state.objects) { objectData.set(object.id, object); const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh); }
-    selectObject(meshes.has(selectedId) ? selectedId : null, true); objectSnapshot = nextSnapshot;
+    objectSnapshot = nextSnapshot;
   }
+  selectObject(null,true);
   const online = Array.isArray(state.onlinePlayerIds) ? new Set(state.onlinePlayerIds) : null;
   const live = new Set();
   for (const remote of state.players) {
@@ -567,6 +559,41 @@ $('move-grid-step').disabled = !$('move-snap-enabled').checked;
 $('move-snap-enabled').addEventListener('change', () => { $('move-grid-step').disabled = !$('move-snap-enabled').checked; refreshMovePreview(); });
 $('move-grid-step').addEventListener('input', refreshMovePreview);
 $('move-cancel').addEventListener('click', cancelMovePreview);
+$('group-move-cancel').addEventListener('click', cancelMovePreview);
+$('box-select-toggle').addEventListener('click', () => setBoxSelectionMode(!boxSelectMode));
+$('group-move-apply').addEventListener('click', async () => {
+  const draft = movePreview;
+  if (!draft || draft.objects?.length < 2 || !draft.changes?.length || editing) return;
+  const generation = settingsGeneration, button = $('group-move-apply');
+  button.disabled = true; editing = true;
+  const matches = objects => draft.changes.every(change => {
+    const object = objects.find(item => item.id === change.id);
+    return object && ['x','y','z'].every(axis => object.position[axis] === change.position[axis]);
+  });
+  try {
+    const result = await command({type:'move_group',changes:draft.changes});
+    if (generation !== settingsGeneration) return;
+    if (!Array.isArray(result.objects) || !matches(result.objects)) throw new Error('The server response did not confirm every moved shape.');
+    clearMovePreview(); $('group-move-status').textContent = 'The server confirmed all ' + draft.objects.length + ' shapes moved in one update.';
+    feedback('Group move saved on the server.');
+  } catch (error) {
+    if (generation !== settingsGeneration) return;
+    let confirmed = false, stateRead = false;
+    try {
+      const snapshot = await request('/state');
+      if (generation !== settingsGeneration) return;
+      if (snapshot.error) throw new Error(snapshot.message || snapshot.error);
+      renderWorld(snapshot); stateRead = true; confirmed = matches(snapshot.objects);
+    } catch { /* Do not retry an operation whose outcome is unknown. */ }
+    clearMovePreview();
+    $('group-move-status').textContent = confirmed
+      ? 'The refreshed server state confirms every shape moved; no retry was sent.'
+      : error.message + (stateRead ? ' The group was not confirmed at its target. Review the world and create a new preview; no retry was sent.' : ' The outcome is unknown. Refresh the world before trying again; no retry was sent.');
+    feedback($('group-move-status').textContent,!confirmed);
+  } finally {
+    editing = false; button.disabled = !movePreview;
+  }
+});
 $('edit-form').addEventListener('input', event => {
   const id = event?.target?.id;
   if (!id?.startsWith('edit-position-') && !id?.startsWith('edit-size-') && !['edit-color', 'edit-blocks-movement', 'edit-supports-player'].includes(id)) return;
@@ -694,7 +721,7 @@ async function saveSettings() {
   settings = next; settingsGeneration++;
   const { token, ...persisted } = settings; await bridge.saveSettings(persisted);
   worldRevision = -1; objectSnapshot = ''; worldState = { objects: [] }; meId = null; playerPosition = { x: 0, y: 0, z: 0 }; playerVelocityY = 0; jumpRequested = false; lastPosition = ''; latestStateRevision = -1; localMovementVersion++; moveStarts.clear();
-  if (scene) { selectObject(null, true); objectData.clear(); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
+  if (scene) { selectObject(null); objectData.clear(); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
   await poll();
 }
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('settings-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('settings-message').textContent = error.message; } });
@@ -735,7 +762,7 @@ function toolLabel(event) {
   const args = toolArguments(event);
   if (!args) return event.name === 'world_build' ? 'Build shape (invalid design)' : 'World command';
   if (event.name === 'world_build') return constructionLabel(args) || 'Build shape (invalid design)';
-  const labels = { build: 'Build shape', update: 'Edit shape', remove: 'Remove shape', move: 'Move player' };
+  const labels = { build: 'Build shape', update: 'Edit shape', remove: 'Remove shape', move: 'Move player', move_group: 'Move object group' };
   return labels[args?.command?.type] || labels[args?.type] || 'World command';
 }
 function toolActivity(event) {
