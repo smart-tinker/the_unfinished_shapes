@@ -18,7 +18,7 @@ function selectionHarness() {
   editing:false,inspectorDirty:false,role:'builder',meId:'alice',objectData,meshes,
   scene:{add(){},remove(){}},window:{confirm:()=>true},clearMovePreview(){},
   refreshSelectionVisuals(){},fillInspector(){},MAX_GROUP_SELECTION:32,
-  renderer:{domElement:{getBoundingClientRect:()=>({left:0,top:0,width:100,height:100})}},
+  renderer:{domElement:{dataset:{startX:'0',startY:'0'},getBoundingClientRect:()=>({left:0,top:0,width:100,height:100})}},
   canEditObject:object=>Boolean(object&&(h.context.role==='admin'||(h.context.role==='builder'&&object.ownerId===h.context.meId))),
   camera:{},
   THREE:{BoxHelper:class {constructor(mesh,color){this.mesh=mesh;this.color=color;this.geometry={dispose(){}};this.material={dispose(){}};}}},
@@ -26,6 +26,11 @@ function selectionHarness() {
  h.run('let movePreview=null,dragCandidate=null;');
  h.load('function selectObject(', 'function renderWorld(');
  h.context.objects=objects;
+ h.context.pointerRay=()=>({intersectObjects:()=>[{object:{id:'one'}}]});
+ h.context.objectIdForHit=hit=>hit.id;
+ h.context.controls={enabled:true};
+ h.context.boxSelectMode=false;
+ h.load('function finishObjectDrag(', 'function disposeGroup(');
  return h;
 }
 
@@ -148,7 +153,7 @@ test('Apply does not retry when the group outcome is unconfirmed',async()=>{
 test('plain click on a selected group member collapses selection to that shape',()=>{
  const h=selectionHarness();
  h.run("selectObject('one');selectObject('two',false,true)");
- h.run("selectObject('one')");
+ h.run("finishObjectDrag({pointerId:1,clientX:0,clientY:0,ctrlKey:false,metaKey:false})");
  assert.deepEqual(JSON.parse(h.run('JSON.stringify([...selectedIds])')),['one']);
  assert.equal(h.run('selectedId'),'one');
 });
