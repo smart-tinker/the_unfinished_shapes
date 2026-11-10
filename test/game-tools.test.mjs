@@ -140,7 +140,7 @@ test('scene capture rejects stale revisions, invalid cameras, and missing select
 test('world_state includes the submitted scene and a bounded current view from the same turn', async () => {
   assert.equal(typeof gameTools.captureSceneSnapshot, 'function', 'scene snapshot helper must be implemented');
   const dir=await mkdtemp(path.join(os.tmpdir(),'tus-tool-scene-'));
-  const connection={url:'',token:'builder-secret-12345'};
+  const connection={url:'',token:'builder-secret-12345',connectionId:'connection-1'};
   const server=await createWorldServer({dataPath:path.join(dir,'world.json'),users:{[connection.token]:{id:'alice',role:'builder'}}});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));connection.url=`http://127.0.0.1:${server.address().port}`;
   try {
@@ -162,5 +162,12 @@ test('world_state includes the submitted scene and a bounded current view from t
     assert.equal(value.sceneContext.submittedObjects.some(o=>o.id===laterId),false);
     assert.equal(value.objects.some(o=>o.id===laterId),true);
     assert.equal(JSON.stringify(value).includes(connection.token),false);
+    const otherWorld=await executeGameTool({name:'world_state'}, {...connection,connectionId:'connection-2'}, {sceneSnapshot:submitted});
+    assert.equal(otherWorld.success,false);
+    assert.match(otherWorld.contentItems[0].text,/different world connection/i);
+    const removed=await executeGameTool({name:'world_command',arguments:{command:{type:'remove',id:selectedId}}},connection);
+    assert.equal(removed.success,true);
+    const afterRemoval=JSON.parse((await executeGameTool({name:'world_state'},connection,{sceneSnapshot:submitted})).contentItems[0].text);
+    assert.deepEqual(afterRemoval.sceneContext.missingSelectedIds,[selectedId]);
   } finally {await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
 });
