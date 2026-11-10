@@ -7,7 +7,7 @@ const $ = id => document.getElementById(id);
 const bridge = window.tus;
 let isFullscreen = false;
 let settings = { serverUrl: 'http://127.0.0.1:4317', token: '' };
-let selectedKind = 'block', selectedPreset = 'block', buildPreview = null, selectedId = null, worldRevision = -1, connected = false, busy = false;
+let selectedKind = 'block', selectedPreset = 'block', buildPreview = null, agentBuildPreview = null, selectedId = null, worldRevision = -1, connected = false, busy = false;
 let settingsGeneration = 0, ordinaryTurn = false;
 let agentControlState = null, agentControlRead = 0, agentControlLoading = false, agentControlBusy = false, goalMessageContextId = null;
 let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 0, z: 0 }, playerVelocityY = 0, jumpRequested = false, meId = null, localMovementVersion = 0, latestStateRevision = -1;
@@ -237,6 +237,50 @@ function clearBuildPreview() {
   buildPreview = null;
   $('build-preview-actions').hidden = true; $('build-preview-status').hidden = true;
   $('build-preview-status').textContent = ''; $('build-apply').disabled = false; $('build-cancel').disabled = false;
+}
+function clearAgentBuildPreview(message = 'Preview cleared. The shared world was not changed.') {
+  const preview=agentBuildPreview;if(!preview)return;
+  for(const mesh of preview.meshes){scene?.remove(mesh);disposeGroup(mesh);}
+  preview.applyButton.disabled=true;preview.cancelButton.disabled=true;
+  preview.status.textContent=message;agentBuildPreview=null;
+}
+function updateAgentBuildPreviewControls() {
+  if(!agentBuildPreview)return;
+  const current=agentBuildPreview,valid=connected&&settings.threadId===current.threadId&&!current.attempted;
+  current.applyButton.disabled=!valid||busy;current.cancelButton.disabled=!valid||busy;
+}
+function showAgentBuildPreview(value, threadId = settings.threadId) {
+  if(!value||typeof value.previewId!=='string'||!Array.isArray(value.objects)||value.objects.length<1||value.objects.length>32||typeof threadId!=='string'||!scene) { addMessage('The agent preview could not be displayed, so it cannot be approved.','error');return; }
+  clearAgentBuildPreview('Replaced by a newer proposal. No shared-world changes were made.');
+  const meshes=[];
+  try {
+    for(const design of value.objects){
+      if(!design||!['block','bridge','port','stairs','ramp'].includes(design.objectType)||!design.position||!design.size)throw new Error('Invalid preview object.');
+      const mesh=objectMesh({type:design.objectType,direction:design.direction,position:design.position,size:design.size,color:design.color});
+      mesh.traverse(child=>{if(!child.material)return;child.material=child.material.clone();child.material.color.set('#efbd61');child.material.transparent=true;child.material.opacity=.48;child.material.depthWrite=false;});
+      meshes.push(mesh);scene.add(mesh);
+    }
+  } catch(error){for(const mesh of meshes){scene.remove(mesh);disposeGroup(mesh);}addMessage('The agent preview could not be displayed: '+error.message,'error');return;}
+  const card=addMessage('The agent proposes '+value.objects.length+' shapes. Does the complete set look right?','system');
+  const status=document.createElement('p');status.textContent='Amber shapes are local previews only; nothing has changed on the server.';
+  const applyButton=document.createElement('button');applyButton.type='button';applyButton.textContent='Approve and Apply';
+  const cancelButton=document.createElement('button');cancelButton.type='button';cancelButton.textContent='Cancel';
+  card.append(status);card.append(applyButton);card.append(cancelButton);
+  const preview={previewId:value.previewId,threadId,meshes,card,status,applyButton,cancelButton,attempted:false};agentBuildPreview=preview;
+  cancelButton.addEventListener('click',async()=>{
+    if(agentBuildPreview!==preview||preview.attempted)return;
+    cancelButton.disabled=true;applyButton.disabled=true;
+    try { await bridge.decideBuildPreview(preview.previewId,'cancel',preview.threadId);clearAgentBuildPreview('Canceled. No shared-world changes were made.'); }
+    catch(error){status.textContent='Could not confirm cancellation: '+error.message;}
+  });
+  applyButton.addEventListener('click',async()=>{
+    if(agentBuildPreview!==preview||preview.attempted||busy||!connected||settings.threadId!==preview.threadId)return;
+    preview.attempted=true;updateAgentBuildPreviewControls();ordinaryTurn=true;busy=true;startActivity();updateChatControls();
+    addMessage('You approved the complete agent preview. Asking the agent to apply this exact set.','user');
+    try { await bridge.decideBuildPreview(preview.previewId,'apply',preview.threadId);status.textContent='Approval sent. Waiting for the agent and server to confirm the result.'; }
+    catch(error){status.textContent='Apply outcome is unknown. Check the Codex chat and shared world before taking further action.';addMessage(error.message,'error');ordinaryTurn=false;busy=false;updateChatControls();updateAgentBuildPreviewControls();}
+  });
+  updateAgentBuildPreviewControls();
 }
 function buildDesign() {
   const presets = {
@@ -809,6 +853,7 @@ async function saveSettings() {
   }
   if (next.workspacePath !== settings.workspacePath) next.threadId = '';
   if (changed) {
+    clearAgentBuildPreview('Connection settings changed; this preview is no longer available.');
     if (movePreview || dragCandidate) cancelMovePreview();
     inspectorDirty = false;
     await bridge.disconnectCodex(); connected = false; busy = false; updateChatControls();
@@ -826,7 +871,7 @@ const toolRows = new Map(), itemRows = new Map(), moveStarts = new Map();
 let stopRequested = false, acceptedThreadId = null, currentTurnId = null;
 const retiredTurns = new Set();
 function activityThread(threadId) {
-  if (threadId !== acceptedThreadId) { retiredTurns.clear(); currentTurnId = null; moveStarts.clear(); }
+  if (threadId !== acceptedThreadId) { retiredTurns.clear(); currentTurnId = null; moveStarts.clear(); if(agentBuildPreview&&agentBuildPreview.threadId!==threadId)clearAgentBuildPreview('Conversation changed; this preview is no longer available.'); }
   acceptedThreadId = threadId;
 }
 function activityRow(text, status = 'running') {
@@ -854,12 +899,12 @@ function toolArguments(event) {
 }
 function toolLabel(event) {
   if (event.name === 'world_state') return 'Read world state';
-  if (!['world_command', 'world_build'].includes(event.name)) return 'Requested tool';
+  if (event.name === 'world_preview') return 'Preview construction set';
+  if (event.name === 'world_apply') return 'Apply approved construction';
+  if (event.name !== 'world_command') return 'Requested tool';
   const args = toolArguments(event);
-  if (!args) return event.name === 'world_build' ? 'Build shape (invalid design)' : 'World command';
-  if (event.name === 'world_build') return constructionLabel(args) || 'Build shape (invalid design)';
-  const labels = { build: 'Build shape', update: 'Edit shape', remove: 'Remove shape', move: 'Move player', move_group: 'Move object group' };
-  return labels[args?.command?.type] || labels[args?.type] || 'World command';
+  const labels = { update: 'Edit shape', remove: 'Remove shape', move: 'Move player', move_group: 'Move object group' };
+  return labels[args?.command?.type] || 'World command';
 }
 function toolActivity(event) {
   if (!busy || event.threadId !== acceptedThreadId || !event.turnId || event.id == null || retiredTurns.has(event.turnId)) return;
@@ -883,15 +928,22 @@ function toolActivity(event) {
       if (started.version === localMovementVersion && position && ['x', 'y', 'z'].every(axis => Number.isFinite(position[axis]) && Math.abs(position[axis]) <= 1000)) { playerPosition = { x: position.x, y: position.y, z: position.z }; playerVelocityY = response?.velocityY ?? 0; lastPosition = positionKey(playerPosition); }
     }
   }
-  const revision = Number.isSafeInteger(response?.revision) && response.revision >= 0 ? ` · revision ${response.revision}` : '';
-  if (event.name === 'world_build') {
-    const created = response?.object;
-    const confirmedLabel = success && typeof created?.id === 'string' && created.id.length > 0 && revision ? constructionLabel(created, 'Built') : null;
-    row.textContent = confirmedLabel ? confirmedLabel + ' · server confirmed' + revision : label + (success ? ' · construction not confirmed by a created object' : ' · failed');
-    row.dataset.status = confirmedLabel ? 'completed' : success ? 'unconfirmed' : 'failed';
+  const revision = Number.isSafeInteger(response?.revision) && response.revision >= 0 ? ' · revision ' + response.revision : '';
+  if (event.name === 'world_preview') {
+    if (success && typeof response?.previewId === 'string' && Array.isArray(response.objects)) showAgentBuildPreview(response,event.threadId);
+    row.textContent = success ? 'Complete set previewed locally · waiting for your decision' : label + ' · failed';
+    row.dataset.status = success ? 'completed' : 'failed';
+  } else if (event.name === 'world_apply') {
+    const created = response?.objects;
+    const confirmed = success && Array.isArray(created) && created.length > 0 && created.length <= 32 && created.every(object => typeof object?.id === 'string' && object.id.length > 0) && revision;
+    if (confirmed) { clearAgentBuildPreview('Server confirmed ' + created.length + ' ' + (created.length===1?'object':'objects') + revision + '.'); void poll(); }
+    else if (agentBuildPreview) agentBuildPreview.status.textContent = 'Apply failed or was not confirmed. The approved preview cannot be retried; inspect the world and ask the agent for a new proposal.';
+    row.textContent = confirmed ? 'Server confirmed ' + created.length + ' approved ' + (created.length===1?'object':'objects') + revision : label + (success ? ' · result not confirmed' : ' · failed');
+    row.dataset.status = confirmed ? 'completed' : 'failed';
   } else {
     row.textContent = label + (success ? ' · completed' : ' · failed') + revision; row.dataset.status = success ? 'completed' : 'failed';
   }
+  updateAgentBuildPreviewControls();
   if (!success) $('agent-stop-reason').textContent = 'A tool failed. The turn may continue; wait for its final status.';
 }
 function notificationActivity(method, params) {
@@ -964,6 +1016,7 @@ function sceneContextForPrompt() {
 $('chat-form').addEventListener('submit',async event=>{
   event.preventDefault();const text=$('prompt').value.trim();
   if(!text||!connected||busy)return;
+  if(agentBuildPreview){const preview=agentBuildPreview;if(!preview.attempted)void bridge.decideBuildPreview(preview.previewId,'cancel',preview.threadId).catch(()=>{});clearAgentBuildPreview('A new request replaced this local proposal. No shared-world changes were made.');}
   ordinaryTurn=true;busy=true;startActivity();updateChatControls();addMessage(text,'user');$('prompt').value='';streamMessage=null;
   try{
     const result=await bridge.sendPrompt(text,sceneContextForPrompt()),context=result?.sceneContext;
@@ -993,9 +1046,9 @@ function codexEvent(event) {
     } else addMessage('Saved Codex chat history is unavailable.', 'system');
   }
   if (event.type === 'tool-start' || event.type === 'tool-result') toolActivity(event);
-  if (event.type === 'connected') { activityThread(event.threadId); connected = true; settings.threadId = event.threadId; agentControlState = null; goalMessageContextId = null; refreshAgentStatus(); void refreshAgentControls(); }
+  if (event.type === 'connected') { clearAgentBuildPreview('Codex conversation changed; this preview is no longer available.'); activityThread(event.threadId); connected = true; settings.threadId = event.threadId; agentControlState = null; goalMessageContextId = null; refreshAgentStatus(); void refreshAgentControls(); }
   if (event.type === 'error') addMessage(event.message || 'Codex reported an error.', 'error');
-  if (event.type === 'disconnected') { const activityUnknown = busy || Boolean(agentControlState?.goal) || Boolean(goalMessageContextId); agentControlRead++; agentControlState = null; $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; ordinaryTurn = false; busy = false; $('agent-status').textContent = activityUnknown ? 'Codex disconnected · activity unknown' : 'Codex disconnected'; $('agent-goal-summary').hidden = true; addMessage(event.message || 'Codex disconnected.', 'error'); if ($('agent-controls').open) void refreshAgentControls(); }
+  if (event.type === 'disconnected') { clearAgentBuildPreview('Codex disconnected; this preview is no longer available.'); const activityUnknown = busy || Boolean(agentControlState?.goal) || Boolean(goalMessageContextId); agentControlRead++; agentControlState = null; $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; ordinaryTurn = false; busy = false; $('agent-status').textContent = activityUnknown ? 'Codex disconnected · activity unknown' : 'Codex disconnected'; $('agent-goal-summary').hidden = true; addMessage(event.message || 'Codex disconnected.', 'error'); if ($('agent-controls').open) void refreshAgentControls(); }
   if (event.type === 'approval') {
     if ($('agent-controls').open) void refreshAgentControls();
     $('activity-state').textContent = 'Needs decision'; $('agent-stop-reason').textContent = 'Waiting for your response to an approval request; no approval has been granted.';
@@ -1026,7 +1079,7 @@ function codexEvent(event) {
     if (event.method === 'turn/started') { busy = true; refreshAgentStatus(); }
     if (event.method === 'item/agentMessage/delta') { if (!streamMessage) streamMessage = addMessage('', ordinaryTurn || !goalMessageContextId ? 'assistant' : 'goal'); const body = streamMessage.querySelector('.chat-message-body'); if (body) body.textContent += p.delta || ''; else streamMessage.textContent += p.delta || ''; $('chat').scrollTop = $('chat').scrollHeight; }
     if (event.method === 'item/completed' && p.item?.type === 'agentMessage') { if (streamMessage) { const body = streamMessage.querySelector('.chat-message-body'); if (body) body.textContent = p.item.text || body.textContent; else streamMessage.textContent = p.item.text || streamMessage.textContent; } else if (p.item.text) addMessage(p.item.text, ordinaryTurn || !goalMessageContextId ? 'assistant' : 'goal'); streamMessage = null; }
-    if (event.method === 'turn/completed') { ordinaryTurn = false; busy = false; if (p.turn?.error?.message) addMessage(p.turn.error.message, 'error'); if (goalMessageContextId && agentControlState?.goal?.status !== 'active') goalMessageContextId = null; refreshAgentStatus(); if ($('agent-controls').open) void refreshAgentControls(); }
+    if (event.method === 'turn/completed') { ordinaryTurn = false; busy = false; updateAgentBuildPreviewControls(); if (p.turn?.error?.message) addMessage(p.turn.error.message, 'error'); if (goalMessageContextId && agentControlState?.goal?.status !== 'active') goalMessageContextId = null; refreshAgentStatus(); if ($('agent-controls').open) void refreshAgentControls(); }
     if (event.method === 'error') addMessage(p.error?.message || p.message || 'Codex reported an error.', 'error');
   }
   updateChatControls();

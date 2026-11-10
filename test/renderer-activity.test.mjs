@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { rendererHarness } from './support/renderer-harness.mjs';
 function activityHarness() {
   const h = rendererHarness(); h.context.busy = true; h.load('const toolRows =', 'let streamMessage ='); h.run("activityThread('thread-1');startActivity()");
+  h.context.agentBuildPreview=null;h.context.previews=[];h.context.cleared=[];
+  h.context.showAgentBuildPreview=(value,threadId)=>h.context.previews.push({value,threadId});
+  h.context.clearAgentBuildPreview=message=>h.context.cleared.push(message);
+  h.context.updateAgentBuildPreviewControls=()=>{};
   h.tool = event => { h.context.event = {id:'tool-1',threadId:'thread-1',turnId:'turn-1',...event}; h.run('toolActivity(event)'); };
   h.notify = (method, params) => { Object.assign(h.context, { method, params }); h.run('notificationActivity(method,params)'); };
   return h;
@@ -115,45 +119,54 @@ test('late prior-turn and foreign-thread results cannot enter a new request acti
   assert.equal(h.element('agent-actions').children[0].dataset.status,'running');
 });
 
-test('flat world_build shows requested construction type/position, then server-confirmed object', () => {
-  const h = activityHarness(), design = { objectType: 'port', position: { x: 12, y: 0.5, z: -8 }, size: { x: 12, y: 1, z: 8 }, color: '#c8a570' };
-  h.tool({ type: 'tool-start', name: 'world_build', arguments: design });
-  assert.equal(h.element('agent-intent').textContent, 'Build port at (12, 0.5, -8) requested.');
-  assert.equal(h.element('agent-actions').children[0].dataset.status, 'running');
-  assert.doesNotMatch(h.element('agent-actions').children[0].textContent, /confirmed|Built/);
-  h.tool({ type: 'tool-result', name: 'world_build', arguments: design, result: { success: true, contentItems: [{ type: 'inputText', text: JSON.stringify({ revision: 9, object: { id: 'port-1', type: 'port', position: { x: 12, y: 0.5, z: -8 } } }) }] } });
-  assert.equal(h.element('agent-actions').children[0].textContent, 'Built port at (12, 0.5, -8) · server confirmed · revision 9');
+test('world_preview is shown as a local pending set and never claims a server build', () => {
+  const h = activityHarness(), design = { objectType:'port', position:{x:12,y:0.5,z:-8}, size:{x:12,y:1,z:8}, color:'#c8a570' };
+  const args = { objects:[design] }, response = { previewId:'preview-1', objects:[design] };
+  h.tool({ type:'tool-start', name:'world_preview', arguments:args });
+  assert.equal(h.element('agent-intent').textContent, 'Preview construction set requested.');
+  h.tool({ type:'tool-result', name:'world_preview', arguments:args, result:{success:true,contentItems:[{type:'inputText',text:JSON.stringify(response)}]} });
+  assert.deepEqual(h.context.previews, [{value:response,threadId:'thread-1'}]);
+  assert.equal(h.element('agent-actions').children[0].textContent, 'Complete set previewed locally · waiting for your decision');
+  assert.equal(h.element('agent-actions').children[0].dataset.status, 'completed');
+  assert.equal(h.context.cleared.length, 0);
 });
-test('world_build result uses returned object coordinates, not the proposed design', () => {
+test('world_apply confirms only a server-returned object set and revision', () => {
   const h = activityHarness();
-  h.tool({ type: 'tool-result', name: 'world_build', arguments: { objectType: 'block', position: { x: 1, y: 2, z: 3 } }, result: { success: true, contentItems: [{ type: 'inputText', text: JSON.stringify({ revision: 10, object: { id: 'block-1', type: 'block', position: { x: 4, y: 5, z: 6 } } }) }] } });
-  assert.match(h.element('agent-actions').children[0].textContent, /Built block at \(4, 5, 6\)/);
+  h.context.agentBuildPreview = {status:{}};
+  h.tool({type:'tool-start',name:'world_apply',arguments:{previewId:'preview-1'}});
+  h.tool({type:'tool-result',name:'world_apply',arguments:{previewId:'preview-1'},result:{success:true,contentItems:[{type:'inputText',text:JSON.stringify({revision:9,objects:[{id:'port-1',type:'port',position:{x:12,y:0.5,z:-8}}]})}]}});
+  assert.equal(h.context.cleared.length,1);
+  assert.match(h.context.cleared[0],/Server confirmed 1 object.*revision 9/);
+  assert.equal(h.element('agent-actions').children[0].textContent,'Server confirmed 1 approved object · revision 9');
+  assert.equal(h.element('agent-actions').children[0].dataset.status,'completed');
 });
-test('world_build never confirms a move-like success, malformed output, or failed build', () => {
-  for (const result of [
-    { success: true, contentItems: [{ type: 'inputText', text: '{"revision":11}' }] },
-    { success: true, contentItems: [{ type: 'inputText', text: 'not JSON' }] },
-    { success: false, contentItems: [{ type: 'inputText', text: '{"revision":11,"object":{"id":"x","type":"port","position":{"x":0,"y":1,"z":2}}}' }] },
+test('world_apply never confirms malformed output, empty sets, or failed requests', () => {
+  for(const result of [
+    {success:true,contentItems:[{type:'inputText',text:'{"revision":11}'}]},
+    {success:true,contentItems:[{type:'inputText',text:'not JSON'}]},
+    {success:true,contentItems:[{type:'inputText',text:'{"revision":11,"objects":[]}'}]},
+    {success:false,contentItems:[{type:'inputText',text:'{"revision":11,"objects":[{"id":"x"}]}'}]},
   ]) {
-    const h = activityHarness(); h.tool({ type: 'tool-result', name: 'world_build', arguments: { objectType: 'port', position: { x: 0, y: 1, z: 2 } }, result });
-    assert.notEqual(h.element('agent-actions').children[0].dataset.status, 'completed');
-    assert.doesNotMatch(h.element('agent-actions').children[0].textContent, /server confirmed|Built port/);
+    const h=activityHarness();h.context.agentBuildPreview={status:{textContent:''}};
+    h.tool({type:'tool-result',name:'world_apply',arguments:{previewId:'preview-1'},result});
+    assert.notEqual(h.element('agent-actions').children[0].dataset.status,'completed');
+    assert.equal(h.context.cleared.length,0);
   }
 });
-test('world_build formats allowlisted type and finite position without exposing arbitrary arguments', () => {
-  const h = activityHarness(); h.tool({ type: 'tool-start', name: 'world_build', arguments: { objectType: 'SECRET', position: { x: 'SECRET', y: 0, z: 0 }, color: 'SECRET' } });
-  assert.equal(h.element('agent-intent').textContent, 'Build shape (invalid design) requested.');
-  assert.equal(h.text().includes('SECRET'), false);
+test('construction intent uses a fixed label and never exposes arguments', () => {
+  const h=activityHarness();h.tool({type:'tool-start',name:'world_preview',arguments:{objects:[{objectType:'SECRET',position:{x:'SECRET',y:0,z:0},color:'SECRET'}]}});
+  assert.equal(h.element('agent-intent').textContent,'Preview construction set requested.');
+  assert.equal(h.text().includes('SECRET'),false);
 });
 
-test('game guide supports legacy resumed tools without automatic conversation replacement', async () => {
+test('game guide requires in-game approval before the agent applies its preview', async () => {
   const { readFileSync } = await import('node:fs');
   const main = readFileSync(new URL('../src/main.mjs', import.meta.url), 'utf8');
-  assert.match(main, /When world_build is available/);
-  assert.match(main, /flat arguments \{objectType,position,size,color\}/);
-  assert.match(main, /resumed conversation only has the legacy world_command schema, use its existing build variant/);
-  assert.match(main, /Never invoke an unavailable tool or create a new conversation automatically/);
-  assert.match(main, /Confirm construction only from a successful server result containing the created object/);
+  assert.match(main, /To construct, call world_preview with the complete set and ask the player to review it/);
+  assert.match(main, /Never call world_apply until the player explicitly clicks the in-game Apply button/);
+  assert.match(main, /call it exactly once with only the returned previewId/);
+  assert.match(main, /Confirm construction only from a successful world_apply server result containing the created objects/);
+  assert.match(main, /never build directly or create a new conversation automatically/);
 });
 
 function goalContextRendererHarness() {

@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { toolResult } from './codex.mjs';
-import { SHAPE_TYPES, SHAPE_DIRECTIONS } from './movement.mjs';
+import { SHAPE_TYPES, SHAPE_DIRECTIONS, shapeDimensionsValid } from './movement.mjs';
 
 // shortcut: cap scene context at 64 objects and 32 players; raise if model requests need a larger view within context limits.
 const MAX_SCENE_OBJECTS = 64, MAX_SCENE_PLAYERS = 32;
@@ -80,17 +81,60 @@ export function captureSceneSnapshot(state, view, worldConnectionId) {
     totalPlayerCount:players.length,includedPlayerCount:Math.min(players.length,MAX_SCENE_PLAYERS),playersTruncated:players.length>MAX_SCENE_PLAYERS};
 }
 
+const BUILD_TYPES = ['block','bridge','port',...SHAPE_TYPES];
+function buildDesign(value) {
+  if (!record(value)) throw new Error('Invalid object design.');
+  const directional = SHAPE_TYPES.includes(value.objectType);
+  if (!exactKeys(value, directional ? ['objectType','direction','position','size','color'] : ['objectType','position','size','color']) ||
+      !BUILD_TYPES.includes(value.objectType) || !exactKeys(value.position,['x','y','z']) || !exactKeys(value.size,['x','y','z']) ||
+      !['x','y','z'].every(key => Number.isFinite(value.position[key]) && Math.abs(value.position[key]) <= 1000 && Number.isFinite(value.size[key]) && value.size[key] >= .25 && value.size[key] <= 50) ||
+      typeof value.color !== 'string' || !/^#[a-f0-9]{6}$/i.test(value.color) ||
+      (directional && (!SHAPE_DIRECTIONS.includes(value.direction) || !shapeDimensionsValid(value.objectType,value.direction,value.size)))) throw new Error('Object design is invalid.');
+  return structuredClone(value);
+}
+async function sendWorldCommand(command, connection) {
+  try {
+    const response=await fetch(connection.url+'/command',{method:'POST',headers:{Authorization:'Bearer '+connection.token,'Content-Type':'application/json'},body:JSON.stringify(command),signal:AbortSignal.timeout(5000),redirect:'error'});
+    const value=await response.json(); return toolResult(response.ok,value);
+  } catch(error) { return toolResult(false,{error:error.message}); }
+}
+export function createGameToolSession(connection) {
+  let pending = null;
+  return {
+    clear() { pending = null; },
+    decide(previewId, decision, threadId) {
+      if (typeof previewId !== 'string' || typeof threadId !== 'string' || !pending || pending.previewId !== previewId || pending.threadId !== threadId || pending.attempted) throw new Error('Build preview is no longer available for this conversation.');
+      if (decision === 'cancel') { pending = null; return {cancelled:true}; }
+      if (decision !== 'apply' || pending.approved) throw new Error('Build preview decision is invalid or already used.');
+      pending.approved = true; return {approved:true};
+    },
+    async execute(event) {
+      if (event.name === 'world_preview') {
+        if (typeof event.threadId !== 'string' || !exactKeys(event.arguments,['objects']) || !Array.isArray(event.arguments.objects) || event.arguments.objects.length < 1 || event.arguments.objects.length > 32) return toolResult(false,{error:'world_preview requires 1–32 explicit object designs.'});
+        try {
+          const objects=event.arguments.objects.map(buildDesign), previewId=randomUUID();
+          pending={previewId,threadId:event.threadId,objects,approved:false,attempted:false};
+          return toolResult(true,{previewId,objects});
+        } catch(error) { return toolResult(false,{error:error.message}); }
+      }
+      if (event.name === 'world_apply') {
+        if (!exactKeys(event.arguments,['previewId']) || typeof event.arguments.previewId !== 'string') return toolResult(false,{error:'world_apply requires exactly one previewId.'});
+        if (!pending || pending.previewId !== event.arguments.previewId || pending.threadId !== event.threadId) return toolResult(false,{error:'Build preview is missing or belongs to another conversation.'});
+        if (!pending.approved) return toolResult(false,{error:'The player must explicitly approve this full preview in the game before Apply.'});
+        if (pending.attempted) return toolResult(false,{error:'This approved preview was already attempted; inspect the world before making another proposal.'});
+        const current=pending; current.attempted=true;
+        try { return await sendWorldCommand({type:'build_group',objects:current.objects},connection); }
+        finally { if (pending===current) pending=null; }
+      }
+      return executeGameTool(event,connection);
+    },
+  };
+}
 export async function executeGameTool(event,{url,token,connectionId}) {
-  if(!['world_state','world_build','world_command'].includes(event.name))return toolResult(false,{error:'Unknown game tool'});
+  if(!['world_state','world_command'].includes(event.name))return toolResult(false,{error:'Unknown game tool'});
   const isRead=event.name==='world_state';
-  let command=event.arguments?.command;
-  if(event.name==='world_build'){
-    const design=event.arguments,fields=['objectType','position','size','color'];
-    if(!design||typeof design!=='object'||Array.isArray(design))return toolResult(false,{error:'world_build requires exactly objectType, position, size and color; stairs and ramps also require a cardinal direction.'});
-    const oriented=SHAPE_TYPES.includes(design.objectType);
-    if(fields.some(key=>!Object.hasOwn(design,key)||design[key]===undefined||design[key]===null)||Object.keys(design).some(key=>!fields.includes(key)&&!(oriented&&key==='direction'))||(oriented?!SHAPE_DIRECTIONS.includes(design.direction):Object.hasOwn(design,'direction')))return toolResult(false,{error:'world_build requires exactly objectType, position, size and color; stairs and ramps also require a cardinal direction.'});
-    command={type:'build',...design};
-  }
+  const command=event.arguments?.command;
+  if(!isRead&&['build','build_group'].includes(command?.type))return toolResult(false,{error:'Agent construction must use world_preview, wait for the player to approve it, then call world_apply.'});
   // Flat tool schemas cannot express conditional requirements; never drop edit guards.
   if(!isRead&&command?.type==='update'&&(!command.expected||typeof command.expected!=='object'||Array.isArray(command.expected)||!Object.keys(command.expected).length))return toolResult(false,{error:'Update requires expected original values from world_state for the edited fields. Refresh before editing.'});
   try{

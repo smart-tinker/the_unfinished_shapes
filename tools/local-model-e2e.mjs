@@ -10,7 +10,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { CodexBridge } from '../src/codex.mjs';
 import { createWorldServer } from '../src/server.mjs';
-import { executeGameTool } from '../src/game-tools.mjs';
+import { createGameToolSession } from '../src/game-tools.mjs';
 import { createCpuEvidence } from './cpu-evidence.mjs';
 import { createModelDiagnostics } from './model-diagnostics.mjs';
 
@@ -51,7 +51,7 @@ await mkdir(workspace,{mode:0o700});await mkdir(home,{mode:0o700});
 
 const token=randomBytes(24).toString('hex'), observerToken=randomBytes(24).toString('hex');
 const server=await createWorldServer({dataPath:path.join(dir,'world.json'),users:{[token]:{id:'cpu-test-builder',role:'builder'},[observerToken]:{id:'other-player',role:'builder'}},port:0});
-let bridge,timer,modelProcess,codexProcess;
+let bridge,timer,modelProcess,codexProcess,gameToolSession;
 const cpuEvidence=createCpuEvidence();
 const diagnostics=createModelDiagnostics();
 let proxy,stage='initializing';
@@ -132,8 +132,8 @@ try {
  assert.equal(initialControls.goalSupported,true,'the pinned Codex app-server must expose native Goals');
  assert.equal(initialControls.goal,null,'a new game conversation must start without a Goal');
  const design={objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#3366cc'};
- const objective=`Build exactly one block matching this design: ${JSON.stringify(design)}. First call world_state once, then call world_build once with these exact arguments. After the server confirms the build, report briefly.`;
- const completionCriteria='Exactly one object matching the supplied design is persisted and visible to another player.';
+ const objective=`Propose exactly one block matching this design: ${JSON.stringify(design)}. First call world_state once, then call world_preview once with {objects:[design]}. Show the complete preview and ask the player to approve it. Stop without calling world_apply; only an explicit in-game approval allows Apply.`;
+ const completionCriteria='The complete matching set is shown as a local preview and awaits the player approval.';
  const createdGoal=await bridge.createGoal({objective,completionCriteria});
  assert.equal(createdGoal.threadId,initialControls.threadId);
  assert.equal(createdGoal.status,'active');
@@ -173,13 +173,37 @@ try {
  assert.equal(goalCleared,true,'clearing the Goal must emit the native cleared notification');
  stage='native_goal_lifecycle_verified';
  goalAcceptance={supported:true,lifecycle:['created_active','native_turn_completed','paused',...(followupTurnId?['followup_turn_interrupted']:[]),'cleared'],modelTurnStarted:true,followupTurnInterrupted:Boolean(followupTurnId),finalTurnStatus:turnStatus,goalUpdates,runtime:initialControls.runtime};
+ const previewRecord=events.find(event=>event.name==='world_preview'&&event.success);
+ assert.ok(previewRecord,'The real model must produce a complete preview.');
+ const beforeApply=await (await fetch(connection.url+'/state',{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(5000)})).json();
+ assert.equal(beforeApply.objects.length,0,'The first model turn must leave the shared world unchanged.');
+ assert.equal(beforeApply.revision,0,'A preview must not advance the world revision.');
+ gameToolSession.decide(previewRecord.value.previewId,'apply',initialControls.threadId);
+ const followupDone=new Promise((resolve,reject)=>{
+  let waitTimer;
+  const listener=event=>{
+   if(event.type==='disconnected'){cleanup();reject(new Error(event.message));}
+   if(event.type==='notification'&&event.method==='turn/completed'){
+    cleanup();
+    const status=event.params?.turn?.status||'unknown';
+    status==='completed'?resolve(status):reject(new Error('Approved Apply turn ended with status '+status));
+   }
+  };
+  const cleanup=()=>{clearTimeout(waitTimer);bridge.off('event',listener);};
+  waitTimer=setTimeout(()=>{cleanup();reject(new Error('Timed out waiting for the agent to Apply the approved preview.'));},timeoutMs);
+  bridge.on('event',listener);
+ });
+ stage='player_approved_preview';
+ await bridge.send('The player explicitly clicked Apply for preview '+previewRecord.value.previewId+'. Call world_apply exactly once with only that previewId; do not alter the approved set.');
+ turnStatus=await followupDone;
+ stage='approved_preview_applied';
  let savedWorld;
  try {savedWorld=await readFile(path.join(dir,'world.json'),'utf8');}
  catch(error){if(error.code!=='ENOENT')throw error;}
  assert.ok(savedWorld,'No world state was persisted: the model did not perform a successful game action.');
  const state=JSON.parse(savedWorld);
  const acceptance=assertBuildAcceptance({events,state,design,ownerId:'cpu-test-builder'});
- const worldInspectionIndex=events.findIndex(event=>event.name==='world_state'&&event.success);const buildIndex=events.findIndex(event=>event.name==='world_build'&&event.success);assert.ok(worldInspectionIndex>=0,'real agent must inspect the world');assert.ok(worldInspectionIndex<buildIndex,'real agent must inspect the world before changing it');
+ const worldInspectionIndex=events.findIndex(event=>event.name==='world_state'&&event.success);const previewIndex=events.findIndex(event=>event.name==='world_preview'&&event.success);const applyIndex=events.findIndex(event=>event.name==='world_apply'&&event.success);assert.ok(worldInspectionIndex>=0,'real agent must inspect the world');assert.ok(worldInspectionIndex<previewIndex&&previewIndex<applyIndex,'agent must inspect, propose and only then apply the approved design');
  const observerResponse=await fetch(connection.url+'/state',{headers:{Authorization:'Bearer '+observerToken},signal:AbortSignal.timeout(5000)});
  assert.equal(observerResponse.status,200);
  const observerState=await observerResponse.json();
@@ -208,7 +232,7 @@ finally {
   if(!closed){child.kill('SIGKILL');await wait(1000);}
   if(!closed)throw new Error('Child did not close within the cleanup budget.');
  }
- for(const action of [()=>stopChild(codexProcess,()=>bridge?.stop()),()=>stopChild(modelProcess,()=>modelProcess.kill()),()=>server.shutdown(),async()=>{if(proxy){proxy.closeAllConnections();await new Promise(resolve=>proxy.close(resolve));}},()=>rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:200})]) {
+ for(const action of [()=>stopChild(codexProcess,()=>bridge?.stop()),()=>stopChild(modelProcess,()=>modelProcess.kill()),()=>gameToolSession?.clear(),()=>server.shutdown(),async()=>{if(proxy){proxy.closeAllConnections();await new Promise(resolve=>proxy.close(resolve));}},()=>rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:200})]) {
   try{await action();}catch(error){cleanupErrors.push(error.message);}
  }
  if(cleanupErrors.length){console.error(JSON.stringify({cleanupWarnings:cleanupErrors}));if(!failure)failure=new Error('Acceptance completed but cleanup failed.');}

@@ -35,25 +35,24 @@ test('HTTP build_group is atomic, visible to another client, and survives restar
   {objectType:'block',position:{x:0,y:1,z:0},size:{x:2,y:2,z:2},color:'#123456'},
   {objectType:'bridge',position:{x:8,y:1,z:0},size:{x:10,y:1,z:3},color:'#654321'},
  ];
- const response=await f.send({type:'build_group',expectedRevision:0,objects});
+ const response=await f.send({type:'build_group',objects});
  assert.equal(response.status,200);
  const applied=await response.json();assert.equal(applied.revision,1);assert.equal(applied.objects.length,2);
  assert.deepEqual(applied.objects.map(object=>object.ownerId),['alice','alice']);
  const visible=await (await fetch(f.url+'/state',{headers:{Authorization:'Bearer test-only-bob-token'}})).json();
  assert.deepEqual(visible.objects,applied.objects);assert.equal(visible.revision,1);
- const stale=await f.send({type:'build_group',expectedRevision:0,objects});
- assert.equal(stale.status,409);assert.equal((await stale.json()).error,'conflict');
- const invalid=await f.send({type:'build_group',expectedRevision:1,objects:[objects[0],{...objects[1],objectType:'unknown'}]});
+ const invalid=await f.send({type:'build_group',objects:[objects[0],{...objects[1],objectType:'unknown'}]});
  assert.equal(invalid.status,409);
  const saved=JSON.parse(await readFile(f.dataPath,'utf8'));
  assert.equal(saved.revision,1);assert.deepEqual(saved.objects,applied.objects);
  await f.app.shutdown();
  const restarted=await createWorldServer({dataPath:f.dataPath,users,port:0});await restarted.start();
  try {
-  const restored=await (await fetch(`http://127.0.0.1:${restarted.address().port}/state`,{headers:{Authorization:`Bearer ${token}`}})).json();
+  const restored=await (await fetch('http://127.0.0.1:'+restarted.address().port+'/state',{headers:{Authorization:'Bearer '+token}})).json();
   assert.equal(restored.revision,1);assert.deepEqual(restored.objects,applied.objects);
  } finally {await restarted.shutdown();}
 });
+
 test('failed validation leaves revision unchanged',async t=>{
  const f=await fixture(t);const response=await f.send({...command,objectType:'not-implemented'});
  assert.equal(response.status,409);assert.equal((await response.json()).error,'new_mechanic_required');

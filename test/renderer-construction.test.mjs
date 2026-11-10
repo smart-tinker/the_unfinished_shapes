@@ -64,6 +64,25 @@ test('build preview stays local until Apply and Cancel never sends a command',as
  assert.equal(removed.length,2,'Apply and Cancel each remove their preview');
 });
 
+test('canceling an agent preview clears only local ghosts and never calls Apply',async()=>{
+ const h=rendererHarness(),removed=[],decisions=[],commands=[];
+ h.context.agentBuildPreview=null;h.context.settings={threadId:'thread-1'};h.context.connected=true;h.context.busy=false;
+ h.context.scene={add(){},remove(mesh){removed.push(mesh);}};
+ h.context.objectMesh=object=>({object,traverse(callback){callback({material:{clone(){return {color:{set(){}},transparent:false,opacity:1,depthWrite:true};}}});}});
+ h.context.disposeGroup=()=>{};h.context.feedback=()=>{};h.context.updateChatControls=()=>{};h.context.startActivity=()=>{};
+ h.context.command=async(...args)=>commands.push(args);
+ h.context.bridge={decideBuildPreview:async(...args)=>decisions.push(args)};
+ h.load('function addMessage(text, kind =', 'function updateChatControls()');
+ h.load('function clearAgentBuildPreview()', 'function buildDesign()');
+ h.run("showAgentBuildPreview({previewId:'preview-2',objects:[{objectType:'block',position:{x:0,y:1,z:0},size:{x:2,y:2,z:2},color:'#123456'}]})");
+ const card=h.element('chat').children[0],cancel=card.children.find(node=>/cancel/i.test(node.textContent));
+ await cancel.listeners.click();
+ assert.deepEqual(decisions,[['preview-2','cancel','thread-1']]);
+ assert.equal(removed.length,1);
+ assert.equal(commands.length,0);
+ assert.equal(h.context.agentBuildPreview,null);
+});
+
 test('stairs and ramps render as four-step and continuous profiles in their saved direction',()=>{
  class Shape {
   constructor(){this.points=[];}

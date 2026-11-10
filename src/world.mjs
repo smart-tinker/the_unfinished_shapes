@@ -11,6 +11,7 @@ export function vector(value, size = false) {
   if (!value || typeof value !== 'object' || !['x','y','z'].every(k => typeof value[k] === 'number' && Number.isFinite(value[k]) && (size ? value[k] >= 0.25 && value[k] <= 50 : Math.abs(value[k]) <= 1000))) fail('invalid_coordinates', size ? 'Size components must be 0.25–50.' : 'Coordinates must be finite and within ±1000.');
   return { x:value.x, y:value.y, z:value.z };
 }
+function exactKeys(value, keys) { return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key)); }
 export function emptyWorld() { return { version: 1, revision: 0, objects: [], players: [] }; }
 export function validateWorld(state) {
   if (!state || state.version !== 1 || !Number.isSafeInteger(state.revision) || state.revision < 0 || !Array.isArray(state.objects) || state.objects.length > 5000 || !Array.isArray(state.players) || state.players.length > 1000) fail('invalid_state', 'Invalid saved world. Refusing to overwrite it.', 500);
@@ -34,6 +35,17 @@ export function validateWorld(state) {
   }
   return state;
 }
+function buildObject(actor, command, defaultsAllowed = true) {
+  if (!mechanics.includes(command.objectType)) fail('new_mechanic_required','This mechanic is not implemented. Develop it in the repository and pass CI before deployment.',409);
+  const directional = SHAPE_TYPES.includes(command.objectType);
+  if (directional ? !SHAPE_DIRECTIONS.includes(command.direction) : Object.hasOwn(command,'direction')) fail('invalid_direction','Stairs and ramps need one cardinal uphill direction.');
+  const defaults = {block:{x:2,y:2,z:2},bridge:{x:10,y:1,z:3},port:{x:12,y:1,z:8},...SHAPE_DEFAULT_SIZES};
+  const position = vector(command.position), size = vector(defaultsAllowed ? command.size ?? defaults[command.objectType] : command.size, true);
+  if (directional && !shapeDimensionsValid(command.objectType,command.direction,size)) fail('invalid_shape_dimensions','Stairs need at least 0.5 units of run with rises no higher than 0.5; ramps are limited to 45 degrees.');
+  const color = defaultsAllowed ? command.color ?? '#c8a570' : command.color;
+  if (typeof color !== 'string' || !/^#[a-f0-9]{6}$/i.test(color)) fail('invalid_color','Use a hex color such as #c8a570.');
+  return {id:randomUUID(),type:command.objectType,...(directional?{direction:command.direction}:{}),position,size,color,ownerId:actor.id,...physicsDefaults[command.objectType]};
+}
 export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
   if (!command || typeof command !== 'object' || Array.isArray(command)) fail('invalid_command','Command must be an object.');
   if (!actor || !['viewer','builder','admin'].includes(actor.role)) fail('forbidden','Unknown role.',403);
@@ -53,17 +65,21 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
     }
     case 'build': {
       if (actor.role === 'viewer') fail('forbidden','Viewers cannot build.',403);
-      if (!mechanics.includes(command.objectType)) fail('new_mechanic_required','This mechanic is not implemented. Develop it in the repository and pass CI before deployment.',409);
       if (next.objects.length >= 5000) fail('world_full','Object capacity reached.',409);
-      const directional = SHAPE_TYPES.includes(command.objectType);
-      if (directional ? !SHAPE_DIRECTIONS.includes(command.direction) : Object.hasOwn(command,'direction')) fail('invalid_direction','Stairs and ramps need one cardinal uphill direction.');
-      const defaults = {block:{x:2,y:2,z:2},bridge:{x:10,y:1,z:3},port:{x:12,y:1,z:8},...SHAPE_DEFAULT_SIZES};
-      const position = vector(command.position), size = vector(command.size ?? defaults[command.objectType], true);
-      if (directional && !shapeDimensionsValid(command.objectType,command.direction,size)) fail('invalid_shape_dimensions','Stairs need at least 0.5 units of run with rises no higher than 0.5; ramps are limited to 45 degrees.');
-      const color = command.color ?? '#c8a570';
-      if (typeof color !== 'string' || !/^#[a-f0-9]{6}$/i.test(color)) fail('invalid_color','Use a hex color such as #c8a570.');
-      const object = {id:randomUUID(),type:command.objectType,...(directional?{direction:command.direction}:{}),position,size,color,ownerId:actor.id,...physicsDefaults[command.objectType]};
+      const object = buildObject(actor, command);
       next.objects.push(object); result = {object}; break;
+    }
+    case 'build_group': {
+      if (actor.role === 'viewer') fail('forbidden','Viewers cannot build.',403);
+      if (!exactKeys(command, ['type','objects']) || !Array.isArray(command.objects) || command.objects.length < 1 || command.objects.length > 32) fail('invalid_command','Group construction requires 1–32 explicit object designs.');
+      if (next.objects.length + command.objects.length > 5000) fail('world_full','Object capacity reached.',409);
+      const objects = command.objects.map(design => {
+        const directional = SHAPE_TYPES.includes(design?.objectType);
+        if (!exactKeys(design, directional ? ['objectType','direction','position','size','color'] : ['objectType','position','size','color']) ||
+            !exactKeys(design.position,['x','y','z']) || !exactKeys(design.size,['x','y','z'])) fail('invalid_command','Each design needs only objectType, position, size, color, and a direction for stairs or ramps.');
+        return buildObject(actor, design, false);
+      });
+      next.objects.push(...objects); result = {objects}; break;
     }
     case 'move_group': {
       if (Object.keys(command).some(key => !['type','changes'].includes(key)) || !Array.isArray(command.changes) || command.changes.length < 2 || command.changes.length > 32) fail('invalid_command','Group movement requires 2–32 changes.');
@@ -132,7 +148,7 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
       if (actor.role !== 'admin' && (actor.role !== 'builder' || next.objects[index].ownerId !== actor.id)) fail('forbidden','Only the owner or an admin may remove this object.',403);
       next.objects.splice(index,1); break;
     }
-    default: fail('invalid_command','Supported commands: move, move_group, build, update, remove.');
+    default: fail('invalid_command','Supported commands: move, move_group, build, build_group, update, remove.');
   }
   if (state.revision >= Number.MAX_SAFE_INTEGER) fail('revision_exhausted','World revision limit reached.',409);
   next.revision++;

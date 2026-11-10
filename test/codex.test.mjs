@@ -205,7 +205,7 @@ test('fresh game thread registers dynamic tools without selecting arbitrary hist
   assert.equal(f.requests.some(m=>m.method==='thread/list'),false);
   const init=f.requests.find(m=>m.method==='initialize'); assert.equal(init.params.capabilities.experimentalApi,true);
   const start=f.requests.find(m=>m.method==='thread/start');
-  assert.deepEqual(start.params.dynamicTools.map(t=>t.name),['world_state','world_build','world_command']);
+  assert.deepEqual(start.params.dynamicTools.map(t=>t.name),['world_state','world_preview','world_apply','world_command']);
   assert.ok(start.params.dynamicTools.every(t=>t.type==='function' && t.inputSchema.type==='object'));
   f.bridge.stop();
 });
@@ -213,9 +213,9 @@ test('fresh game thread registers dynamic tools without selecting arbitrary hist
 test('dynamic tools route separately with exact arguments and structured response',async()=>{
   const f=fixture(); await f.start({newGameThread:true}); await f.bridge.send('Build a port');
   const events=[];f.bridge.on('event',e=>events.push(e));
-  const args={command:{type:'build',objectType:'port',position:{x:0,y:0,z:0}}};
-  f.reply({id:88,method:'item/tool/call',params:{threadId:'new-thread',turnId:'turn1',callId:'call',tool:'world_command',arguments:args}});
-  assert.deepEqual(events[0],{type:'tool',id:88,name:'world_command',arguments:args,threadId:'new-thread',turnId:'turn1'});
+  const args={objects:[{objectType:'port',position:{x:0,y:0,z:0},size:{x:12,y:1,z:8},color:'#c8a570'}]};
+  f.reply({id:88,method:'item/tool/call',params:{threadId:'new-thread',turnId:'turn1',callId:'call',tool:'world_preview',arguments:args}});
+  assert.deepEqual(events[0],{type:'tool',id:88,name:'world_preview',arguments:args,threadId:'new-thread',turnId:'turn1'});
   f.bridge.respond(88,{success:true,contentItems:[{type:'inputText',text:'{"revision":1}'}]});
   assert.equal(f.requests.at(-1).result.success,true); f.bridge.stop();
 });
@@ -248,10 +248,13 @@ test('world tool schema exposes explicit flat operations without ownership mutat
  assert.equal(command.properties.objectType,undefined);
 });
 
-test('world_build requires every design field and general command cannot advertise build',()=>{
- const build=WORLD_TOOLS.find(t=>t.name==='world_build').inputSchema;
- assert.deepEqual(build.required,['objectType','position','size','color']);assert.equal(build.additionalProperties,false);
- assert.deepEqual(build.properties.objectType.enum,['block','bridge','port','stairs','ramp']);assert.deepEqual(build.properties.direction.enum,['north','east','south','west']);assert.match(build.properties.direction.description,/required for stairs and ramps/i);assert.equal(build.properties.color.type,'string');
+test('world construction is proposed as an explicit object set and apply takes only its preview ID',()=>{
+ const preview=WORLD_TOOLS.find(t=>t.name==='world_preview').inputSchema;
+ assert.deepEqual(preview.required,['objects']);assert.equal(preview.additionalProperties,false);
+ assert.equal(preview.properties.objects.minItems,1);assert.equal(preview.properties.objects.maxItems,32);
+ const item=preview.properties.objects.items;assert.deepEqual(item.required,['objectType','position','size','color']);assert.equal(item.additionalProperties,false);
+ assert.deepEqual(item.properties.objectType.enum,['block','bridge','port','stairs','ramp']);assert.deepEqual(item.properties.direction.enum,['north','east','south','west']);assert.match(item.properties.direction.description,/required for stairs and ramps/i);
+ const apply=WORLD_TOOLS.find(t=>t.name==='world_apply').inputSchema;assert.deepEqual(apply.required,['previewId']);assert.deepEqual(Object.keys(apply.properties),['previewId']);
  const command=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command;
  assert.equal(command.properties.type.enum.includes('build'),false);
 });

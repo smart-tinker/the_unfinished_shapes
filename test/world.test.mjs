@@ -7,23 +7,24 @@ test('build is immutable and ownership is server-derived',()=>{
  const original=emptyWorld(); const {state,result}=applyCommand(original,builder,{...build,ownerId:'bob'});
  assert.equal(original.objects.length,0); assert.equal(state.objects[0].ownerId,'alice'); assert.equal(result.revision,1); validateWorld(state);
 });
-test('build_group applies a complete approved set in one revision and rejects conflicts atomically',()=>{
+test('build_group applies a complete approved set in one revision and rejects invalid sets atomically',()=>{
  const objects=[
   {objectType:'block',position:{x:0,y:1,z:0},size:{x:2,y:2,z:2},color:'#123456'},
   {objectType:'stairs',direction:'east',position:{x:8,y:1,z:0},size:{x:8,y:2,z:4},color:'#654321'},
  ];
  const original=emptyWorld();
- const {state,result}=applyCommand(original,builder,{type:'build_group',expectedRevision:0,objects});
+ const {state,result}=applyCommand(original,builder,{type:'build_group',objects});
  assert.equal(result.revision,1);assert.equal(result.objects.length,2);assert.equal(state.revision,1);
  assert.deepEqual(state.objects.map(object=>object.ownerId),['alice','alice']);
  assert.deepEqual(state.objects.map(object=>object.type),['block','stairs']);
  assert.equal(original.objects.length,0);validateWorld(state);
  const before=structuredClone(state);
- assert.throws(()=>applyCommand(state,builder,{type:'build_group',expectedRevision:0,objects}),{code:'conflict',status:409});
- assert.throws(()=>applyCommand(state,builder,{type:'build_group',expectedRevision:1,objects:[objects[0],{...objects[1],direction:'up'}]}),{code:'invalid_direction'});
+ assert.throws(()=>applyCommand(state,builder,{type:'build_group',objects:[objects[0],{...objects[1],direction:'up'}]}),{code:'invalid_direction'});
  assert.deepEqual(state,before);
- assert.throws(()=>applyCommand(state,{id:'viewer',role:'viewer'},{type:'build_group',expectedRevision:1,objects}),{code:'forbidden'});
+ assert.throws(()=>applyCommand(state,{id:'viewer',role:'viewer'},{type:'build_group',objects}),{code:'forbidden'});
+ assert.deepEqual(state,before);
 });
+
 test('permissions and unknown mechanics fail closed',()=>{
  assert.throws(()=>applyCommand(emptyWorld(),{id:'x',role:'viewer'},build),{code:'forbidden'});
  assert.throws(()=>applyCommand(emptyWorld(),builder,{...build,objectType:'nuclear-port'}),{code:'new_mechanic_required'});
