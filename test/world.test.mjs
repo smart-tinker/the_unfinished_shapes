@@ -422,3 +422,43 @@ test('closed doors block player movement and the open state makes the same passa
  world=move(opened.state,{x:10,y:0,z:0});
  assert.ok(player(world).position.x>2,JSON.stringify(player(world).position));
 });
+
+test('legacy worlds receive the previous daylight values without changing saved objects',()=>{
+ const legacy=validateWorld({version:1,revision:7,objects:[],players:[]});
+ assert.deepEqual(legacy.lighting,{version:0,ambientIntensity:2.6,sunIntensity:3.1});
+ assert.deepEqual(emptyWorld().lighting,legacy.lighting);
+});
+
+test('lamps are bounded, persistent world objects with explicit versioned access-controlled state',()=>{
+ let state=emptyWorld();
+ const built=applyCommand(state,builder,{type:'build',objectType:'lamp',position:{x:1,y:.5,z:0},size:{x:.5,y:.5,z:.5}});
+ state=built.state;
+ const lamp=built.result.object;
+ assert.ok(mechanics.includes('lamp'));
+ assert.deepEqual({on:lamp.on,intensity:lamp.intensity,range:lamp.range,usePolicy:lamp.usePolicy,version:lamp.version,blocksMovement:lamp.blocksMovement,supportsPlayer:lamp.supportsPlayer},
+  {on:true,intensity:2,range:8,usePolicy:'owner_admin',version:0,blocksMovement:false,supportsPlayer:false});
+ const configured=applyCommand(state,builder,{type:'update',id:lamp.id,intensity:3,range:12,usePolicy:'all_players',expected:{intensity:2,range:8,usePolicy:'owner_admin'}});
+ assert.deepEqual({intensity:configured.result.object.intensity,range:configured.result.object.range,usePolicy:configured.result.object.usePolicy,version:configured.result.object.version},
+  {intensity:3,range:12,usePolicy:'all_players',version:1});
+ const switched=applyCommand(configured.state,{id:'bob',role:'viewer'},{type:'set_state',id:lamp.id,state:'off',expectedVersion:1});
+ assert.equal(switched.result.object.on,false);
+ assert.equal(switched.result.object.version,2);
+ assert.throws(()=>applyCommand(switched.state,{id:'bob',role:'viewer'},{type:'set_state',id:lamp.id,state:'on',expectedVersion:1}),{code:'conflict',status:409});
+ assert.throws(()=>applyCommand(switched.state,{id:'carol',role:'builder'},{type:'set_state',id:lamp.id,state:'on',expectedVersion:2}),{code:'forbidden',status:403});
+ for(const changes of [{intensity:0},{intensity:4.01},{range:1},{range:17},{color:'transparent'}]){
+  assert.throws(()=>applyCommand(state,builder,{type:'update',id:lamp.id,...changes,expected:Object.fromEntries(Object.keys(changes).map(key=>[key,lamp[key]]))}));
+ }
+ validateWorld(switched.state);
+});
+
+test('only an admin can set versioned world lighting within the documented ranges',()=>{
+ const state=emptyWorld();
+ assert.throws(()=>applyCommand(state,builder,{type:'set_lighting',ambientIntensity:1.2,sunIntensity:2,expectedVersion:0}),{code:'forbidden',status:403});
+ const admin={id:'root',role:'admin'};
+ const changed=applyCommand(state,admin,{type:'set_lighting',ambientIntensity:1.2,sunIntensity:2,expectedVersion:0});
+ assert.deepEqual(changed.state.lighting,{version:1,ambientIntensity:1.2,sunIntensity:2});
+ assert.throws(()=>applyCommand(changed.state,admin,{type:'set_lighting',ambientIntensity:2,sunIntensity:1.2,expectedVersion:0}),{code:'conflict',status:409});
+ for(const [ambientIntensity,sunIntensity] of [[-1,1],[4.1,1],[1,-1],[1,5.1],[NaN,1],[1,Infinity]]){
+  assert.throws(()=>applyCommand(state,admin,{type:'set_lighting',ambientIntensity,sunIntensity,expectedVersion:0}));
+ }
+});

@@ -374,3 +374,24 @@ test('closing a doorway also checks online players without a saved movement reco
  assert.equal(closed.status,409);
  assert.equal((await closed.json()).error,'occupied');
 });
+
+test('lamp state and world lighting are shared by clients and persist across server restart',async t=>{
+ const f=await fixture(t);
+ const initial=await (await fetch(f.url+'/state',{headers:{Authorization:'Bearer '+token}})).json();
+ assert.deepEqual(initial.lighting,{version:0,ambientIntensity:2.6,sunIntensity:3.1});
+ const built=await f.send({type:'build',objectType:'lamp',position:{x:1,y:.5,z:0},size:{x:.5,y:.5,z:.5}});
+ assert.equal(built.status,200);
+ const lamp=(await built.json()).object;
+ const switched=await f.send({type:'set_state',id:lamp.id,state:'off',expectedVersion:0});
+ assert.equal(switched.status,200);
+ const visible=await (await fetch(f.url+'/state',{headers:{Authorization:'Bearer test-only-bob-token'}})).json();
+ assert.equal(visible.objects.find(object=>object.id===lamp.id).on,false);
+ await f.app.shutdown();
+ const restarted=await createWorldServer({dataPath:f.dataPath,users,port:0});
+ await restarted.start();
+ try {
+  const restored=await (await fetch('http://127.0.0.1:'+restarted.address().port+'/state',{headers:{Authorization:'Bearer '+token}})).json();
+  assert.deepEqual(restored.lighting,{version:0,ambientIntensity:2.6,sunIntensity:3.1});
+  assert.equal(restored.objects.find(object=>object.id===lamp.id).on,false);
+ } finally {await restarted.shutdown();}
+});
