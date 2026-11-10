@@ -6,6 +6,7 @@ import {observeGraphics,closeSmokeApp,withSmokeCleanup} from './graphics-smoke.m
 import path from 'node:path';
 import {createGpuDiagnostics} from './gpu-smoke.mjs';
 import {manualEditing} from './ui-acceptance.mjs';
+import {fullscreenAcceptance} from './fullscreen-acceptance.mjs';
 const dir=await mkdtemp(path.join(os.tmpdir(),'tus-desktop-'));
 const fakeBin=path.join(dir,'bin'),fakeCodex=path.join(fakeBin,'codex'),marker=path.join(dir,'unexpected-codex-run');
 await mkdir(fakeBin);await writeFile(fakeCodex,`#!/bin/sh\ntouch '${marker}'\nexit 99\n`,{mode:0o755});
@@ -45,6 +46,8 @@ await withSmokeCleanup(async()=>{
  const windowSize=await app.evaluate(({BrowserWindow})=>{const win=BrowserWindow.getAllWindows()[0];win.setSize(1000,700);return win.getSize();});
  assert.deepEqual(windowSize,[1000,700],'the supported minimum window size can be selected');
  await page.waitForFunction(()=>innerWidth<=1000&&innerHeight<=700);
+ graphics.phase('native fullscreen controls, keyboard priority and world isolation');
+ await fullscreenAcceptance(app,page);
  graphics.phase('agent controls at minimum size, disconnected state, focus and keyboard');
  const beforeControlsPosition=await page.locator('#coordinates').innerText();
  await page.locator('#agent-controls-open').click();
