@@ -46,6 +46,7 @@ test('offline players disappear, keep their saved position, and return there aft
   await move('alice', { x: 3, y: 0, z: 4 });
   await move('bob', { x: 8, y: 0, z: 9 });
   const initial = await state('alice');
+  assert.ok(Array.isArray(initial.onlinePlayerIds), 'server publishes transient online player IDs');
   assert.deepEqual([...initial.onlinePlayerIds].sort(), ['alice', 'bob'], 'both authenticated players are online');
   const alicePosition = structuredClone(initial.players.find(player => player.id === 'alice').position);
   const savedRevision = initial.revision;
