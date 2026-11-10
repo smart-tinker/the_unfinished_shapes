@@ -47,6 +47,7 @@ test('connect initializes, starts workspace without invoking a model, and whitel
   assert.equal(events.at(-1).type,'connected');
   const params=f.requests.find(x=>x.method==='thread/start').params;
   assert.equal(params.sandbox,'workspace-write'); assert.equal(params.approvalPolicy,'on-request');
+  assert.match(params.developerInstructions,/call world_state before changing the world/);
   f.bridge.stop(); assert.equal(f.child.killed,true);
 });
 
@@ -67,7 +68,65 @@ test('saved ID is stable and wrong workspace/active threads fail without fallbac
     assert.equal(f.child.killed,true);
   }
   const f=fixture(); assert.equal((await f.start({threadId:'saved'})).threadId,'saved');
-  assert.equal(f.requests.some(x=>x.method==='thread/list'),false); f.bridge.stop();
+  assert.equal(f.requests.some(x=>x.method==='thread/list'),false);
+  assert.match(f.requests.find(x=>x.method==='thread/resume').params.developerInstructions,/call world_state before changing the world/);
+  f.bridge.stop();
+});
+
+test('resuming a game conversation restores only user-facing history in chronological order', async () => {
+  const pages = [
+    { data: [
+      { turnId: 'turn-1', item: { id: 'user-1', type: 'userMessage', content: [{ type: 'text', text: 'Build a bridge' }] } },
+      { turnId: 'turn-1', item: { id: 'reasoning-1', type: 'reasoning', summary: 'Never display reasoning' } },
+      { turnId: 'turn-1', item: { id: 'tool-1', type: 'dynamicToolCall', tool: 'world_state', arguments: {} } },
+      { turnId: 'turn-1', item: { id: 'assistant-1', type: 'agentMessage', text: 'I will build it.' } },
+    ], nextCursor: 'items-page-2' },
+    { data: [
+      { turnId: 'turn-2', item: { id: 'user-2', type: 'userMessage', content: [{ type: 'text', text: 'Widen it' }] } },
+      { turnId: 'turn-2', item: { id: 'assistant-2', type: 'agentMessage', text: 'The bridge is wider.', phase: 'final_answer' } },
+    ], nextCursor: null },
+  ];
+  const f = fixture(m => m.method === 'thread/items/list' ? (m.params.cursor === 'items-page-2' ? pages[1] : pages[0]) : undefined);
+  const events = [];
+  f.bridge.on('event', event => events.push(event));
+  await f.start({ threadId: 'saved' });
+  const history = events.find(event => event.type === 'history');
+  assert.deepEqual(history, {
+    type: 'history',
+    threadId: 'saved',
+    available: true,
+    messages: [
+      { role: 'user', text: 'Build a bridge' },
+      { role: 'assistant', text: 'I will build it.' },
+      { role: 'user', text: 'Widen it' },
+      { role: 'assistant', text: 'The bridge is wider.' },
+    ],
+  });
+  const resume = f.requests.find(request => request.method === 'thread/resume');
+  assert.equal(resume.params.excludeTurns, true, 'paginated history is loaded without a deprecated full-thread response');
+  const pagesRead = f.requests.filter(request => request.method === 'thread/items/list');
+  assert.equal(pagesRead.length, 2);
+  assert.ok(pagesRead.every(request => request.params.threadId === 'saved' && request.params.sortDirection === 'asc'));
+  assert.equal(f.requests.some(request => request.method === 'turn/start'), false, 'restoring chat must not start another turn');
+  f.bridge.stop();
+});
+
+test('a history API error keeps the saved conversation connected and reports history unavailable', async () => {
+  const f = fixture((message, reply) => {
+    if (message.method === 'thread/items/list') {
+      queueMicrotask(() => reply({ id: message.id, error: { code: -32601, message: 'Method not found' } }));
+      return false;
+    }
+  });
+  const events = [];
+  f.bridge.on('event', event => events.push(event));
+  const result = await f.start({ threadId: 'saved' });
+  assert.equal(result.threadId, 'saved');
+  assert.ok(f.bridge.process, 'history failure must not disconnect the conversation');
+  assert.deepEqual(events.map(event => event.type), ['connected', 'history']);
+  assert.deepEqual(events[1], { type: 'history', threadId: 'saved', available: false, messages: [] });
+  assert.equal(f.requests.some(request => request.method === 'turn/start'), false);
+  f.bridge.stop();
 });
 
 test('explicit send, duplicate send protection, interrupt, completion',async()=>{

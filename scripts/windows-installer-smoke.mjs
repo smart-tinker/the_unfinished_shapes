@@ -2,6 +2,7 @@ import { _electron as electron } from 'playwright-core';
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { observeGraphics, closeSmokeApp, withSmokeCleanup } from './graphics-smoke.mjs';
+import { waitForUninstall } from './windows-uninstall.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
@@ -34,14 +35,14 @@ try { await access(installDir); throw new Error('Refusing to replace an existing
 catch (error) { if (error.code !== 'ENOENT') throw error; }
 const settingsFixture = {
   workspacePath: path.join(work, 'player-workspace'), codexPath: path.join(work, 'codex.exe'),
-  serverUrl: '', threadId: 'saved-game-thread-fixture', token: 'test-value-that-must-not-be-saved'
+  serverUrl: '', threadId: 'saved-game-thread-fixture', agentControlThreadId: 'saved-game-thread-fixture', agentModelId: 'qwen3-local-cpu', agentEffort: 'medium', token: 'test-value-that-must-not-be-saved'
 };
 await mkdir(settingsFixture.workspacePath, { recursive: true });
 let instance, graphics, gpu;
 async function launch(executablePath, label) {
   gpu = await createGpuDiagnostics(label);
   // Use an explicit software renderer on the GPU-less runner, as in Linux CI.
-  instance = await electron.launch({ executablePath, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', ...gpu.args], env: { ...process.env, TUS_DATA_DIR: '' }, timeout: 45000 });
+  instance = await electron.launch({ executablePath, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--tus-smoke-confirm-quit', ...gpu.args], env: { ...process.env, TUS_DATA_DIR: '' }, timeout: 45000 });
   await gpu.attach(instance);
   const page = await instance.firstWindow();
   graphics = await observeGraphics(page, { label });
@@ -61,24 +62,21 @@ async function uninstall() {
   const uninstaller = (await readdir(installDir)).find(name => /^Uninstall.*\.exe$/i.test(name));
   assert.ok(uninstaller, 'uninstaller exists');
   await run(path.join(installDir, uninstaller), ['/S'], { timeout: 180000 });
-  // NSIS may hand off to a temporary copy of itself before the original exits.
-  for (let attempt = 0; attempt < 60; attempt++) {
-    try { await access(path.join(installDir, 'TheUnfinishedShapes.exe')); }
-    catch (error) { if (error.code === 'ENOENT') return; throw error; }
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-  throw new Error('Uninstaller did not remove the installed executable.');
+  await waitForUninstall(() => access(path.join(installDir, 'TheUnfinishedShapes.exe')));
 }
 async function verifyRestored(page) {
   graphics.phase('verify retained settings and world');
   const settings = await page.evaluate(() => window.tus.loadSettings());
-  for (const key of ['workspacePath', 'codexPath', 'threadId']) assert.equal(settings[key], settingsFixture[key], `${key} survives install/update`);
+  for (const key of ['workspacePath', 'codexPath', 'threadId', 'agentControlThreadId', 'agentModelId', 'agentEffort']) assert.equal(settings[key], settingsFixture[key], `${key} survives install/update`);
   const world = await page.evaluate(async () => { const s = await window.tus.loadSettings(); return window.tus.request({ ...s, path: '/state' }); });
   assert.equal(world.objects.length, 1);
   assert.equal(world.objects[0].type, 'bridge');
   assert.equal(world.objects[0].position.x, 7);
   assert.equal(await page.locator('#send').isDisabled(), true, 'installer must not invoke the model');
   const saved = JSON.parse(await readFile(path.join(dataDir, 'settings.json'), 'utf8'));
+  assert.equal(saved.agentControlThreadId, settingsFixture.agentControlThreadId, 'model preferences stay bound to the saved conversation');
+  assert.equal(saved.agentModelId, settingsFixture.agentModelId, 'agent model preference survives restart');
+  assert.equal(saved.agentEffort, settingsFixture.agentEffort, 'agent reasoning preference survives restart');
   assert.equal('token' in saved, false, 'session tokens must not be persisted');
 }
 await withSmokeCleanup(async () => {

@@ -7,6 +7,41 @@ function activityHarness() {
   h.notify = (method, params) => { Object.assign(h.context, { method, params }); h.run('notificationActivity(method,params)'); };
   return h;
 }
+function historyRendererHarness() {
+  const h = rendererHarness();
+  h.run("let settings = { threadId: 'saved' }; let connected = true; let busy = false;");
+  h.load('function addMessage(text, kind = \'system\') {', 'function updateAgentControlButtons() {');
+  h.load('function codexEvent(event) {', 'try { initScene(); }');
+  return h;
+}
+test('restores only matching user-facing chat history from a resumed conversation', () => {
+  const h = historyRendererHarness();
+  h.run(`codexEvent({type:'history',threadId:'saved',available:true,messages:[
+    {role:'user',text:'Build the bridge'},
+    {role:'assistant',text:'The bridge is ready.'},
+    {role:'reasoning',text:'Never display private reasoning'},
+  ]})`);
+  assert.deepEqual(h.element('chat').children.map(message => [message.className, message.textContent]), [
+    ['chat-message user', 'Build the bridge'],
+    ['chat-message assistant', 'The bridge is ready.'],
+  ]);
+  h.run(`codexEvent({type:'history',threadId:'stale',available:true,messages:[{role:'assistant',text:'Stale conversation'}]})`);
+  assert.equal(h.element('chat').children.length, 2, 'history from another conversation cannot replace the current chat');
+});
+
+test('history replacement avoids duplicates and reports unavailable saved history', () => {
+  const h = historyRendererHarness();
+  h.run("addMessage('stale cached entry', 'assistant')");
+  const history = { type: 'history', threadId: 'saved', available: true, messages: [{ role: 'assistant', text: 'Restored reply' }] };
+  h.context.history = history; h.run('codexEvent(history)');
+  h.run('codexEvent(history)');
+  assert.deepEqual(h.element('chat').children.map(message => message.textContent), ['Restored reply']);
+  h.run("codexEvent({type:'history',threadId:'saved',available:false,messages:[]})");
+  assert.deepEqual(h.element('chat').children.map(message => [message.className, message.textContent]), [
+    ['chat-message system', 'Saved Codex chat history is unavailable.'],
+  ]);
+});
+
 test('activity shows requested command intent and only structured result evidence', () => {
   const h = activityHarness();
   h.tool({ type: 'tool-start', name: 'world_command', arguments: { command: { type: 'update', secret: 'SECRET' } } });
@@ -119,4 +154,34 @@ test('game guide supports legacy resumed tools without automatic conversation re
   assert.match(main, /resumed conversation only has the legacy world_command schema, use its existing build variant/);
   assert.match(main, /Never invoke an unavailable tool or create a new conversation automatically/);
   assert.match(main, /Confirm construction only from a successful server result containing the created object/);
+});
+
+function goalContextRendererHarness() {
+  const h = rendererHarness();
+  h.run("let agentControlState = null, goalMessageContextId = 'goal-1', settings = { threadId: 'saved', agentControlThreadId: 'saved', agentModelId: '', agentEffort: '' }; function populateAgentEfforts() {} function updateAgentControlButtons() {}");
+  h.load('function renderAgentControls(state) {', 'async function refreshAgentControls() {');
+  return h;
+}
+test('a completed native Goal no longer tags later assistant messages as Goal updates', () => {
+  const h = goalContextRendererHarness();
+  h.run(`renderAgentControls({
+    threadId: 'saved', threadStatus: 'idle', pendingApprovals: 0, turnId: null,
+    runtime: null, currentModel: null, currentEffort: null, goalSupported: true,
+    models: [], goal: { id: 'goal-1', status: 'completed', objective: 'Build the test object' },
+  })`);
+  assert.equal(h.run('goalMessageContextId'), null);
+});
+
+function goalNotificationRendererHarness() {
+  const h = rendererHarness();
+  h.run("let settings = { threadId: 'saved' }, agentControlState = { goal: { id: 'goal-1', status: 'active' } }, goalMessageContextId = 'goal-1'; function addMessage() {} function refreshAgentControls() {} function notificationActivity() {} function updateChatControls() {}");
+  h.load('function codexEvent(event) {', 'try { initScene(); }');
+  return h;
+}
+test('a completed Goal notification immediately clears Goal message context', () => {
+  const h = goalNotificationRendererHarness();
+  h.run(`codexEvent({ type: 'notification', method: 'thread/goal/updated', params: {
+    threadId: 'saved', goal: { id: 'goal-1', status: 'completed' },
+  } })`);
+  assert.equal(h.run('goalMessageContextId'), null);
 });

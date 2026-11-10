@@ -6,6 +6,7 @@ import { isAbsolute } from 'node:path';
 
 const MAX_LINE = 8 * 1024 * 1024;
 const active = (thread) => thread?.status?.type === 'active';
+const GAME_DEVELOPER_INSTRUCTIONS = "You are the player's companion in The Unfinished Shapes. For requests about the game world, call world_state before changing the world and use the returned state. Do not use terminal, shell, or file tools for game-world-only requests. Use project-code tools only when the player explicitly asks you to inspect or change project code, and keep the configured approval policy. Report game changes only after successful game-tool results.";
 
 const positionSchema = { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, required: ['x', 'y', 'z'], additionalProperties: false };
 export const WORLD_TOOLS = [
@@ -53,6 +54,8 @@ export class CodexBridge extends EventEmitter {
     this.threadId = null;
     this.turnId = null;
     this.sending = false;
+    this.serverInfo = null;
+    this.goalOperation = false;
   }
 
   async start({ codexPath, workspacePath, threadId, env = {}, newGameThread = false } = {}) {
@@ -95,7 +98,8 @@ export class CodexBridge extends EventEmitter {
       child.stdin.on('error', () => { if (this.process === child) this.fail(new Error('Codex input stream closed.')); });
       child.on('error', () => { if (this.process === child) this.fail(new Error('Could not start the Codex executable.')); });
       child.on('exit', (code) => { if (this.process === child) this.fail(new Error(`Codex exited (${code ?? 'signal'}).`)); });
-      await this.request('initialize', { clientInfo: { name: 'the_unfinished_shapes', title: 'The Unfinished Shapes', version: '0.1.0-rc.3' }, capabilities: { experimentalApi: true } });
+      const initialized = await this.request('initialize', { clientInfo: { name: 'the_unfinished_shapes', title: 'The Unfinished Shapes', version: '0.1.0-rc.3' }, capabilities: { experimentalApi: true } });
+      this.serverInfo = initialized.serverInfo ?? null;
       this.write({ method: 'initialized', params: {} });
       let selected;
       if (threadId && !newGameThread) {
@@ -116,12 +120,23 @@ export class CodexBridge extends EventEmitter {
         if (selected) throw new Error('An existing conversation cannot gain game tools. Select New game conversation explicitly; the original conversation will be preserved.');
       }
       const result = selected
-        ? await this.request('thread/resume', { threadId: selected.id, excludeTurns: true, cwd: this.workspacePath, sandbox: 'workspace-write', approvalPolicy: 'on-request' })
-        : await this.request('thread/start', { dynamicTools: WORLD_TOOLS, cwd: this.workspacePath, sandbox: 'workspace-write', approvalPolicy: 'on-request' });
+        ? await this.request('thread/resume', { threadId: selected.id, excludeTurns: true, cwd: this.workspacePath, sandbox: 'workspace-write', approvalPolicy: 'on-request', developerInstructions: GAME_DEVELOPER_INSTRUCTIONS })
+        : await this.request('thread/start', { dynamicTools: WORLD_TOOLS, cwd: this.workspacePath, sandbox: 'workspace-write', approvalPolicy: 'on-request', developerInstructions: GAME_DEVELOPER_INSTRUCTIONS });
       if (!result.thread?.id) throw new Error('Codex did not return a conversation ID.');
       if (active(result.thread)) throw new Error('Conversation became active; not taking over its turn.');
       this.threadId = result.thread.id;
+      const context = this.controlContext();
+      let history;
+      if (selected) {
+        try { history = await this.readThreadHistory(context); }
+        catch {
+          this.assertControlContext(context);
+          history = null;
+        }
+      }
+      this.assertControlContext(context);
       this.emit('event', { type: 'connected', threadId: this.threadId, workspacePath: this.workspacePath, resumed: Boolean(selected) });
+      if (selected) this.emit('event', { type: 'history', threadId: this.threadId, available: history !== null, messages: history ?? [] });
       return { threadId: this.threadId, workspacePath: this.workspacePath, resumed: Boolean(selected), thread: result.thread };
     } catch (error) {
       this.stop();
@@ -129,18 +144,166 @@ export class CodexBridge extends EventEmitter {
     } finally { this.starting = false; }
   }
 
-  async send(text) {
+  async readThreadHistory(context) {
+    const messages = [], seen = new Set();
+    let cursor = null;
+    do {
+      const page = await this.request('thread/items/list', {
+        threadId: context.threadId, limit: 100, sortDirection: 'asc', ...(cursor ? { cursor } : {}),
+      });
+      this.assertControlContext(context);
+      if (!Array.isArray(page.data)) throw new Error('Codex returned an invalid conversation history page.');
+      for (const row of page.data) {
+        const item = row?.item;
+        if (item?.type === 'userMessage' && Array.isArray(item.content)) {
+          const text = item.content.filter(part => part?.type === 'text' && typeof part.text === 'string').map(part => part.text).join('');
+          if (text.trim()) messages.push({ role: 'user', text });
+        } else if (item?.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim()) {
+          messages.push({ role: 'assistant', text: item.text });
+        }
+      }
+      cursor = page.nextCursor ?? null;
+      if (cursor !== null && typeof cursor !== 'string') throw new Error('Codex returned an invalid conversation history cursor.');
+      if (cursor && seen.has(cursor)) throw new Error('Codex returned a repeating history cursor.');
+      if (cursor) seen.add(cursor);
+    } while (cursor);
+    return messages;
+  }
+
+  async send(text, options = {}) {
     if (!this.threadId || !this.process) throw new Error('Connect Codex first.');
     if (typeof text !== 'string' || !text.trim() || text.length > 100_000) throw new Error('Enter a message of 1–100,000 characters.');
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !['model', 'effort'].includes(key))) throw new Error('Invalid model options.');
+    const { model, effort } = options;
+    if (model !== undefined && (typeof model !== 'string' || !model.trim() || model.length > 256)) throw new Error('Invalid model selection.');
+    if (effort !== undefined && (typeof effort !== 'string' || !effort.trim() || effort.length > 64 || model === undefined)) throw new Error('Invalid reasoning effort.');
     if (this.turnId || this.sending) throw new Error('A turn is already running.');
     this.sending = true;
     try {
-      const result = await this.request('turn/start', { threadId: this.threadId, input: [{ type: 'text', text, text_elements: [] }] });
+      const context = this.controlContext();
+      if (model !== undefined) {
+        const catalog = await this.request('model/list', {});
+        this.assertControlContext(context);
+        const selected = Array.isArray(catalog.data) ? catalog.data.find(item => item.id === model) : null;
+        if (!selected) throw new Error('The selected model is not available in the current Codex model catalog.');
+        if (effort !== undefined) {
+          const supported = (selected.supportedReasoningEfforts ?? []).map(item => typeof item === 'string' ? item : item.reasoningEffort);
+          if (!supported.includes(effort)) throw new Error('The selected reasoning effort is not supported by this model.');
+        }
+      }
+      this.assertControlContext(context);
+      const result = await this.request('turn/start', {
+        threadId: context.threadId, input: [{ type: 'text', text, text_elements: [] }],
+        ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}),
+      });
+      this.assertControlContext(context);
       if (!result.turn?.id) throw new Error('Codex did not return a turn ID.');
       // A very short turn may complete before its start response arrives.
       if (result.turn.status === 'inProgress' && this.lastCompletedTurnId !== result.turn.id) this.turnId = result.turn.id;
       return result;
     } finally { this.sending = false; }
+  }
+
+  controlContext() {
+    if (!this.threadId || !this.process) throw new Error('Connect Codex first.');
+    return { generation: this.generation, process: this.process, threadId: this.threadId };
+  }
+
+  assertControlContext(context) {
+    if (context.generation !== this.generation || context.process !== this.process || context.threadId !== this.threadId) {
+      throw new Error('Codex connection or conversation changed. Refresh agent controls.');
+    }
+  }
+
+  async goalCapability(context) {
+    try {
+      const result = await this.request('thread/goal/get', { threadId: context.threadId });
+      this.assertControlContext(context);
+      if (!result || !Object.hasOwn(result, 'goal') || (result.goal && result.goal.threadId !== context.threadId)) {
+        throw new Error('Codex returned an invalid Goal response.');
+      }
+      return { supported: true, reason: '', goal: result.goal };
+    } catch (error) {
+      this.assertControlContext(context);
+      if (error.code === -32601) return { supported: false, reason: 'Native Goals are not supported by this Codex runtime.', goal: null };
+      if (/ephemeral thread does not support goals|thread goals require a persisted thread/i.test(error.message)) {
+        return { supported: false, reason: 'This conversation cannot store native Goals.', goal: null };
+      }
+      return { supported: null, reason: 'Could not verify native Goal support.', goal: null };
+    }
+  }
+
+  async readControlState() {
+    const context = this.controlContext();
+    const [threadResult, modelsResult, capability] = await Promise.all([
+      this.request('thread/read', { threadId: context.threadId, includeTurns: false }),
+      this.request('model/list', {}),
+      this.goalCapability(context),
+    ]);
+    this.assertControlContext(context);
+    if (!threadResult.thread || threadResult.thread.id !== context.threadId) throw new Error('Codex returned a different conversation.');
+    if (!Array.isArray(modelsResult.data)) throw new Error('Codex returned an invalid model catalog.');
+    return {
+      threadId: context.threadId,
+      runtime: this.serverInfo,
+      connected: true,
+      thread: threadResult.thread,
+      models: modelsResult.data,
+      goalSupported: capability.supported,
+      goalReason: capability.reason,
+      goal: capability.goal,
+      turnId: this.turnId,
+    };
+  }
+
+  async withGoalOperation(action) {
+    if (this.goalOperation) throw new Error('A Goal operation is already in progress.');
+    const context = this.controlContext();
+    this.goalOperation = true;
+    try {
+      const capability = await this.goalCapability(context);
+      this.assertControlContext(context);
+      if (capability.supported !== true) throw new Error(capability.reason);
+      return await action(context, capability.goal);
+    } finally { this.goalOperation = false; }
+  }
+
+  async createGoal({ objective, completionCriteria } = {}) {
+    if (typeof objective !== 'string' || !objective.trim() || objective.length > 10_000 ||
+        typeof completionCriteria !== 'string' || !completionCriteria.trim() || completionCriteria.length > 10_000) {
+      throw new Error('Enter a Goal objective and completion criterion.');
+    }
+    return this.withGoalOperation(async (context, goal) => {
+      if (goal) throw new Error('A native Goal already exists for this conversation.');
+      const result = await this.request('thread/goal/set', {
+        threadId: context.threadId, origin: 'user', status: 'active',
+        objective: `${objective.trim()}\n\nCompletion criteria: ${completionCriteria.trim()}`,
+      });
+      this.assertControlContext(context);
+      return result.goal ?? null;
+    });
+  }
+
+  async setGoalStatus(status) {
+    if (!['active', 'paused'].includes(status)) throw new Error('Invalid native Goal status.');
+    return this.withGoalOperation(async (context, goal) => {
+      if (!goal) throw new Error('There is no native Goal for this conversation.');
+      const result = await this.request('thread/goal/set', { threadId: context.threadId, origin: 'user', status });
+      this.assertControlContext(context);
+      return result.goal ?? null;
+    });
+  }
+
+  pauseGoal() { return this.setGoalStatus('paused'); }
+  resumeGoal() { return this.setGoalStatus('active'); }
+
+  async clearGoal() {
+    return this.withGoalOperation(async (context, goal) => {
+      if (!goal) throw new Error('There is no native Goal for this conversation.');
+      const result = await this.request('thread/goal/clear', { threadId: context.threadId, origin: 'user' });
+      this.assertControlContext(context);
+      return result;
+    });
   }
 
   async interrupt() {
@@ -206,7 +369,11 @@ export class CodexBridge extends EventEmitter {
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pending.delete(message.id);
-    if (message.error) pending.reject(new Error(`Codex request failed (${message.error.code ?? 'unknown'}): ${message.error.message ?? 'Unknown error'}`));
+    if (message.error) {
+      const error = new Error(`Codex request failed (${message.error.code ?? 'unknown'}): ${message.error.message ?? 'Unknown error'}`);
+      error.code = message.error.code;
+      pending.reject(error);
+    }
     else if ('result' in message) pending.resolve(message.result);
     else pending.reject(new Error('Codex response has no result.'));
   }
@@ -222,6 +389,7 @@ export class CodexBridge extends EventEmitter {
     this.process = null;
     this.threadId = null;
     this.turnId = null;
+    this.serverInfo = null;
     this.approvals.clear();
     for (const { reject, timer } of this.pending.values()) { clearTimeout(timer); reject(error); }
     this.pending.clear();

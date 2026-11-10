@@ -7,3 +7,26 @@
 .build-panel{max-height:calc(100vh - 175px);overflow-y:auto;scrollbar-width:thin}#edit-form fieldset{border:0;padding:0;margin:12px 0 0}#edit-form legend{font:9px monospace;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;margin:10px 0 3px}.vector-fields{display:flex;gap:6px;margin:0 0 9px}.vector-fields label{min-width:0;flex:1}.vector-fields input{padding:7px 4px;font-size:11px}.color-field{display:flex;align-items:center;justify-content:space-between}.color-field input{width:48px;height:30px;padding:2px}.edit-actions{display:flex;gap:5px;margin-top:11px}.edit-actions .primary{font-size:10px;justify-content:center}.edit-actions .quiet{font-size:10px}.activity-panel{font-size:10px;border-bottom:1px solid #45524f;padding:11px 0;max-height:210px;overflow:auto;flex-shrink:0;scrollbar-width:thin}.activity-panel summary{cursor:pointer;color:#d7dfd3;font-weight:600}.activity-panel summary span{float:right;color:var(--amber);font-weight:400}.activity-intent{margin:8px 0;color:#d8d4bb;overflow-wrap:anywhere}.activity-list,#agent-plan{padding-left:18px;margin:8px 0}.activity-list li,#agent-plan li{margin:5px 0;overflow-wrap:anywhere}.activity-list li[data-status="failed"]{color:#efb39c}.activity-list li[data-status="completed"]{color:#b4d5b8}#agent-stop-reason{margin:9px 0;color:#c6d2c9;overflow-wrap:anywhere}.activity-panel small{display:block;color:#869b90;font-size:9px}
 
 .physics-options{display:grid;gap:7px;margin-top:9px}
+
+#agent-controls-open{padding:6px 8px;font-size:9px}
+#agent-controls{width:600px;max-width:95vw;max-height:90vh;overflow:auto}
+.agent-controls-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.agent-controls-head h2{margin-bottom:4px}
+.agent-control-section{border-top:1px solid #45524f;padding-top:12px;margin-top:14px}
+.agent-control-section h3{font-size:13px;font-weight:500;margin:0 0 8px}
+.agent-control-status{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px;margin:10px 0}
+.agent-control-status div{min-width:0}.agent-control-status dt{font-size:9px;color:var(--muted)}.agent-control-status dd{margin:2px 0 0;font-size:11px;overflow-wrap:anywhere}
+#agent-controls select{width:100%;margin-top:5px;background:#111b1f;border:1px solid #465052;color:var(--paper);border-radius:4px;padding:9px}
+#agent-controls textarea{min-height:54px}
+#agent-controls .check-label{margin:12px 0;line-height:1.4}
+.active-goal{border-left:2px solid var(--amber);padding:7px 10px;margin:10px 0;background:#293738}
+.active-goal strong{font-size:11px;color:var(--amber)}.active-goal p{margin:5px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}
+.goal-actions{display:flex;gap:6px;margin-top:8px}.goal-actions button{flex:1;font-size:10px;padding:7px 5px}
+#agent-controls .danger{color:#efb39c}
+.goal-message-label{display:block;font:9px monospace;letter-spacing:.08em;color:var(--amber);margin-bottom:4px;text-transform:uppercase}
+.chat-message.goal{border-left:2px solid #d5b36f;padding-left:8px}
+
+.agent-goal-summary{border:1px solid #8b784e;border-radius:6px;padding:9px;margin:10px 0;background:#2d352f}
+.agent-goal-summary strong{font-size:10px;color:var(--amber)}
+.agent-goal-summary p{font-size:10px;line-height:1.4;max-height:3.8em;overflow:hidden;margin:4px 0 7px;white-space:pre-wrap;overflow-wrap:anywhere}
+.agent-goal-summary button{padding:5px 8px}

@@ -28,6 +28,23 @@ assert.ok(timeoutMs>=1000 && timeoutMs<=600000,'Timeout must be 1–600 seconds.
 const hash=createHash('sha256');
 for await(const chunk of createReadStream(modelPath))hash.update(chunk);
 const modelDigest=hash.digest('hex');
+async function interruptAndWaitForTurn(bridge, turnId) {
+ if (!turnId) return;
+ let timer, listener;
+ const completed = new Promise((resolve, reject) => {
+  const finish = error => { clearTimeout(timer); bridge.off('event', listener); error ? reject(error) : resolve(); };
+  listener = event => {
+   if (event.type === 'disconnected') finish(new Error(event.message));
+   if (event.type === 'notification' && event.method === 'turn/completed' && event.params?.turn?.id === turnId) finish();
+  };
+  timer = setTimeout(() => finish(new Error(`Timed out waiting for turn ${turnId} to stop.`)), 30000);
+  bridge.on('event', listener);
+  if (bridge.lastCompletedTurnId === turnId && !bridge.turnId) finish();
+ });
+ try { await bridge.interrupt(); await completed; }
+ finally { clearTimeout(timer); bridge.off('event', listener); }
+}
+
 const dir=await mkdtemp(path.join(tmpdir(),'tus-local-e2e-'));
 const workspace=path.join(dir,'workspace'),home=path.join(dir,'codex-home');
 await mkdir(workspace,{mode:0o700});await mkdir(home,{mode:0o700});
@@ -39,7 +56,7 @@ const cpuEvidence=createCpuEvidence();
 const diagnostics=createModelDiagnostics();
 let proxy,stage='initializing';
 const events=[];const started=Date.now();let failure;
-let assistantText='',turnStatus='not_started';
+let assistantText='',turnStatus='not_started',goalAcceptance=null,goalUpdates=[],goalCleared=false,historyEvents=[],turnStartedCount=0,goalResumeAcceptance=null;
 try {
  modelProcess=spawn(llamaPath,['--model',modelPath,'--alias',model,'--host','127.0.0.1','--port','11445','--n-gpu-layers','0','--ctx-size','16384','--threads','4','--parallel','1','--jinja','--reasoning-budget','0','--temp','0','--seed','42','--log-verbosity','4','--log-colors','off'],{stdio:['ignore','pipe','pipe']});
  let modelExit;
@@ -95,7 +112,10 @@ try {
   } else if(event.type==='approval') {
    rejectDone(new Error(`Live model requested unexpected approval: ${event.method}`));
   } else if(event.type==='disconnected') rejectDone(new Error(event.message));
-  else if(event.type==='notification' && event.method==='turn/started') {turnStatus=event.params?.turn?.status ?? 'inProgress';stage='turn_started';}
+  else if(event.type==='notification' && event.method==='thread/goal/updated') goalUpdates.push({threadId:event.params?.threadId,status:event.params?.goal?.status});
+  else if(event.type==='notification' && event.method==='thread/goal/cleared') goalCleared=true;
+  else if(event.type==='history') historyEvents.push(event);
+  else if(event.type==='notification' && event.method==='turn/started') {turnStartedCount++;turnStatus=event.params?.turn?.status ?? 'inProgress';stage='turn_started';}
   else if(event.type==='notification' && event.method==='item/completed' && event.params?.item?.type==='agentMessage') {
    // Only synthetic test assistant output, never reasoning or arbitrary tool output.
    assistantText=String(event.params.item.text ?? '').replaceAll(token,'[redacted]').slice(0,4000);
@@ -106,27 +126,67 @@ try {
  });
  stage='connecting_codex';
  await bridge.start({codexPath,workspacePath:workspace,newGameThread:true});
- stage='codex_connected';
+ stage='native_goal_lifecycle';
  timer=setTimeout(()=>rejectDone(new Error('Local model E2E exceeded its time budget.')),timeoutMs);
+ const initialControls=await bridge.readControlState();
+ assert.equal(initialControls.goalSupported,true,'the pinned Codex app-server must expose native Goals');
+ assert.equal(initialControls.goal,null,'a new game conversation must start without a Goal');
  const design={objectType:'block',position:{x:3,y:1,z:4},size:{x:2,y:2,z:2},color:'#3366cc'};
- await bridge.send(`First call world_state to inspect the shared world. Then build this supplied design in the game. Call world_build exactly once with these exact JSON arguments: ${JSON.stringify(design)}. Use world_build, not world_command; the latter moves players or edits existing objects. Do not call shell tools, write code, or change the design. After world_build succeeds, say done. /no_think`);
- stage='turn_request_accepted';
+ const objective=`Build exactly one block matching this design: ${JSON.stringify(design)}. First call world_state once, then call world_build once with these exact arguments. After the server confirms the build, report briefly.`;
+ const completionCriteria='Exactly one object matching the supplied design is persisted and visible to another player.';
+ const createdGoal=await bridge.createGoal({objective,completionCriteria});
+ assert.equal(createdGoal.threadId,initialControls.threadId);
+ assert.equal(createdGoal.status,'active');
+ assert.ok(createdGoal.objective.includes(`Completion criteria: ${completionCriteria}`));
+ assert.equal((await bridge.readControlState()).goal.status,'active');
  await done;
  stage='turn_completed';
+ assert.equal(turnStatus,'completed');
+ assert.ok(goalUpdates.some(update=>update.threadId===initialControls.threadId&&update.status==='active'),'native Goal updates must be emitted for the active thread');
+ await bridge.pauseGoal();
+ const followupTurnId=bridge.turnId;
+ if(followupTurnId)await interruptAndWaitForTurn(bridge,followupTurnId);
+ const pausedState=await bridge.readControlState();
+ assert.equal(pausedState.goal.status,'paused');
+ assert.equal(pausedState.thread.status.type,'idle','pause plus stopping the current turn must leave the conversation idle');
+ assert.equal(bridge.turnId,null,'no native turn may remain active before clearing the Goal');
+ const threadId=initialControls.threadId, turnCountBeforeResume=turnStartedCount;
+ bridge.stop();
+ stage='codex_restart_resume_paused_goal';
+ await bridge.start({codexPath,workspacePath:workspace,threadId});
+ const resumedState=await bridge.readControlState();
+ assert.equal(resumedState.thread.id,threadId,'restart must resume the same Codex conversation');
+ assert.equal(resumedState.thread.status.type,'idle','resume must not start a hidden turn');
+ assert.equal(resumedState.goal.status,'paused','native Goal state must survive app-server restart');
+ assert.equal(bridge.turnId,null,'resume must not create a second turn');
+ assert.equal(turnStartedCount,turnCountBeforeResume,'resume must not start another turn');
+ const restoredHistory=historyEvents.at(-1);
+ assert.equal(restoredHistory?.threadId,threadId);
+ assert.equal(restoredHistory?.available,true,'saved native conversation history must be restored');
+ assert.ok(restoredHistory.messages.length>0,'resumed history must contain prior conversation messages');
+ goalResumeAcceptance={threadId,goalStatus:resumedState.goal.status,threadStatus:resumedState.thread.status.type,historyMessages:restoredHistory.messages.length,turnStartedCount};
+ await bridge.clearGoal();
+ assert.equal((await bridge.readControlState()).goal,null);
+ assert.equal(bridge.turnId,null,'native Goal acceptance must not leave an active follow-up turn after pause and clear');
+ assert.ok(['completed','interrupted'].includes(turnStatus),'native Goal acceptance must finish without a hidden follow-up turn');
+ assert.ok(goalUpdates.some(update=>update.status==='paused'),'pausing the Goal must emit its native status update');
+ assert.equal(goalCleared,true,'clearing the Goal must emit the native cleared notification');
+ stage='native_goal_lifecycle_verified';
+ goalAcceptance={supported:true,lifecycle:['created_active','native_turn_completed','paused',...(followupTurnId?['followup_turn_interrupted']:[]),'cleared'],modelTurnStarted:true,followupTurnInterrupted:Boolean(followupTurnId),finalTurnStatus:turnStatus,goalUpdates,runtime:initialControls.runtime};
  let savedWorld;
  try {savedWorld=await readFile(path.join(dir,'world.json'),'utf8');}
  catch(error){if(error.code!=='ENOENT')throw error;}
  assert.ok(savedWorld,'No world state was persisted: the model did not perform a successful game action.');
  const state=JSON.parse(savedWorld);
  const acceptance=assertBuildAcceptance({events,state,design,ownerId:'cpu-test-builder'});
- assert.ok(events.some(event=>event.name==='world_state' && event.success), 'real agent must inspect the world');
+ const worldInspectionIndex=events.findIndex(event=>event.name==='world_state'&&event.success);const buildIndex=events.findIndex(event=>event.name==='world_build'&&event.success);assert.ok(worldInspectionIndex>=0,'real agent must inspect the world');assert.ok(worldInspectionIndex<buildIndex,'real agent must inspect the world before changing it');
  const observerResponse=await fetch(connection.url+'/state',{headers:{Authorization:'Bearer '+observerToken},signal:AbortSignal.timeout(5000)});
  assert.equal(observerResponse.status,200);
  const observerState=await observerResponse.json();
  assert.equal(observerState.me.id,'other-player');
  assert.deepEqual(observerState.objects,state.objects,'independent player sees the real agent construction');
  assert.equal(cpuEvidence.result().cpuOnly,true,'Positive CPU allocation was not observed, or GPU allocation contradicts CPU-only execution.');
- const evidence={status:'passed',acceptance,transport:'real Codex app-server → local llama.cpp Responses API → world dynamic tool → persisted server state',model,modelDigest,cpuOnly:cpuEvidence.result().cpuOnly,requestedGpuLayers:0,cpuEvidence:cpuEvidence.result(),elapsedMs:Date.now()-started,toolCalls:events,turnStatus,stage,diagnostics:diagnostics.result(),assistantText,worldRevision:state.revision,object:{type:state.objects[0].type,position:state.objects[0].position,ownerId:state.objects[0].ownerId}};
+ const evidence={status:'passed',acceptance,nativeGoal:goalAcceptance,nativeGoalResume:goalResumeAcceptance,transport:'real Codex app-server → local llama.cpp Responses API → world dynamic tool → persisted server state',model,modelDigest,cpuOnly:cpuEvidence.result().cpuOnly,requestedGpuLayers:0,cpuEvidence:cpuEvidence.result(),elapsedMs:Date.now()-started,toolCalls:events,turnStatus,stage,diagnostics:diagnostics.result(),assistantText,worldRevision:state.revision,object:{type:state.objects[0].type,position:state.objects[0].position,ownerId:state.objects[0].ownerId}};
  console.log(JSON.stringify(evidence,null,2));
  if(process.env.TUS_TEST_REPORT) await writeFile(path.resolve(process.env.TUS_TEST_REPORT),JSON.stringify(evidence,null,2)+'\n');
 } catch(error) {

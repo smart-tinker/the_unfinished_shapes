@@ -70,7 +70,7 @@ async function connect(client) {
 }
 async function launch(id) {
   const executable = process.env.TUS_SMOKE_EXECUTABLE;
-  const app = await electron.launch({ ...(executable ? { executablePath: path.resolve(executable) } : {}), args: [...(executable ? [] : ['.']), '--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader'], env: { ...process.env, TUS_DATA_DIR: path.join(dir, id) }, timeout: 30000 });
+  const app = await electron.launch({ ...(executable ? { executablePath: path.resolve(executable) } : {}), args: [...(executable ? [] : ['.']), '--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--tus-smoke-confirm-quit'], env: { ...process.env, TUS_DATA_DIR: path.join(dir, id) }, timeout: 30000 });
   const client = { id, app }; clients.push(client);
   client.page = await app.firstWindow();
   client.graphics = await observeGraphics(client.page, { label: id });
@@ -133,16 +133,6 @@ await withSmokeCleanup(async () => {
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < 14.5, 'Alice to walk back from the solid side');
   await alice.page.keyboard.up('a');
   await alice.page.waitForTimeout(300);
-  await alice.page.evaluate(() => {
-    document.activeElement?.blur();
-    window.__tusMovementKeys = [];
-    for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
-      if (['Space', 'KeyD'].includes(event.code)) window.__tusMovementKeys.push({ type, code: event.code, target: event.target?.tagName, focused: document.hasFocus(), active: document.activeElement?.tagName, at: Math.round(performance.now()) });
-    }, true);
-    for (const type of ['focus', 'blur']) window.addEventListener(type, event => {
-      window.__tusMovementKeys.push({ type, target: event.target?.tagName, focused: document.hasFocus(), at: Math.round(performance.now()) });
-    }, true);
-  });
   await focus(alice);
   await alice.page.keyboard.down('d');
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 14.68, 'Alice to reach the solid face');
@@ -151,21 +141,14 @@ await withSmokeCleanup(async () => {
     const player = snapshot.players.find(item => item.id === 'alice');
     return player?.position.y > 0 && player.velocityY > 0;
   }, 'the server to accept the jump while Alice is ascending');
-  const jumpTimeline = [];
-  for (let i = 0; i < 12; i++) {
-    await alice.page.waitForTimeout(100);
-    const snapshot = await state(), player = snapshot.players.find(item => item.id === 'alice');
-    jumpTimeline.push({ server: player && { position: player.position, velocityY: player.velocityY }, client: await alice.page.locator('#coordinates').textContent(), focus: await alice.page.evaluate(() => ({ focused: document.hasFocus(), visibility: document.visibilityState, active: document.activeElement?.tagName })) });
-    if (player?.position.x > 14.68 && player.position.y > 0) break;
-  }
-  console.log('Movement probe ' + JSON.stringify({ keys: await alice.page.evaluate(() => window.__tusMovementKeys), timeline: jumpTimeline }));
   await alice.page.keyboard.up('Space');
-  await waitForState(snapshot => {
-    const player = snapshot.players.find(item => item.id === 'alice');
-    return player?.position.x > 14.68 && player.position.y > 0;
-  }, 'Alice to steer over the supported edge while airborne');
-  const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
+  await alice.page.waitForFunction(() => {
+    const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
+    const x = Number(xPart?.slice(2)), y = Number(yPart?.slice(2));
+    return x >= 15 && x <= 16.2 && y > 0;
+  }, undefined, { polling: 'raf', timeout: 5000 });
   await alice.page.keyboard.up('d');
+  const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('Y 2.0'), undefined, { timeout: 5000 });

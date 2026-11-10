@@ -196,3 +196,4 @@ test('initial GL snapshot is captured while healthy before later loss', async ()
   await assert.rejects(graphics.assertHealthy(), /WebGL context must remain healthy/);
   assert.equal(initial.state.available, true);
 });
+

@@ -1,6 +1,6 @@
 import {_electron as electron} from 'playwright-core';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,mkdir,writeFile,access,realpath} from 'node:fs/promises';
+import {mkdtemp,rm,mkdir,writeFile,access,realpath,readFile} from 'node:fs/promises';
 import os from 'node:os';
 import {observeGraphics,closeSmokeApp,withSmokeCleanup} from './graphics-smoke.mjs';
 import path from 'node:path';
@@ -15,7 +15,7 @@ const packagedExecutable=process.env.TUS_SMOKE_EXECUTABLE;
 // Headless Linux runners use explicit SwiftShader to avoid unstable automatic fallback.
 // These flags apply only to smoke launches, never to normal application startup.
 const ciFlags=process.platform==='linux'?['--no-sandbox','--use-gl=angle','--use-angle=swiftshader']:[];
-const launchOptions={...(packagedExecutable?{executablePath:path.resolve(packagedExecutable)}:{}),args:[...(packagedExecutable?[]:['.']),...ciFlags],env:testEnv,timeout:30000};
+const launchOptions={...(packagedExecutable?{executablePath:path.resolve(packagedExecutable)}:{}),args:[...(packagedExecutable?[]:['.']),...ciFlags,'--tus-smoke-confirm-quit'],env:testEnv,timeout:30000};
 let app, graphics, gpu;
 async function launch(label) {
  gpu=await createGpuDiagnostics(label);
@@ -34,6 +34,27 @@ await withSmokeCleanup(async()=>{
  graphics.phase('world connection');
  await page.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'));
  await graphics.assertHealthy();
+ const windowSize=await app.evaluate(({BrowserWindow})=>{const win=BrowserWindow.getAllWindows()[0];win.setSize(1000,700);return win.getSize();});
+ assert.deepEqual(windowSize,[1000,700],'the supported minimum window size can be selected');
+ await page.waitForFunction(()=>innerWidth<=1000&&innerHeight<=700);
+ graphics.phase('agent controls at minimum size, disconnected state, focus and keyboard');
+ const beforeControlsPosition=await page.locator('#coordinates').innerText();
+ await page.locator('#agent-controls-open').click();
+ const controls=page.locator('#agent-controls');
+ assert.equal(await controls.isVisible(),true,'agent controls open from the game panel');
+ const [bounds,viewport]=await Promise.all([controls.boundingBox(),page.evaluate(()=>({width:innerWidth,height:innerHeight}))]);
+ assert.ok(bounds&&bounds.x>=0&&bounds.y>=0&&bounds.x+bounds.width<=viewport.width&&bounds.y+bounds.height<=viewport.height,'agent controls fit in the minimum window');
+ await page.waitForFunction(()=>document.querySelector('#agent-controls').contains(document.activeElement),'', {timeout:5000});
+ assert.match(await page.locator('#agent-controls-status').innerText(),/disconnected/i);
+ assert.equal(await page.locator('#goal-create').isDisabled(),true,'a disconnected Codex cannot start a Goal');
+ await page.keyboard.down('w'); await page.waitForTimeout(400); await page.keyboard.up('w');
+ assert.equal(await page.locator('#coordinates').innerText(),beforeControlsPosition,'WASD movement is frozen while the agent controls dialog is open');
+ await page.keyboard.press('Escape');
+ assert.equal(await controls.isVisible(),false,'Escape closes controls without a mutation');
+ await page.locator('#agent-controls-open').click();
+ assert.equal(await controls.isVisible(),true,'agent controls can be reopened after Escape');
+ await page.keyboard.press('Escape');
+ await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(1440,940));
  graphics.phase('manual UI create, select, edit and remove');
  await manualEditing(page);
  graphics.phase('construction');
@@ -54,6 +75,7 @@ await withSmokeCleanup(async()=>{
  await page.waitForFunction(()=>document.querySelector('#settings-message')?.textContent.includes('saved'));
  await page.locator('#settings-close').click();
  await page.evaluate(async()=>{const s=await window.tus.loadSettings();await window.tus.saveSettings({...s,threadId:'smoke-preserved-game-thread'});});
+ await page.evaluate(async()=>{const s=await window.tus.loadSettings();await window.tus.saveSettings({...s,agentControlThreadId:s.threadId,agentModelId:'qwen3-local-cpu',agentEffort:'medium'});});
  await assert.rejects(access(marker),'search must not execute discovered files');
  graphics.phase('screenshot');
  await mkdir('dist',{recursive:true});await page.screenshot({path:'dist/desktop-smoke.png'});
@@ -63,7 +85,8 @@ await withSmokeCleanup(async()=>{
  graphics.phase('restart persistence');
  state=await reopened.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
  assert.equal(state.objects.length,1,'world survives desktop restart');
- const restored=await reopened.evaluate(()=>window.tus.loadSettings());assert.equal(restored.codexPath,expectedCodexPath);assert.equal(restored.workspacePath,dir);assert.equal(restored.threadId,'smoke-preserved-game-thread');
+ const restored=await reopened.evaluate(()=>window.tus.loadSettings());assert.equal(restored.codexPath,expectedCodexPath);assert.equal(restored.workspacePath,dir);assert.equal(restored.threadId,'smoke-preserved-game-thread');assert.equal(restored.agentControlThreadId,'smoke-preserved-game-thread');assert.equal(restored.agentModelId,'qwen3-local-cpu');assert.equal(restored.agentEffort,'medium');
+ const persisted=JSON.parse(await readFile(path.join(dir,'settings.json'),'utf8'));assert.equal(persisted.agentModelId,'qwen3-local-cpu');assert.equal(persisted.agentEffort,'medium');assert.equal('token' in persisted,false);
  graphics.phase('authenticated removal');
  // Removal below exercises the authenticated command API, not canvas selection or the Remove button.
  await reopened.evaluate(async id=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/command',method:'POST',body:{type:'remove',id}});},state.objects[0].id);
