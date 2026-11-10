@@ -145,8 +145,8 @@ export function movePlayer(world, current, command, deltaSeconds = 0.25) {
     if (grounded && velocityY === 0) {
       const surface = reachableSurfaceAt(objects, position.x, position.z, position.y);
       if (surface !== null) {
-        const ceiling = surface > position.y + EPSILON ? ceilingAt(objects, position.x, position.z, position.y, surface) : null;
-        if (ceiling !== null && surface > ceiling + EPSILON) {
+        if (surface > position.y + EPSILON && objects.some(object =>
+          object.blocksMovement && overlapsTop(object, position.x, position.z) && intersectsVertically(object, surface))) {
           position.x = previousX; position.z = previousZ; continue;
         }
         position.y = surface; continue;
