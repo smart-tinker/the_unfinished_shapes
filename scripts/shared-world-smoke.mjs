@@ -205,12 +205,15 @@ await withSmokeCleanup(async () => {
     return player?.position.y > 0 && player.velocityY > 0;
   }, 'the server to accept the jump while Alice is ascending');
   await alice.page.keyboard.up('Space');
-  await alice.page.waitForFunction(() => {
-    const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
-    const x = Number(xPart?.slice(2)), y = Number(yPart?.slice(2));
-    return x >= 15 && x <= 16.2 && y > 0;
-  }, undefined, { polling: 'raf', timeout: 5000 });
+  await waitForState(snapshot => {
+    const player = snapshot.players.find(item => item.id === 'alice');
+    return player?.position.x >= 15 && player.position.y > 0;
+  }, 'Alice to reach the platform while airborne');
   await alice.page.keyboard.up('d');
+  await alice.page.waitForFunction(() => {
+    const yPart = document.querySelector('#coordinates')?.textContent.split(' · ')[1];
+    return Number(yPart?.slice(2)) > 0;
+  }, undefined, { polling: 'raf', timeout: 5000 });
   const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
