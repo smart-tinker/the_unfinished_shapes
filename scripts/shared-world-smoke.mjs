@@ -216,6 +216,8 @@ await withSmokeCleanup(async () => {
   await alice.page.locator('#move-grid-step').fill('0.5');
   await alice.page.locator('#move-plane').selectOption('x');
   const firstDrag = await dragObjectTo(alice.page, built, { x: 20.2, y: 1, z: 0 }, true);
+  assert.equal(firstDrag.startTarget.canvasTarget, true, 'drag begins on a world object in the canvas');
+  assert.equal(firstDrag.endTarget.canvasTarget, false, 'drag continues to a target covered by the UI');
   await waitForMovePreview(alice.page, firstDrag);
   assert.deepEqual(await alice.page.locator('#edit-position-x').inputValue().then(async x => ({ x: Number(x), y: Number(await alice.page.locator('#edit-position-y').inputValue()), z: Number(await alice.page.locator('#edit-position-z').inputValue()) })), { x: 20, y: 1, z: 0 }, 'the visible 0.5 grid snaps an X-axis drag without changing other coordinates');
   const previewState = await state();

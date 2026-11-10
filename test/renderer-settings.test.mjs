@@ -9,7 +9,7 @@ function settingsHarness(controlState) {
   h.run(`let settings = { workspacePath: '/old-workspace', codexPath: '/codex', serverUrl: 'http://world-a', token: 'session-token', threadId: 'game-thread' };
 let connected = true, busy = false, settingsGeneration = 0, worldRevision = 1, objectSnapshot = '', worldState = {}, meId = 'player';
 let playerPosition = { x: 1, y: 0, z: 1 }, playerVelocityY = 0, jumpRequested = false, lastPosition = '', latestStateRevision = 1, localMovementVersion = 0;
-let scene = null, calls = [], moveStarts = new Map(), movePreview = null, dragCandidate = null, cancelCount = 0, inspectorDirty = false;
+let scene = null, calls = [], moveStarts = new Map(), movePreview = null, dragCandidate = null, cancelCount = 0, inspectorDirty = false, editing = false;
 function cancelMovePreview() { movePreview = null; dragCandidate = null; cancelCount++; }
 const liveControls = ${state};
 const bridge = {
@@ -26,6 +26,14 @@ async function poll() { calls.push('poll'); }`);
   h.element('token').value = 'session-token';
   return h;
 }
+
+test('connection settings cannot switch worlds while an object update is pending', async () => {
+  const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'idle', turnId: null, pendingApprovals: 0, goalSupported: true, goal: null });
+  h.run('editing = true');
+  await assert.rejects(h.run('saveSettings()'), /object update|Apply|finish/i);
+  assert.equal(h.run('JSON.stringify(calls)'), '[]', 'the pending Apply is not disconnected or abandoned');
+  assert.equal(h.run('settings.workspacePath'), '/old-workspace');
+});
 
 test('changing workspace is blocked while a native Goal is active', async () => {
   const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'idle', turnId: null, goalSupported: true, pendingApprovals: 0, goal: { id: 'goal-1', status: 'active' } });

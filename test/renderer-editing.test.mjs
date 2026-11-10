@@ -168,6 +168,42 @@ test('a lost update response is confirmed from server state without retrying', a
   assert.match(h.element('edit-message').textContent, /no retry was sent/i);
 });
 
+test('a permission change during drag disposes the preview and disables editing', () => {
+  const h = editingHarness();
+  let disposed = 0, removed = false;
+  const ghost = {
+    geometry: { dispose() { disposed++; } },
+    material: { dispose() { disposed++; } },
+    traverse(callback) { callback(this); },
+  };
+  h.context.scene = { remove: mesh => { removed = mesh === ghost; } };
+  h.context.controls = { enabled: false };
+  loadObjectDrag(h);
+  h.run(`let objectSnapshot = JSON.stringify([objectFixture]), latestStateRevision = 1, worldRevision = 1, worldState = {},
+    localMovementVersion = 0, moveRunning = false, playerPosition = {x:0,y:0,z:0}, playerVelocityY = 0,
+    lastPosition = '0,0,0', otherPlayers = new Map();
+    function positionKey(p) { return [p.x,p.y,p.z].join(','); }
+    dragCandidate = { pointerId: 7, objectId: 'shape-1', started: true, ghost, previewPosition: {x:1,y:1,z:0} };
+    $('move-preview-status').hidden = false; $('move-cancel').hidden = false;`);
+  h.load('function renderWorld(state,', 'async function poll() {');
+  const state = {
+    revision: 2,
+    me: { id: 'alice', role: 'viewer' },
+    players: [{ id: 'alice', position: { x: 0, y: 0, z: 0 }, velocityY: 0 }],
+    objects: [h.context.objectFixture],
+  };
+  h.run(`renderWorld(${JSON.stringify(state)})`);
+  assert.equal(h.run('dragCandidate'), null);
+  assert.equal(disposed, 2);
+  assert.equal(removed, true);
+  assert.equal(h.context.controls.enabled, true);
+  assert.equal(h.element('move-preview-status').hidden, true);
+  assert.equal(h.element('move-cancel').hidden, true);
+  assert.equal(h.element('edit-fields').disabled, true);
+  assert.equal(h.element('remove').disabled, true);
+  assert.match(h.element('edit-message').textContent, /permission/i);
+});
+
 test('object dragging captures the pointer and suspends camera controls', () => {
   const h = editingHarness();
   h.context.capturedPointer = null;
