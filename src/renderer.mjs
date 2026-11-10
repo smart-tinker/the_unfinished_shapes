@@ -272,6 +272,7 @@ function beginObjectDrag(event) {
   if (!canEditObject(objectData.get(objectId))) return;
   controls.enabled = false;
   dragCandidate = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, objectId, plane: $('move-plane').value, started: false, ghost: null };
+  renderer.domElement.setPointerCapture(event.pointerId);
   $('move-plane').disabled = true;
 }
 function updateObjectDrag(event) {
