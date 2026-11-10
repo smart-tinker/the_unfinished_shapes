@@ -28,7 +28,7 @@ function editingHarness() {
   return h;
 }
 
-function loadObjectDrag(h) { h.load('function canEditObject(', 'function fillInspector('); }
+function loadObjectDrag(h) { h.load('function pointerRay(event)', 'function fillInspector('); }
 
 test('inspector hydrates selected shape, and role/ownership determines editing controls', () => {
   const h = editingHarness();
@@ -202,6 +202,7 @@ test('pointer rays use resized canvas bounds', () => {
 test('clearing a local preview disposes its transient geometry and material', () => {
   const h = editingHarness();
   let geometryDisposed = 0, materialDisposed = 0, removed = false;
+  h.context.controls = { enabled: true };
   h.context.ghostMesh = {
     geometry: { dispose() { geometryDisposed++; } },
     material: { dispose() { materialDisposed++; } },
