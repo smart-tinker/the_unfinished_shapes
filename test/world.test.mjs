@@ -1,12 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyWorld,applyCommand,validateWorld} from '../src/world.mjs';
+import {emptyWorld,applyCommand,validateWorld,mechanics} from '../src/world.mjs';
 const builder={id:'alice',role:'builder'};
 const build={type:'build',objectType:'block',position:{x:0,y:1,z:0}};
 test('build is immutable and ownership is server-derived',()=>{
  const original=emptyWorld(); const {state,result}=applyCommand(original,builder,{...build,ownerId:'bob'});
  assert.equal(original.objects.length,0); assert.equal(state.objects[0].ownerId,'alice'); assert.equal(result.revision,1); validateWorld(state);
 });
+test('build_group applies a complete approved set in one revision and rejects invalid sets atomically',()=>{
+ const objects=[
+  {objectType:'block',position:{x:0,y:1,z:0},size:{x:2,y:2,z:2},color:'#123456'},
+  {objectType:'stairs',direction:'east',position:{x:8,y:1,z:0},size:{x:8,y:2,z:4},color:'#654321'},
+ ];
+ const original=emptyWorld();
+ const {state,result}=applyCommand(original,builder,{type:'build_group',objects});
+ assert.equal(result.revision,1);assert.equal(result.objects.length,2);assert.equal(state.revision,1);
+ assert.deepEqual(state.objects.map(object=>object.ownerId),['alice','alice']);
+ assert.deepEqual(state.objects.map(object=>object.type),['block','stairs']);
+ assert.equal(original.objects.length,0);validateWorld(state);
+ const before=structuredClone(state);
+ assert.throws(()=>applyCommand(state,builder,{type:'build_group',objects:[objects[0],{...objects[1],direction:'up'}]}),{code:'invalid_direction'});
+ assert.deepEqual(state,before);
+ assert.throws(()=>applyCommand(state,{id:'viewer',role:'viewer'},{type:'build_group',objects}),{code:'forbidden'});
+ assert.deepEqual(state,before);
+});
+
 test('permissions and unknown mechanics fail closed',()=>{
  assert.throws(()=>applyCommand(emptyWorld(),{id:'x',role:'viewer'},build),{code:'forbidden'});
  assert.throws(()=>applyCommand(emptyWorld(),builder,{...build,objectType:'nuclear-port'}),{code:'new_mechanic_required'});
@@ -242,5 +260,107 @@ test('group move rejects mixed ownership, missing IDs, stale positions, duplicat
   const snapshot=structuredClone(original);
   assert.throws(()=>applyCommand(snapshot,actor,command),{code});
   assert.deepEqual(snapshot,original,code);
+ }
+});
+
+
+test('stairs and ramps are explicit world mechanics with a saved uphill direction',()=>{
+ for(const [objectType,direction] of [['stairs','north'],['ramp','east']]){
+  const {state,result}=applyCommand(emptyWorld(),builder,{type:'build',objectType,direction,position:{x:0,y:1,z:0},size:{x:4,y:2,z:8}});
+  assert.ok(mechanics.includes(objectType));
+  assert.equal(result.object.direction,direction);
+  assert.deepEqual({blocksMovement:result.object.blocksMovement,supportsPlayer:result.object.supportsPlayer},{blocksMovement:true,supportsPlayer:true});
+  assert.equal(validateWorld(state).objects[0].direction,direction);
+ }
+});
+
+test('stairs and ramps reject invalid or missing directions and corrupt saved directions',()=>{
+ for(const objectType of ['stairs','ramp']){
+  for(const direction of [undefined,'up','north-east',null,1]){
+   const command={type:'build',objectType,position:{x:0,y:1,z:0},size:{x:4,y:2,z:8}};
+   if(direction!==undefined)command.direction=direction;
+   assert.throws(()=>applyCommand(emptyWorld(),builder,command),{code:'invalid_direction'});
+  }
+  const corrupt={version:1,revision:1,objects:[{id:objectType,type:objectType,direction:'up',position:{x:0,y:1,z:0},size:{x:4,y:2,z:8},color:'#c8a570',ownerId:'alice',blocksMovement:true,supportsPlayer:true}],players:[]};
+  assert.throws(()=>validateWorld(corrupt),{code:'invalid_state'});
+ }
+});
+
+test('stairs and ramps reject geometry too steep for shared walking physics',()=>{
+ const base={type:'build',position:{x:0,y:1,z:0}};
+ assert.throws(()=>applyCommand(emptyWorld(),builder,{...base,objectType:'stairs',direction:'north',size:{x:8,y:2.01,z:4}}),{code:'invalid_shape_dimensions'});
+ assert.throws(()=>applyCommand(emptyWorld(),builder,{...base,objectType:'ramp',direction:'north',size:{x:4,y:8.01,z:8}}),{code:'invalid_shape_dimensions'});
+});
+
+test('a north-facing ramp carries manual and agent movement up its continuous slope',()=>{
+ const ramp={type:'build',objectType:'ramp',direction:'north',position:{x:0,y:1,z:10},size:{x:4,y:2,z:8}};
+ const base=applyCommand(emptyWorld(),builder,ramp).state;
+ base.players.push({id:'alice',position:{x:0,y:0,z:15},velocityY:0},{id:'bob',position:{x:0,y:0,z:15},velocityY:0});
+ let manual=structuredClone(base), agent=structuredClone(base);
+ for(let z=13.75;z>=6.25;z-=1.25){
+  manual=move(manual,{x:0,y:0,z});
+  agent=applyCommand(agent,{id:'bob',role:'builder'},{type:'move',position:{x:0,y:0,z}}).state;
+ }
+ const manualPlayer=player(manual), agentPlayer=agent.players.find(item=>item.id==='bob');
+ assert.ok(manualPlayer.position.y>1.5,JSON.stringify(manualPlayer.position));
+ assert.ok(manualPlayer.position.y<=2+1e-6,JSON.stringify(manualPlayer.position));
+ assert.deepEqual(agentPlayer.position,manualPlayer.position);
+});
+test('stairs provide four equal walkable rises toward their saved cardinal direction',()=>{
+ const stair={type:'build',objectType:'stairs',direction:'east',position:{x:10,y:1,z:0},size:{x:8,y:2,z:4}};
+ let world=applyCommand(emptyWorld(),builder,stair).state;
+ world.players.push({id:'alice',position:{x:5,y:0,z:0},velocityY:0});
+ const heights=[];
+ for(const x of [6.25,7.5,8.5,9.5,10.5,11.5,12.5,13.5]){
+  world=move(world,{x,y:0,z:0});
+  if([7.5,9.5,11.5,13.5].includes(x))heights.push(player(world).position.y);
+ }
+ assert.deepEqual(heights,[.5,1,1.5,2]);
+});
+
+test('stairs and ramps are walkable in every cardinal direction and ignore client Y',()=>{
+ for(const objectType of ['stairs','ramp'])for(const direction of ['north','east','south','west']){
+  let world=applyCommand(emptyWorld(),builder,{type:'build',objectType,direction,position:{x:0,y:1,z:0},size:{x:8,y:2,z:8}}).state;
+  const start={north:{x:0,z:5},east:{x:-5,z:0},south:{x:0,z:-5},west:{x:5,z:0}}[direction];
+  const target={north:{x:0,z:-3.5},east:{x:3.5,z:0},south:{x:0,z:3.5},west:{x:-3.5,z:0}}[direction];
+  world.players.push({id:'alice',position:{...start,y:0},velocityY:0});
+  for(let i=0;i<10;i++)world=move(world,{...target,y:500});
+  assert.ok(player(world).position.y>1.5,objectType+' '+direction+' '+JSON.stringify(player(world).position));
+  assert.ok(player(world).position.y<=2+1e-6,objectType+' '+direction+' '+JSON.stringify(player(world).position));
+ }
+});
+
+test('stairs keep the player below a low ceiling until it is cleared',()=>{
+ let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'stairs',direction:'east',position:{x:10,y:1,z:0},size:{x:8,y:2,z:4}}).state;
+ world.objects.push({id:'low-ceiling',type:'block',position:{x:11,y:3.9,z:0},size:{x:2,y:1,z:4},color:'#c8a570',ownerId:'alice',blocksMovement:true,supportsPlayer:true});
+ world.players.push({id:'alice',position:{x:5,y:0,z:0},velocityY:0});
+ for(const x of [6.25,7.5,8.5,9.5,10.5,11.5,12.01])world=move(world,{x,y:500,z:0});
+ const underCeiling=player(world);
+ assert.ok(underCeiling.position.x<12,JSON.stringify(underCeiling));
+ assert.equal(underCeiling.position.y,1.5,JSON.stringify(underCeiling));
+ assert.ok(underCeiling.position.y+1.62<=3.4+1e-6,JSON.stringify(underCeiling));
+ world=move(world,{x:12.5,y:500,z:0});
+ const beyondCeiling=player(world);
+ assert.ok(beyondCeiling.position.x>=12.32,JSON.stringify(beyondCeiling));
+ assert.equal(beyondCeiling.position.y,2,JSON.stringify(beyondCeiling));
+});
+
+test('stairs require enough run for each tread to be sampled by movement steps',()=>{
+ for(const direction of ['north','east','south','west']){
+  const size=direction==='east'||direction==='west'?{x:.25,y:2,z:4}:{x:4,y:2,z:.25};
+  assert.throws(()=>applyCommand(emptyWorld(),builder,{type:'build',objectType:'stairs',direction,position:{x:0,y:1,z:0},size}),{code:'invalid_shape_dimensions'});
+ }
+});
+
+test('stair and ramp size edits cannot persist geometry beyond their traversal limits',()=>{
+ const cases=[
+  {objectType:'stairs',direction:'east',size:{x:8,y:2,z:4},invalidSize:{x:8,y:2.5,z:4}},
+  {objectType:'ramp',direction:'north',size:{x:4,y:2,z:8},invalidSize:{x:4,y:2,z:1.5}},
+ ];
+ for(const item of cases){
+  const built=applyCommand(emptyWorld(),builder,{type:'build',objectType:item.objectType,direction:item.direction,position:{x:0,y:1,z:0},size:item.size});
+  const before=structuredClone(built.state);
+  assert.throws(()=>applyCommand(built.state,builder,{type:'update',id:built.result.object.id,size:item.invalidSize,expected:{size:item.size}}),{code:'invalid_shape_dimensions'});
+  assert.deepEqual(built.state,before);
  }
 });

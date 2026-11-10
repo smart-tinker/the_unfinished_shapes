@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { movePlayer, WALK_SPEED, WORLD_SIZE } from './movement.mjs';
+import { movePlayer, WALK_SPEED, WORLD_SIZE, SHAPE_DEFAULT_SIZES } from './movement.mjs';
 import { placementPosition, positionUpdateCommand } from './placement.mjs';
 
 const $ = id => document.getElementById(id);
 const bridge = window.tus;
 let isFullscreen = false;
 let settings = { serverUrl: 'http://127.0.0.1:4317', token: '' };
-let selectedKind = 'block', selectedId = null, worldRevision = -1, connected = false, busy = false;
+let selectedKind = 'block', selectedPreset = 'block', buildPreview = null, agentBuildPreview = null, selectedId = null, worldRevision = -1, connected = false, busy = false;
 let settingsGeneration = 0, ordinaryTurn = false;
 let agentControlState = null, agentControlRead = 0, agentControlLoading = false, agentControlBusy = false, goalMessageContextId = null;
 let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 0, z: 0 }, playerVelocityY = 0, jumpRequested = false, meId = null, localMovementVersion = 0, latestStateRevision = -1;
@@ -200,18 +200,140 @@ function objectMesh(object) {
   const group = new THREE.Group(); group.userData.worldId = object.id;
   const { x, y, z } = object.size;
   const material = new THREE.MeshStandardMaterial({ color: object.color, roughness: .85 });
-  const addBox = (w, h, d, px, py, pz, mat = material) => { const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); mesh.position.set(px, py, pz); mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh); };
-  addBox(x, y, z, 0, 0, 0);
-  if (object.type === 'bridge') {
-    const rail = new THREE.MeshStandardMaterial({ color: '#615950', roughness: .8 });
-    addBox(x, .18, .15, 0, y / 2 + .65, z / 2 - .15, rail); addBox(x, .18, .15, 0, y / 2 + .65, -z / 2 + .15, rail);
-  }
-  if (object.type === 'port') {
-    const pole = new THREE.MeshStandardMaterial({ color: '#5b6259' });
-    addBox(.18, 3, .18, -x / 2 + .6, y / 2 + 1.5, -z / 2 + .6, pole);
-    addBox(1.2, .7, .06, -x / 2 + 1.2, y / 2 + 2.5, -z / 2 + .6, new THREE.MeshStandardMaterial({ color: '#eac16c' }));
+  const addBox = (w, h, d, px, py, pz, mat = material, placementSurface = false) => { const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); mesh.position.set(px, py, pz); mesh.castShadow = true; mesh.receiveShadow = true; mesh.userData.placementSurface = placementSurface; group.add(mesh); };
+  if (object.type === 'ramp' || object.type === 'stairs') {
+    const eastWest = object.direction === 'east' || object.direction === 'west', run = eastWest ? x : z, width = eastWest ? z : x;
+    const profile = new THREE.Shape();
+    profile.moveTo(-run / 2, -y / 2);
+    if (object.type === 'ramp') {
+      profile.lineTo(run / 2, -y / 2); profile.lineTo(run / 2, y / 2);
+    } else {
+      profile.lineTo(run / 2, -y / 2); profile.lineTo(run / 2, y / 2);
+      for (let level = 3; level >= 0; level--) {
+        const edge = -run / 2 + run * level / 4;
+        profile.lineTo(edge, -y / 2 + y * (level + 1) / 4); profile.lineTo(edge, -y / 2 + y * level / 4);
+      }
+    }
+    profile.closePath();
+    const geometry = new THREE.ExtrudeGeometry(profile, { depth: width, bevelEnabled: false }); geometry.translate(0, 0, -width / 2);
+    const mesh = new THREE.Mesh(geometry, material); mesh.castShadow = true; mesh.receiveShadow = true; mesh.userData.placementSurface = true; group.add(mesh);
+    group.rotation.y = ({ east: 0, south: -Math.PI / 2, west: Math.PI, north: Math.PI / 2 })[object.direction];
+  } else {
+    addBox(x, y, z, 0, 0, 0, material, true);
+    if (object.type === 'bridge') {
+      const rail = new THREE.MeshStandardMaterial({ color: '#615950', roughness: .8 });
+      addBox(x, .18, .15, 0, y / 2 + .65, z / 2 - .15, rail); addBox(x, .18, .15, 0, y / 2 + .65, -z / 2 + .15, rail);
+    }
+    if (object.type === 'port') {
+      const pole = new THREE.MeshStandardMaterial({ color: '#5b6259' });
+      addBox(.18, 3, .18, -x / 2 + .6, y / 2 + 1.5, -z / 2 + .6, pole);
+      addBox(1.2, .7, .06, -x / 2 + 1.2, y / 2 + 2.5, -z / 2 + .6, new THREE.MeshStandardMaterial({ color: '#eac16c' }));
+    }
   }
   group.position.set(object.position.x, object.position.y, object.position.z); return group;
+}
+function clearBuildPreview() {
+  if (buildPreview?.mesh) { scene?.remove(buildPreview.mesh); disposeGroup(buildPreview.mesh); }
+  buildPreview = null;
+  $('build-preview-actions').hidden = true; $('build-preview-status').hidden = true;
+  $('build-preview-status').textContent = ''; $('build-apply').disabled = false; $('build-cancel').disabled = false;
+}
+function clearAgentBuildPreview(message = 'Preview cleared. The shared world was not changed.') {
+  const preview=agentBuildPreview;if(!preview)return;
+  for(const mesh of preview.meshes){scene?.remove(mesh);disposeGroup(mesh);}
+  preview.applyButton.disabled=true;preview.cancelButton.disabled=true;
+  preview.status.textContent=message;agentBuildPreview=null;
+}
+function updateAgentBuildPreviewControls() {
+  if(!agentBuildPreview)return;
+  const current=agentBuildPreview,valid=connected&&settings.threadId===current.threadId&&!current.attempted;
+  current.applyButton.disabled=!valid||busy;current.cancelButton.disabled=!valid||busy;
+}
+function showAgentBuildPreview(value, threadId = settings.threadId) {
+  if(!value||typeof value.previewId!=='string'||!Array.isArray(value.objects)||value.objects.length<1||value.objects.length>32||typeof threadId!=='string'||!scene) { addMessage('The agent preview could not be displayed, so it cannot be approved.','error');return; }
+  clearAgentBuildPreview('Replaced by a newer proposal. No shared-world changes were made.');
+  const meshes=[];
+  try {
+    for(const design of value.objects){
+      if(!design||!['block','bridge','port','stairs','ramp'].includes(design.objectType)||!design.position||!design.size)throw new Error('Invalid preview object.');
+      const mesh=objectMesh({type:design.objectType,direction:design.direction,position:design.position,size:design.size,color:design.color});
+      mesh.traverse(child=>{if(!child.material)return;child.material=child.material.clone();child.material.color.set('#efbd61');child.material.transparent=true;child.material.opacity=.48;child.material.depthWrite=false;});
+      meshes.push(mesh);scene.add(mesh);
+    }
+  } catch(error){for(const mesh of meshes){scene.remove(mesh);disposeGroup(mesh);}addMessage('The agent preview could not be displayed: '+error.message,'error');return;}
+  const card=addMessage('The agent proposes '+value.objects.length+' shapes. Does the complete set look right?','system');
+  const status=document.createElement('p');status.textContent='Amber shapes are local previews only; nothing has changed on the server.';
+  const applyButton=document.createElement('button');applyButton.type='button';applyButton.textContent='Approve and Apply';
+  const cancelButton=document.createElement('button');cancelButton.type='button';cancelButton.textContent='Cancel';
+  card.append(status);card.append(applyButton);card.append(cancelButton);
+  const preview={previewId:value.previewId,threadId,meshes,card,status,applyButton,cancelButton,attempted:false};agentBuildPreview=preview;
+  cancelButton.addEventListener('click',async()=>{
+    if(agentBuildPreview!==preview||preview.attempted)return;
+    cancelButton.disabled=true;applyButton.disabled=true;
+    try { await bridge.decideBuildPreview(preview.previewId,'cancel',preview.threadId);clearAgentBuildPreview('Canceled. No shared-world changes were made.'); }
+    catch(error){status.textContent='Could not confirm cancellation: '+error.message;}
+  });
+  applyButton.addEventListener('click',async()=>{
+    if(agentBuildPreview!==preview||preview.attempted||busy||!connected||settings.threadId!==preview.threadId)return;
+    preview.attempted=true;updateAgentBuildPreviewControls();ordinaryTurn=true;busy=true;startActivity();updateChatControls();
+    addMessage('You approved the complete agent preview. Asking the agent to apply this exact set.','user');
+    try { await bridge.decideBuildPreview(preview.previewId,'apply',preview.threadId);status.textContent='Approval sent. Waiting for the agent and server to confirm the result.'; }
+    catch(error){status.textContent='Apply outcome is unknown. Check the Codex chat and shared world before taking further action.';addMessage(error.message,'error');ordinaryTurn=false;busy=false;updateChatControls();updateAgentBuildPreviewControls();}
+  });
+  updateAgentBuildPreviewControls();
+}
+function buildDesign() {
+  const presets = {
+    block: { type: 'block', size: { x: 2, y: 2, z: 2 } },
+    wall: { type: 'block', size: { x: 8, y: 4, z: 1 } },
+    floor: { type: 'block', size: { x: 8, y: .5, z: 8 } },
+    column: { type: 'block', size: { x: 1, y: 4, z: 1 } },
+    bridge: { type: 'bridge', size: { x: 10, y: 1, z: 3 } },
+    port: { type: 'port', size: { x: 12, y: 1, z: 8 } },
+    stairs: { type: 'stairs', size: SHAPE_DEFAULT_SIZES.stairs },
+    ramp: { type: 'ramp', size: SHAPE_DEFAULT_SIZES.ramp },
+  };
+  const preset = presets[selectedPreset] ?? presets.block;
+  const directional = preset.type === 'stairs' || preset.type === 'ramp';
+  return {
+    type: 'build', objectType: preset.type, ...(directional ? { direction: $('build-direction').value } : {}),
+    position: { x: Number($('build-x').value), y: preset.size.y / 2, z: Number($('build-z').value) },
+    size: { ...preset.size }, color: '#c8a570',
+  };
+}
+function previewSelectedBuild() {
+  if (editing) return;
+  clearBuildPreview();
+  if (!scene) { feedback('The 3D scene is not ready; the shared world was not changed.', true); return; }
+  const design = buildDesign(), object = { id: 'build-preview', type: design.objectType, position: design.position, size: design.size, color: design.color, direction: design.direction };
+  const mesh = objectMesh(object);
+  mesh.traverse(child => {
+    if (!child.material) return;
+    child.material = child.material.clone(); child.material.color.set('#f3c969'); child.material.transparent = true; child.material.opacity = .42; child.material.depthWrite = false;
+  });
+  scene.add(mesh); buildPreview = { command: design, mesh, attempted: false };
+  $('build-preview-actions').hidden = false; $('build-preview-status').hidden = false;
+  $('build-preview-status').textContent = 'Local preview only. Apply to add this shape to the shared world.';
+  $('build-apply').disabled = false; feedback('Preview only — the shared world has not changed.');
+}
+async function applyBuildPreview() {
+  const draft = buildPreview;
+  if (!draft || draft.attempted || editing) return;
+  draft.attempted = true; editing = true; $('build-apply').disabled = true; $('build-cancel').disabled = true;
+  const generation = settingsGeneration;
+  try {
+    const result = await command(draft.command);
+    if (generation !== settingsGeneration) return;
+    if (!result.object) throw new Error('The server did not confirm the new shape.');
+    clearBuildPreview(); feedback('Shape added to the shared world.');
+  } catch (error) {
+    if (generation !== settingsGeneration) return;
+    $('build-preview-status').textContent = error.message + ' No automatic retry was sent; check the shared world before submitting again.';
+    feedback(error.message, true);
+  } finally {
+    editing = false;
+    if (buildPreview) { $('build-apply').disabled = buildPreview.attempted; $('build-cancel').disabled = false; }
+  }
 }
 function pointerRay(event) {
   const rect = renderer.domElement.getBoundingClientRect();
@@ -251,9 +373,9 @@ function placementHit(event, draft) {
   const surfaces = [...meshes.entries()].filter(([id]) => id !== draft.objectId && !moving.has(id)).map(([, mesh]) => mesh);
   for (const hit of ray.intersectObjects(surfaces, true)) {
     const id = objectIdForHit(hit.object), surface = objectData.get(id);
-    if (!surface?.supportsPlayer || meshes.get(id)?.children[0] !== hit.object) continue;
+    if (!surface?.supportsPlayer || !hit.object.userData.placementSurface) continue;
     const normal = hit.face?.normal?.clone().transformDirection(hit.object.matrixWorld);
-    if (normal?.y > .9) return { point: hit.point, surface };
+    if (normal?.y > .5) return { point: hit.point, surface };
   }
   return target;
 }
@@ -559,8 +681,17 @@ async function syncPosition() {
 }
 async function command(body) { const result = await request('/command', 'POST', body); if (result.error) throw new Error(result.message || result.error); await poll(); return result; }
 
-for (const button of document.querySelectorAll('[data-kind]')) button.addEventListener('click', () => { selectedKind = button.dataset.kind; document.querySelectorAll('[data-kind]').forEach(el => el.classList.toggle('selected', el === button)); });
-$('build-form').addEventListener('submit', async event => { event.preventDefault(); const button = event.submitter; button.disabled = true; try { await command({ type: 'build', objectType: selectedKind, position: { x: Number($('build-x').value), y: selectedKind === 'block' ? 1 : .5, z: Number($('build-z').value) } }); feedback(`${selectedKind[0].toUpperCase() + selectedKind.slice(1)} placed in the shared world.`); } catch (error) { feedback(error.message, true); } finally { button.disabled = false; } });
+for (const button of document.querySelectorAll('[data-kind]')) button.addEventListener('click', () => {
+  if (editing) return;
+  selectedKind = button.dataset.kind; selectedPreset = button.dataset.preset || selectedKind;
+  document.querySelectorAll('[data-kind]').forEach(el => el.classList.toggle('selected', el === button));
+  const directional = selectedKind === 'stairs' || selectedKind === 'ramp';
+  $('build-direction-row').hidden = !directional; $('build-direction').disabled = !directional;
+  clearBuildPreview();
+});
+$('build-form').addEventListener('submit', event => { event.preventDefault(); previewSelectedBuild(); });
+$('build-apply').addEventListener('click', applyBuildPreview);
+$('build-cancel').addEventListener('click', () => { if (!editing) { clearBuildPreview(); feedback('Build preview cancelled; the shared world was not changed.'); } });
 $('remove').addEventListener('click', async () => { if (!selectedId) return; const id = selectedId; $('remove').disabled = true; try { await command({ type: 'remove', id }); feedback('Shape removed.'); } catch (error) { feedback(error.message, true); } finally { $('remove').disabled = !selectedId; } });
 $('move-grid-step').disabled = !$('move-snap-enabled').checked;
 $('move-snap-enabled').addEventListener('change', () => { $('move-grid-step').disabled = !$('move-snap-enabled').checked; refreshMovePreview(); });
@@ -722,6 +853,7 @@ async function saveSettings() {
   }
   if (next.workspacePath !== settings.workspacePath) next.threadId = '';
   if (changed) {
+    clearAgentBuildPreview('Connection settings changed; this preview is no longer available.');
     if (movePreview || dragCandidate) cancelMovePreview();
     inspectorDirty = false;
     await bridge.disconnectCodex(); connected = false; busy = false; updateChatControls();
@@ -739,7 +871,7 @@ const toolRows = new Map(), itemRows = new Map(), moveStarts = new Map();
 let stopRequested = false, acceptedThreadId = null, currentTurnId = null;
 const retiredTurns = new Set();
 function activityThread(threadId) {
-  if (threadId !== acceptedThreadId) { retiredTurns.clear(); currentTurnId = null; moveStarts.clear(); }
+  if (threadId !== acceptedThreadId) { retiredTurns.clear(); currentTurnId = null; moveStarts.clear(); if(agentBuildPreview&&agentBuildPreview.threadId!==threadId)clearAgentBuildPreview('Conversation changed; this preview is no longer available.'); }
   acceptedThreadId = threadId;
 }
 function activityRow(text, status = 'running') {
@@ -767,12 +899,12 @@ function toolArguments(event) {
 }
 function toolLabel(event) {
   if (event.name === 'world_state') return 'Read world state';
-  if (!['world_command', 'world_build'].includes(event.name)) return 'Requested tool';
+  if (event.name === 'world_preview') return 'Preview construction set';
+  if (event.name === 'world_apply') return 'Apply approved construction';
+  if (event.name !== 'world_command') return 'Requested tool';
   const args = toolArguments(event);
-  if (!args) return event.name === 'world_build' ? 'Build shape (invalid design)' : 'World command';
-  if (event.name === 'world_build') return constructionLabel(args) || 'Build shape (invalid design)';
-  const labels = { build: 'Build shape', update: 'Edit shape', remove: 'Remove shape', move: 'Move player', move_group: 'Move object group' };
-  return labels[args?.command?.type] || labels[args?.type] || 'World command';
+  const labels = { update: 'Edit shape', remove: 'Remove shape', move: 'Move player', move_group: 'Move object group' };
+  return labels[args?.command?.type] || 'World command';
 }
 function toolActivity(event) {
   if (!busy || event.threadId !== acceptedThreadId || !event.turnId || event.id == null || retiredTurns.has(event.turnId)) return;
@@ -796,15 +928,22 @@ function toolActivity(event) {
       if (started.version === localMovementVersion && position && ['x', 'y', 'z'].every(axis => Number.isFinite(position[axis]) && Math.abs(position[axis]) <= 1000)) { playerPosition = { x: position.x, y: position.y, z: position.z }; playerVelocityY = response?.velocityY ?? 0; lastPosition = positionKey(playerPosition); }
     }
   }
-  const revision = Number.isSafeInteger(response?.revision) && response.revision >= 0 ? ` · revision ${response.revision}` : '';
-  if (event.name === 'world_build') {
-    const created = response?.object;
-    const confirmedLabel = success && typeof created?.id === 'string' && created.id.length > 0 && revision ? constructionLabel(created, 'Built') : null;
-    row.textContent = confirmedLabel ? confirmedLabel + ' · server confirmed' + revision : label + (success ? ' · construction not confirmed by a created object' : ' · failed');
-    row.dataset.status = confirmedLabel ? 'completed' : success ? 'unconfirmed' : 'failed';
+  const revision = Number.isSafeInteger(response?.revision) && response.revision >= 0 ? ' · revision ' + response.revision : '';
+  if (event.name === 'world_preview') {
+    if (success && typeof response?.previewId === 'string' && Array.isArray(response.objects)) showAgentBuildPreview(response,event.threadId);
+    row.textContent = success ? 'Complete set previewed locally · waiting for your decision' : label + ' · failed';
+    row.dataset.status = success ? 'completed' : 'failed';
+  } else if (event.name === 'world_apply') {
+    const created = response?.objects;
+    const confirmed = success && Array.isArray(created) && created.length > 0 && created.length <= 32 && created.every(object => typeof object?.id === 'string' && object.id.length > 0) && revision;
+    if (confirmed) { clearAgentBuildPreview('Server confirmed ' + created.length + ' ' + (created.length===1?'object':'objects') + revision + '.'); void poll(); }
+    else if (agentBuildPreview) agentBuildPreview.status.textContent = 'Apply failed or was not confirmed. The approved preview cannot be retried; inspect the world and ask the agent for a new proposal.';
+    row.textContent = confirmed ? 'Server confirmed ' + created.length + ' approved ' + (created.length===1?'object':'objects') + revision : label + (success ? ' · result not confirmed' : ' · failed');
+    row.dataset.status = confirmed ? 'completed' : 'failed';
   } else {
     row.textContent = label + (success ? ' · completed' : ' · failed') + revision; row.dataset.status = success ? 'completed' : 'failed';
   }
+  updateAgentBuildPreviewControls();
   if (!success) $('agent-stop-reason').textContent = 'A tool failed. The turn may continue; wait for its final status.';
 }
 function notificationActivity(method, params) {
@@ -877,6 +1016,7 @@ function sceneContextForPrompt() {
 $('chat-form').addEventListener('submit',async event=>{
   event.preventDefault();const text=$('prompt').value.trim();
   if(!text||!connected||busy)return;
+  if(agentBuildPreview){const preview=agentBuildPreview;if(!preview.attempted)void bridge.decideBuildPreview(preview.previewId,'cancel',preview.threadId).catch(()=>{});clearAgentBuildPreview('A new request replaced this local proposal. No shared-world changes were made.');}
   ordinaryTurn=true;busy=true;startActivity();updateChatControls();addMessage(text,'user');$('prompt').value='';streamMessage=null;
   try{
     const result=await bridge.sendPrompt(text,sceneContextForPrompt()),context=result?.sceneContext;
@@ -906,9 +1046,9 @@ function codexEvent(event) {
     } else addMessage('Saved Codex chat history is unavailable.', 'system');
   }
   if (event.type === 'tool-start' || event.type === 'tool-result') toolActivity(event);
-  if (event.type === 'connected') { activityThread(event.threadId); connected = true; settings.threadId = event.threadId; agentControlState = null; goalMessageContextId = null; refreshAgentStatus(); void refreshAgentControls(); }
+  if (event.type === 'connected') { clearAgentBuildPreview('Codex conversation changed; this preview is no longer available.'); activityThread(event.threadId); connected = true; settings.threadId = event.threadId; agentControlState = null; goalMessageContextId = null; refreshAgentStatus(); void refreshAgentControls(); }
   if (event.type === 'error') addMessage(event.message || 'Codex reported an error.', 'error');
-  if (event.type === 'disconnected') { const activityUnknown = busy || Boolean(agentControlState?.goal) || Boolean(goalMessageContextId); agentControlRead++; agentControlState = null; $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; ordinaryTurn = false; busy = false; $('agent-status').textContent = activityUnknown ? 'Codex disconnected · activity unknown' : 'Codex disconnected'; $('agent-goal-summary').hidden = true; addMessage(event.message || 'Codex disconnected.', 'error'); if ($('agent-controls').open) void refreshAgentControls(); }
+  if (event.type === 'disconnected') { clearAgentBuildPreview('Codex disconnected; this preview is no longer available.'); const activityUnknown = busy || Boolean(agentControlState?.goal) || Boolean(goalMessageContextId); agentControlRead++; agentControlState = null; $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; ordinaryTurn = false; busy = false; $('agent-status').textContent = activityUnknown ? 'Codex disconnected · activity unknown' : 'Codex disconnected'; $('agent-goal-summary').hidden = true; addMessage(event.message || 'Codex disconnected.', 'error'); if ($('agent-controls').open) void refreshAgentControls(); }
   if (event.type === 'approval') {
     if ($('agent-controls').open) void refreshAgentControls();
     $('activity-state').textContent = 'Needs decision'; $('agent-stop-reason').textContent = 'Waiting for your response to an approval request; no approval has been granted.';
@@ -939,7 +1079,7 @@ function codexEvent(event) {
     if (event.method === 'turn/started') { busy = true; refreshAgentStatus(); }
     if (event.method === 'item/agentMessage/delta') { if (!streamMessage) streamMessage = addMessage('', ordinaryTurn || !goalMessageContextId ? 'assistant' : 'goal'); const body = streamMessage.querySelector('.chat-message-body'); if (body) body.textContent += p.delta || ''; else streamMessage.textContent += p.delta || ''; $('chat').scrollTop = $('chat').scrollHeight; }
     if (event.method === 'item/completed' && p.item?.type === 'agentMessage') { if (streamMessage) { const body = streamMessage.querySelector('.chat-message-body'); if (body) body.textContent = p.item.text || body.textContent; else streamMessage.textContent = p.item.text || streamMessage.textContent; } else if (p.item.text) addMessage(p.item.text, ordinaryTurn || !goalMessageContextId ? 'assistant' : 'goal'); streamMessage = null; }
-    if (event.method === 'turn/completed') { ordinaryTurn = false; busy = false; if (p.turn?.error?.message) addMessage(p.turn.error.message, 'error'); if (goalMessageContextId && agentControlState?.goal?.status !== 'active') goalMessageContextId = null; refreshAgentStatus(); if ($('agent-controls').open) void refreshAgentControls(); }
+    if (event.method === 'turn/completed') { ordinaryTurn = false; busy = false; updateAgentBuildPreviewControls(); if (p.turn?.error?.message) addMessage(p.turn.error.message, 'error'); if (goalMessageContextId && agentControlState?.goal?.status !== 'active') goalMessageContextId = null; refreshAgentStatus(); if ($('agent-controls').open) void refreshAgentControls(); }
     if (event.method === 'error') addMessage(p.error?.message || p.message || 'Codex reported an error.', 'error');
   }
   updateChatControls();

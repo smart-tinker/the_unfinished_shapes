@@ -29,6 +29,30 @@ test('auth, persisted builds, and concurrent updates',async t=>{
  const saved=await (await fetch(`http://127.0.0.1:${restarted.address().port}/state`,{headers:{Authorization:`Bearer ${token}`}})).json();
  assert.equal(saved.objects.length,10);await restarted.shutdown();
 });
+test('HTTP build_group is atomic, visible to another client, and survives restart',async t=>{
+ const f=await fixture(t);
+ const objects=[
+  {objectType:'block',position:{x:0,y:1,z:0},size:{x:2,y:2,z:2},color:'#123456'},
+  {objectType:'bridge',position:{x:8,y:1,z:0},size:{x:10,y:1,z:3},color:'#654321'},
+ ];
+ const response=await f.send({type:'build_group',objects});
+ assert.equal(response.status,200);
+ const applied=await response.json();assert.equal(applied.revision,1);assert.equal(applied.objects.length,2);
+ assert.deepEqual(applied.objects.map(object=>object.ownerId),['alice','alice']);
+ const visible=await (await fetch(f.url+'/state',{headers:{Authorization:'Bearer test-only-bob-token'}})).json();
+ assert.deepEqual(visible.objects,applied.objects);assert.equal(visible.revision,1);
+ const invalid=await f.send({type:'build_group',objects:[objects[0],{...objects[1],objectType:'unknown'}]});
+ assert.equal(invalid.status,409);
+ const saved=JSON.parse(await readFile(f.dataPath,'utf8'));
+ assert.equal(saved.revision,1);assert.deepEqual(saved.objects,applied.objects);
+ await f.app.shutdown();
+ const restarted=await createWorldServer({dataPath:f.dataPath,users,port:0});await restarted.start();
+ try {
+  const restored=await (await fetch('http://127.0.0.1:'+restarted.address().port+'/state',{headers:{Authorization:'Bearer '+token}})).json();
+  assert.equal(restored.revision,1);assert.deepEqual(restored.objects,applied.objects);
+ } finally {await restarted.shutdown();}
+});
+
 test('failed validation leaves revision unchanged',async t=>{
  const f=await fixture(t);const response=await f.send({...command,objectType:'not-implemented'});
  assert.equal(response.status,409);assert.equal((await response.json()).error,'new_mechanic_required');
@@ -130,6 +154,29 @@ test('reports persistence phase timings only after the atomic world write when o
  for(const phase of ['serializeMs','writeMs','renameMs'])assert.ok(Number.isFinite(sample[phase])&&sample[phase]>=0,phase);
 });
 
+
+test('stair and ramp directions are shared by clients and survive a server restart',async t=>{
+ const f=await fixture(t);
+ const shapes=[
+  {type:'build',objectType:'stairs',direction:'east',position:{x:10,y:1,z:0},size:{x:8,y:2,z:4}},
+  {type:'build',objectType:'ramp',direction:'north',position:{x:0,y:1,z:10},size:{x:4,y:2,z:8}},
+ ];
+ const created=[];
+ for(const shape of shapes){
+  const response=await f.send(shape);assert.equal(response.status,200);
+  created.push((await response.json()).object);
+ }
+ const read=async url=>fetch(url+'/state',{headers:{Authorization:'Bearer test-only-bob-token'}}).then(response=>response.json());
+ const visible=await read(f.url);
+ assert.deepEqual(visible.objects,created);
+ assert.deepEqual(JSON.parse(await readFile(f.dataPath,'utf8')).objects,created);
+ await f.app.shutdown();
+ const restarted=await createWorldServer({dataPath:f.dataPath,users,port:0});await restarted.start();
+ try {
+  const restored=await read(`http://127.0.0.1:${restarted.address().port}`);
+  assert.deepEqual(restored.objects,created);
+ } finally {await restarted.shutdown();}
+});
 
 test('HTTP group movement is atomic, persisted once, and visible to both clients',async t=>{
  const carolToken='test-only-carol-builder-token';

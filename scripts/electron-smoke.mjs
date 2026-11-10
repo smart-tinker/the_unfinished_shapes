@@ -70,8 +70,9 @@ await withSmokeCleanup(async()=>{
  await manualEditing(page);
  graphics.phase('construction');
  await page.locator('[data-kind="bridge"]').click(); await page.locator('#build-x').fill('3');
- await page.locator('#build-form button').click();
- await page.waitForFunction(()=>document.querySelector('#world-message')?.textContent.includes('placed'));
+ await page.locator('#build-preview').click();
+ await page.locator('#build-apply').click();
+ await page.waitForFunction(()=>document.querySelector('#world-message')?.textContent.includes('Shape added to the shared world.'));
  let state=await page.evaluate(async()=>{const s=await window.tus.loadSettings();return window.tus.request({...s,path:'/state'});});
  assert.equal(state.objects.length,1);assert.equal(state.objects[0].type,'bridge');
  assert.equal(await page.locator('#send').isDisabled(),true);
