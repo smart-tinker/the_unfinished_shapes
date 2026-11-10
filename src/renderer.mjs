@@ -235,7 +235,8 @@ function objectMesh(object) {
     const mesh = new THREE.Mesh(geometry, material); mesh.castShadow = true; mesh.receiveShadow = true; mesh.userData.placementSurface = true; group.add(mesh);
     group.rotation.y = ({ east: 0, south: -Math.PI / 2, west: Math.PI, north: Math.PI / 2 })[object.direction];
   } else {
-    addBox(x, y, z, 0, 0, 0, material, true);
+    // The full-size body would cover the sign's text face.
+    if (object.type !== 'sign') addBox(x, y, z, 0, 0, 0, material, true);
     if (object.type === 'bridge') {
       const rail = new THREE.MeshStandardMaterial({ color: '#615950', roughness: .8 });
       addBox(x, .18, .15, 0, y / 2 + .65, z / 2 - .15, rail); addBox(x, .18, .15, 0, y / 2 + .65, -z / 2 + .15, rail);
