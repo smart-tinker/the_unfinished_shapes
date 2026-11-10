@@ -326,3 +326,23 @@ test('stairs keep the player below a low ceiling until it is cleared',()=>{
  assert.ok(beyondCeiling.position.x>=12.32,JSON.stringify(beyondCeiling));
  assert.equal(beyondCeiling.position.y,2,JSON.stringify(beyondCeiling));
 });
+
+test('stairs require enough run for each tread to be sampled by movement steps',()=>{
+ for(const direction of ['north','east','south','west']){
+  const size=direction==='east'||direction==='west'?{x:.25,y:2,z:4}:{x:4,y:2,z:.25};
+  assert.throws(()=>applyCommand(emptyWorld(),builder,{type:'build',objectType:'stairs',direction,position:{x:0,y:1,z:0},size}),{code:'invalid_shape_dimensions'});
+ }
+});
+
+test('stair and ramp size edits cannot persist geometry beyond their traversal limits',()=>{
+ const cases=[
+  {objectType:'stairs',direction:'east',size:{x:8,y:2,z:4},invalidSize:{x:8,y:2.5,z:4}},
+  {objectType:'ramp',direction:'north',size:{x:4,y:2,z:8},invalidSize:{x:4,y:2,z:1.5}},
+ ];
+ for(const item of cases){
+  const built=applyCommand(emptyWorld(),builder,{type:'build',objectType:item.objectType,direction:item.direction,position:{x:0,y:1,z:0},size:item.size});
+  const before=structuredClone(built.state);
+  assert.throws(()=>applyCommand(built.state,builder,{type:'update',id:built.result.object.id,size:item.invalidSize,expected:{size:item.size}}),{code:'invalid_shape_dimensions'});
+  assert.deepEqual(built.state,before);
+ }
+});
