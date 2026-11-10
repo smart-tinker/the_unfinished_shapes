@@ -66,6 +66,7 @@ test('group move preview applies one snapped delta and preserves relative positi
  const first={id:'one',position:{x:0,y:1,z:0}};
  const second={id:'two',position:{x:3,y:1,z:2}};
  const positions={one:{...first.position},two:{...second.position}};
+ h.context.positions=positions;
  h.context.ghosts=new Map([
   ['one',{position:{set(x,y,z){Object.assign(positions.one,{x,y,z});}}}],
   ['two',{position:{set(x,y,z){Object.assign(positions.two,{x,y,z});}}}],
