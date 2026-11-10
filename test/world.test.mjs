@@ -225,9 +225,9 @@ test('group move applies one shared delta in one revision without mutating the i
  assert.deepEqual(moved.state.objects.map(object=>object.ownerId),['alice','alice','alice']);
 });
 test('group move rejects mixed ownership, missing IDs, stale positions, duplicates and oversized groups atomically',()=>{
- const base=groupMoveWorld(), original=structuredClone(base);
- const bob={id:'bob',role:'builder'};
- const foreign=applyCommand(base,bob,{type:'build',objectType:'block',position:{x:8,y:1,z:0}}).state.objects.at(-1);
+ const base=groupMoveWorld(), carol={id:'carol',role:'builder'};
+ const state=applyCommand(base,carol,{type:'build',objectType:'block',position:{x:8,y:1,z:0}}).state;
+ const original=structuredClone(state), foreign=state.objects.at(-1);
  const aliceObjects=base.objects;
  const cases=[
   [groupMove([...aliceObjects.slice(0,1),foreign]),builder,'forbidden'],
