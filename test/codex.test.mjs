@@ -139,6 +139,22 @@ test('explicit send, duplicate send protection, interrupt, completion',async()=>
   await f.bridge.send('Next request'); f.bridge.stop();
 });
 
+test('a scene snapshot is sent with its player request and is not carried into a later turn',async()=>{
+  const f=fixture(); await f.start();
+  const snapshot={worldConnectionId:'connection-1',revision:7,selectedIds:['shape-1']};
+  await f.bridge.send('Build a bridge',{},snapshot);
+  const first=f.requests.filter(request=>request.method==='turn/start').at(-1);
+  assert.equal(first.params.input.length,1);
+  assert.match(first.params.input[0].text,/Build a bridge/);
+  assert.ok(first.params.input[0].text.includes(JSON.stringify(snapshot)));
+  f.reply({method:'turn/completed',params:{threadId:'new-thread',turn:{id:'turn1'}}});
+  await f.bridge.send('Next request');
+  const second=f.requests.filter(request=>request.method==='turn/start').at(-1);
+  assert.match(second.params.input[0].text,/Next request/);
+  assert.equal(second.params.input[0].text.includes('connection-1'),false);
+  f.bridge.stop();
+});
+
 test('server approvals stay pending until an explicit matching response',async()=>{
   const f=fixture(); await f.start(); const events=[]; f.bridge.on('event',e=>events.push(e));
   const before=f.requests.length;

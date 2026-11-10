@@ -137,37 +137,24 @@ test('scene capture rejects stale revisions, invalid cameras, and missing select
   assert.throws(() => gameTools.captureSceneSnapshot(state, invalid, 'connection-1'), /camera|finite/i);
 });
 
-test('world_state includes the submitted scene and a bounded current view from the same turn', async () => {
-  assert.equal(typeof gameTools.captureSceneSnapshot, 'function', 'scene snapshot helper must be implemented');
+test('world_state returns the latest authoritative state and scopes it to this connection', async () => {
   const dir=await mkdtemp(path.join(os.tmpdir(),'tus-tool-scene-'));
   const connection={url:'',token:'builder-secret-12345',connectionId:'connection-1'};
   const server=await createWorldServer({dataPath:path.join(dir,'world.json'),users:{[connection.token]:{id:'alice',role:'builder'}}});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));connection.url=`http://127.0.0.1:${server.address().port}`;
   try {
-    const first=await executeGameTool({name:'world_build',arguments:{objectType:'block',position:{x:0,y:1,z:0},size:{x:1,y:1,z:1},color:'#123456'}},connection);
-    const selectedId=JSON.parse(first.contentItems[0].text).object.id;
+    await executeGameTool({name:'world_build',arguments:{objectType:'block',position:{x:0,y:1,z:0},size:{x:1,y:1,z:1},color:'#123456'}},connection);
     const before=JSON.parse((await executeGameTool({name:'world_state'},connection)).contentItems[0].text);
-    const submitted=gameTools.captureSceneSnapshot(before,sceneView(before.revision,[selectedId]),'connection-1');
+    assert.equal(before.worldConnectionId,'connection-1');
+    assert.equal(before.objects.length,1);
     const later=await executeGameTool({name:'world_build',arguments:{objectType:'bridge',position:{x:3,y:1,z:0},size:{x:1,y:1,z:1},color:'#654321'}},connection);
-    const laterId=JSON.parse(later.contentItems[0].text).object.id;
-    const result=await executeGameTool({name:'world_state'},connection,{sceneSnapshot:submitted});
-    const value=JSON.parse(result.contentItems[0].text);
-    assert.equal(result.success,true);
-    assert.equal(value.sceneContext.submittedRevision,before.revision);
-    assert.equal(value.sceneContext.currentRevision,value.revision);
-    assert.equal(value.sceneContext.changedSinceSubmit,true);
-    assert.equal(value.sceneContext.selectedIds[0],selectedId);
-    assert.equal(value.sceneContext.missingSelectedIds.length,0);
-    assert.equal(value.sceneContext.submittedObjects.some(o=>o.id===selectedId),true);
-    assert.equal(value.sceneContext.submittedObjects.some(o=>o.id===laterId),false);
-    assert.equal(value.objects.some(o=>o.id===laterId),true);
-    assert.equal(JSON.stringify(value).includes(connection.token),false);
-    const otherWorld=await executeGameTool({name:'world_state'}, {...connection,connectionId:'connection-2'}, {sceneSnapshot:submitted});
-    assert.equal(otherWorld.success,false);
-    assert.match(otherWorld.contentItems[0].text,/different world connection/i);
-    const removed=await executeGameTool({name:'world_command',arguments:{command:{type:'remove',id:selectedId}}},connection);
-    assert.equal(removed.success,true);
-    const afterRemoval=JSON.parse((await executeGameTool({name:'world_state'},connection,{sceneSnapshot:submitted})).contentItems[0].text);
-    assert.deepEqual(afterRemoval.sceneContext.missingSelectedIds,[selectedId]);
+    assert.equal(later.success,true);
+    const current=JSON.parse((await executeGameTool({name:'world_state'},connection)).contentItems[0].text);
+    assert.equal(current.worldConnectionId,'connection-1');
+    assert.ok(current.revision>before.revision);
+    assert.equal(current.objects.length,2);
+    assert.equal(JSON.stringify(current).includes(connection.token),false);
+    const otherWorld=JSON.parse((await executeGameTool({name:'world_state'},{...connection,connectionId:'connection-2'})).contentItems[0].text);
+    assert.equal(otherWorld.worldConnectionId,'connection-2');
   } finally {await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
-});
+});;
