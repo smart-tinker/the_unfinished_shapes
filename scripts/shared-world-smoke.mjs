@@ -118,7 +118,7 @@ async function dragObjectTo(page, object, destination) {
   return { start, end, ...geometry };
 }
 async function waitForMovePreview(page, drag) {
-  try { await page.waitForFunction(() => document.querySelector('#move-preview-status')?.textContent.includes('Preview'), undefined, { timeout: 5000 }); }
+  try { await page.waitForFunction(() => document.querySelector('#move-preview-status')?.textContent.toLowerCase().includes('preview'), undefined, { timeout: 5000 }); }
   catch {
     const state = await page.evaluate(() => ({
       selected: document.querySelector('#selection-label')?.textContent,
