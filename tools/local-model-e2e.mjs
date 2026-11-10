@@ -97,6 +97,7 @@ try {
  await writeFile(path.join(home,'config.toml'),`model = ${JSON.stringify(model)}\nmodel_provider = "local_cpu"\n[model_providers.local_cpu]\nname = "Local CPU test only"\nbase_url = ${JSON.stringify(providerBase)}\nwire_api = "responses"\nrequires_openai_auth = false\n`);
  const address=await server.start();
  const connection={url:`http://127.0.0.1:${address.port}`,token,connectionId:randomBytes(16).toString('hex')};
+ gameToolSession=createGameToolSession(connection);
  bridge=new CodexBridge({timeoutMs:30000,spawnProcess:(exe,args,options)=>(codexProcess=spawn(exe,args,{...options,env:{PATH:process.env.PATH,HOME:dir,USERPROFILE:dir,TMPDIR:dir,TEMP:dir,TMP:dir,CODEX_HOME:home,NO_PROXY:'127.0.0.1,localhost',no_proxy:'127.0.0.1,localhost'}}))});
  let resolveDone,rejectDone;
  const done=new Promise((resolve,reject)=>{resolveDone=resolve;rejectDone=reject;});
@@ -105,8 +106,9 @@ try {
  bridge.on('event',event=>{
   if(event.type==='tool') {
    const record={name:event.name,arguments:event.arguments}; events.push(record);
-   executeGameTool(event,connection).then(result=>{
+   gameToolSession.execute(event).then(result=>{
     record.success=result.success;
+    try {const text=result.contentItems?.find(item=>item.type==='inputText')?.text;if(text)record.value=JSON.parse(text);}catch{}
     try {bridge.respond(event.id,result);}catch(error){rejectDone(error);}
    },rejectDone);
   } else if(event.type==='approval') {
