@@ -219,9 +219,23 @@ await withSmokeCleanup(async () => {
   assert.equal(previewState.revision, beforePreview.revision, 'pointer movement and preview do not mutate the server');
   assert.deepEqual(previewState.objects, beforePreview.objects);
   assert.equal(await bob.page.locator('#move-preview-status').isHidden(), true, 'the peer does not receive the local preview');
+  await alice.page.evaluate(() => {
+    window.__tusEscapeEvent = null;
+    window.addEventListener('keydown', event => { if (event.code === 'Escape') window.__tusEscapeEvent = event; }, { capture: true, once: true });
+  });
   await focus(alice);
   await alice.page.keyboard.press('Escape');
-  await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.hidden);
+  try { await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.hidden, undefined, { timeout: 5000 }); }
+  catch {
+    const escapeState = await alice.page.evaluate(() => ({
+      event: window.__tusEscapeEvent && { code: window.__tusEscapeEvent.code, defaultPrevented: window.__tusEscapeEvent.defaultPrevented },
+      hasFocus: document.hasFocus(),
+      activeElement: document.activeElement?.id || document.activeElement?.tagName,
+      preview: document.querySelector('#move-preview-status')?.textContent,
+      previewHidden: document.querySelector('#move-preview-status')?.hidden,
+    }));
+    throw new Error('Escape did not cancel local preview: ' + JSON.stringify(escapeState));
+  }
   assert.equal((await state()).revision, beforePreview.revision, 'Cancel discards only the local proposal');
 
   const secondDrag = await dragObjectTo(alice.page, built, { x: 20, z: 0 });
