@@ -228,7 +228,7 @@ function updateLightingControls(reset=false) {
   $('world-light-sun').disabled=role!=='admin'||frozen;
   $('world-light-preview').disabled=role!=='admin'||editing||Boolean(worldLightingPreview?.attempted);
   $('world-light-apply').disabled=role!=='admin'||editing||!worldLightingPreview||Boolean(worldLightingPreview.attempted);
-  $('world-light-cancel').disabled=role!=='admin'||!worldLightingPreview;
+  $('world-light-cancel').disabled=role!=='admin'||!worldLightingPreview||Boolean(worldLightingPreview.attempted);
 }
 function previewWorldLighting() {
   if(role!=='admin'||editing||worldLightingPreview?.attempted)return;
@@ -243,7 +243,7 @@ function previewWorldLighting() {
   $('world-light-message').textContent='Local preview only. Apply to change the shared world.';
 }
 function cancelWorldLightingPreview() {
-  if(!worldLightingPreview)return;
+  if(!worldLightingPreview||worldLightingPreview.attempted)return;
   worldLightingPreview=null;updateWorldLighting(worldState);updateLightingControls(true);
   $('world-light-message').textContent='Local preview canceled; shared lighting was not changed.';
 }
@@ -263,8 +263,22 @@ async function applyWorldLightingPreview() {
     worldLightingPreview=null;updateWorldLighting(worldState);updateLightingControls(true);
     $('world-light-message').textContent='Shared world lighting saved.';
   }catch(error){
-    $('world-light-message').textContent='Apply outcome is unknown or conflicted. No retry was sent; refresh the world before trying again. '+error.message;
-    updateLightingControls();
+    const generation=settingsGeneration;
+    $('world-light-message').textContent='Apply outcome is unknown or conflicted. No retry was sent; refreshing the server state before another attempt. '+error.message;
+    try{
+      const state=await request('/state');
+      if(generation!==settingsGeneration)return;
+      if(state?.error||!Number.isSafeInteger(state?.revision)||state.revision<latestStateRevision||!state.lighting)throw new Error(state?.message||'The server state could not be confirmed.');
+      renderWorld(state);
+      if(worldLightingPreview===preview){
+        worldLightingPreview=null;updateWorldLighting(worldState);updateLightingControls(true);
+        $('world-light-message').textContent='World state refreshed after Apply. Review current lighting before making another preview.';
+      }
+    }catch(refreshError){
+      if(generation!==settingsGeneration)return;
+      $('world-light-message').textContent='Apply outcome remains unknown. No retry was sent; reconnect or reload to refresh before trying again. '+error.message;
+      updateLightingControls();
+    }
   }
 }
 $('world-light-preview').addEventListener('click',previewWorldLighting);
@@ -327,8 +341,9 @@ function objectMesh(object) {
     }
     if (object.type === 'lamp') {
       const emitterMaterial=new THREE.MeshStandardMaterial({color:object.color,emissive:object.on?object.color:'#000000',emissiveIntensity:object.on ? .9 : 0,roughness:.35});
-      const emitter=new THREE.Mesh(new THREE.SphereGeometry(Math.max(.12,Math.min(x,z)*.34),12,8),emitterMaterial);emitter.position.set(0,y*.35,0);group.add(emitter);
-      const light=new THREE.PointLight(object.color,object.on?object.intensity:0,object.range,2);light.position.set(0,y*.35,0);light.castShadow=false;group.add(light);
+      const radius=Math.max(.12,Math.min(x,z)*.34),emitterY=y/2+radius;
+      const emitter=new THREE.Mesh(new THREE.SphereGeometry(radius,12,8),emitterMaterial);emitter.position.set(0,emitterY,0);group.add(emitter);
+      const light=new THREE.PointLight(object.color,object.on?object.intensity:0,object.range,2);light.position.set(0,emitterY,0);light.castShadow=false;group.add(light);
       group.userData.lampEmitter=emitter;group.userData.lampLight=light;
     }
     if (object.type === 'beacon') {

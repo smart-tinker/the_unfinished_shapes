@@ -175,7 +175,7 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25, context
       const ownerConfigOnly = interactive && object.ownerId === actor.id && updateFields.length > 0 && updateFields.every(key => configFields.includes(key));
       if (actor.role !== 'admin' && !(object.ownerId === actor.id && (actor.role === 'builder' || ownerConfigOnly))) fail('forbidden','Only the owner or an admin may edit this object.',403);
       if (Object.keys(command).some(key => !['type','id','expected',...editable].includes(key)) || !editable.some(key => Object.hasOwn(command,key))) fail('invalid_command','Update requires editable object fields; identity, state and interactive physics cannot be changed.');
-      if ([...configFields,'text','name',...(lamp?['color']:[])].some(key => Object.hasOwn(command,key)) && !Object.hasOwn(command,'expected')) fail('invalid_command','Changing access, button links or landmark labels requires current values in expected.');
+      if ([...configFields,'text','name',...(lamp?['color','position','size']:[])].some(key => Object.hasOwn(command,key)) && !Object.hasOwn(command,'expected')) fail('invalid_command','Changing lamp geometry, access, button links or landmark labels requires current values in expected.');
       if (Object.hasOwn(command,'expected')) {
         const expected = command.expected;
         const changed = editable.filter(key => Object.hasOwn(command,key));
