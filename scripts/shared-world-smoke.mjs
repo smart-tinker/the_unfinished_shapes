@@ -83,6 +83,21 @@ async function focus(client) {
   await client.page.waitForFunction(() => document.hasFocus() && !document.querySelector('#settings').open);
 }
 async function select(client, object) { await selectObject(client.page, object); }
+async function groundPoint(page, position) {
+  return page.evaluate(async value => {
+    const THREE = await import('three');
+    const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, .1, 220);
+    camera.position.set(33, 28, 38); camera.lookAt(0, 0, 0); camera.updateMatrixWorld();
+    const p = new THREE.Vector3(value.x, 0, value.z).project(camera);
+    return { x: (p.x + 1) * innerWidth / 2, y: (1 - p.y) * innerHeight / 2 };
+  }, position);
+}
+async function dragObjectTo(page, object, destination) {
+  const start = await groundPoint(page, object.position), end = await groundPoint(page, destination);
+  await page.mouse.move(start.x, start.y); await page.mouse.down();
+  for (let i = 1; i <= 100; i++) await page.mouse.move(start.x + (end.x - start.x) * i / 100, start.y + (end.y - start.y) * i / 100);
+  await page.mouse.up();
+}
 async function close(client) {
   if (!client.app) return;
   const app = client.app; client.app = null;
@@ -152,6 +167,38 @@ await withSmokeCleanup(async () => {
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('Y 2.0'), undefined, { timeout: 5000 });
+  // Drag stays local until Apply; the second client must never see the preview.
+  await focus(alice);
+  await alice.page.keyboard.down('a');
+  await waitForState(snapshot => {
+    const player = snapshot.players.find(item => item.id === 'alice');
+    return player?.position.y === 0 && player.position.x < 14;
+  }, 'Alice to leave the platform before moving it');
+  await alice.page.keyboard.up('a');
+  const beforePreview = await state();
+  await select(alice, built);
+  await dragObjectTo(alice.page, built, { x: 20, z: 0 });
+  await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.textContent.includes('Preview'));
+  const previewState = await state();
+  assert.equal(previewState.revision, beforePreview.revision, 'pointer movement and preview do not mutate the server');
+  assert.deepEqual(previewState.objects, beforePreview.objects);
+  assert.equal(await bob.page.locator('#move-preview-status').isHidden(), true, 'the peer does not receive the local preview');
+  await alice.page.keyboard.press('Escape');
+  await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.hidden);
+  assert.equal((await state()).revision, beforePreview.revision, 'Cancel discards only the local proposal');
+
+  await dragObjectTo(alice.page, built, { x: 20, z: 0 });
+  await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.textContent.includes('Preview'));
+  assert.equal((await state()).revision, beforePreview.revision);
+  await alice.page.locator('#edit-apply').click();
+  await alice.page.waitForFunction(() => document.querySelector('#edit-message').textContent.includes('saved'));
+  const movedState = await state();
+  const movedObject = movedState.objects.find(item => item.id === built.id);
+  assert.deepEqual(movedObject.position, { x: 20, y: 1, z: 0 });
+  assert.equal(movedState.revision, beforePreview.revision + 1, 'Apply commits exactly one update');
+  await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, movedState.revision);
+  built.position = movedObject.position;
+
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, builtState.revision);
   await select(alice, built); await select(bob, built);
   assert.equal(await bob.page.locator('#edit-apply').isDisabled(), true, 'foreign object is read-only');
