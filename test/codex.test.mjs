@@ -237,8 +237,8 @@ test('world tool schema exposes explicit flat operations without ownership mutat
  const command=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command;
  assert.equal(command.type,'object');assert.equal(command.oneOf,undefined);assert.equal(command.anyOf,undefined);
  assert.deepEqual(command.properties.type.enum,['move','move_group','update','remove','set_state','use']);
- assert.match(command.properties.type.description,/move the player only/);
- assert.match(command.properties.type.description,/same island and physics limits/);
+ assert.match(command.properties.type.description,/move uses the same physics as manual movement/);
+ assert.match(command.description,/Move changes only the player position and never builds anything/);assert.match(command.description,/manual movement speed, island boundary, collision and landing rules/);
  assert.match(command.properties.position.description,/5 units\/second.*island boundary/);
  assert.deepEqual(command.required,['type']);
  assert.equal(command.additionalProperties,false);assert.equal(command.properties.ownerId,undefined);
