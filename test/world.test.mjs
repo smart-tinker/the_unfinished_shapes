@@ -304,7 +304,7 @@ test('stairs and ramps are walkable in every cardinal direction and ignore clien
  for(const objectType of ['stairs','ramp'])for(const direction of ['north','east','south','west']){
   let world=applyCommand(emptyWorld(),builder,{type:'build',objectType,direction,position:{x:0,y:1,z:0},size:{x:8,y:2,z:8}}).state;
   const start={north:{x:0,z:5},east:{x:-5,z:0},south:{x:0,z:-5},west:{x:5,z:0}}[direction];
-  const target={north:{x:0,z:3.5},east:{x:3.5,z:0},south:{x:0,z:3.5},west:{x:-3.5,z:0}}[direction];
+  const target={north:{x:0,z:-3.5},east:{x:3.5,z:0},south:{x:0,z:3.5},west:{x:-3.5,z:0}}[direction];
   world.players.push({id:'alice',position:{...start,y:0},velocityY:0});
   for(let i=0;i<10;i++)world=move(world,{...target,y:500});
   assert.ok(player(world).position.y>1.5,objectType+' '+direction+' '+JSON.stringify(player(world).position));
