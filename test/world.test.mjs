@@ -416,7 +416,7 @@ test('button links one stable target and access settings are owner/admin-control
 test('closed doors block player movement and the open state makes the same passage traversable',()=>{
  let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'door',position:{x:2,y:1.5,z:0},size:{x:.5,y:3,z:.5}}).state;
  world=move(world,{x:0,y:0,z:0});
- world=move(world,{x:10,y:0,z:0});
+ for(let i=0;i<3;i++)world=move(world,{x:10,y:0,z:0});
  assert.ok(player(world).position.x<=1.18+1e-6,JSON.stringify(player(world).position));
  const opened=applyCommand(world,builder,{type:'set_state',id:world.objects[0].id,state:'open',expectedVersion:0});
  world=move(opened.state,{x:10,y:0,z:0});
