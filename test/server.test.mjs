@@ -251,6 +251,21 @@ test('button use checks both access policies, server position, idempotent target
  assert.equal(state.objects.find(o=>o.id===button.id).targetId,door.id);
 });
 
+test('button cannot close a door while an online player occupies the passage',async t=>{
+ const f=await fixture(t);
+ const door=(await (await f.send({type:'build',objectType:'door',position:{x:0,y:1.5,z:0},size:{x:1,y:3,z:.25}})).json()).object;
+ const button=(await (await f.send({type:'build',objectType:'button',position:{x:1,y:.25,z:0},size:{x:.5,y:.5,z:.25}})).json()).object;
+ await f.send({type:'set_state',id:door.id,state:'open',expectedVersion:0});
+ const configured=await f.send({type:'update',id:button.id,targetId:door.id,targetState:'closed',
+  expected:{targetId:null,targetState:'open'}});
+ const configuredButton=(await configured.json()).object;
+ const closed=await f.send({type:'use',id:button.id,expectedVersion:configuredButton.version,expectedTargetVersion:1});
+ assert.equal(closed.status,409);
+ assert.equal((await closed.json()).error,'occupied');
+ const world=await (await fetch(f.url+'/state',{headers:{Authorization:'Bearer '+token}})).json();
+ assert.equal(world.objects.find(object=>object.id===door.id).state,'open');
+});
+
 test('closing an open doorway is denied while an online player occupies the passage',async t=>{
  const f=await fixture(t);
  await f.send({type:'move',position:{x:0,y:0,z:0}});
