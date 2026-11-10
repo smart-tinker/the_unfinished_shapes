@@ -424,9 +424,13 @@ test('closed doors block player movement and the open state makes the same passa
 });
 
 test('legacy worlds receive the previous daylight values without changing saved objects',()=>{
- const legacy=validateWorld({version:1,revision:7,objects:[],players:[]});
+ const saved={id:'legacy-block',type:'block',position:{x:2,y:1,z:3},size:{x:2,y:2,z:2},color:'#c8a570',ownerId:'alice'};
+ const legacy=validateWorld({version:1,revision:7,objects:[saved],players:[]});
  assert.deepEqual(legacy.lighting,{version:0,ambientIntensity:2.6,sunIntensity:3.1});
  assert.deepEqual(emptyWorld().lighting,legacy.lighting);
+ assert.deepEqual({id:legacy.objects[0].id,color:legacy.objects[0].color,position:legacy.objects[0].position},
+  {id:saved.id,color:saved.color,position:saved.position});
+ assert.equal(legacy.objects.length,1);
 });
 
 test('lamps are bounded, persistent world objects with explicit versioned access-controlled state',()=>{
@@ -451,6 +455,16 @@ test('lamps are bounded, persistent world objects with explicit versioned access
   assert.throws(()=>applyCommand(state,builder,{type:'update',id:lamp.id,...changes,expected:Object.fromEntries(Object.keys(changes).map(key=>[key,lamp[key]]))}));
  }
  validateWorld(switched.state);
+});
+
+test('lamp position and size edits require exact expected values',()=>{
+ const built=applyCommand(emptyWorld(),builder,{type:'build',objectType:'lamp',position:{x:1,y:1,z:1},size:{x:.5,y:2,z:.5}});
+ const lamp=built.result.object;
+ assert.throws(()=>applyCommand(built.state,builder,{type:'update',id:lamp.id,position:{x:2,y:1,z:1}}),{code:'invalid_command'});
+ assert.throws(()=>applyCommand(built.state,builder,{type:'update',id:lamp.id,size:{x:.75,y:2,z:.5}}),{code:'invalid_command'});
+ const moved=applyCommand(built.state,builder,{type:'update',id:lamp.id,position:{x:2,y:1,z:1},expected:{position:lamp.position}});
+ assert.equal(moved.result.object.position.x,2);
+ assert.throws(()=>applyCommand(moved.state,builder,{type:'update',id:lamp.id,size:{x:.75,y:2,z:.5},expected:{size:lamp.size}}),{code:'conflict',status:409});
 });
 
 test('only an admin can set versioned world lighting within the documented ranges',()=>{
