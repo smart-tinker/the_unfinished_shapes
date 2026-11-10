@@ -50,6 +50,6 @@ for (const [axis, point, expected] of [
   ['z', { x: 2.2, y: 9.9, z: 7.2 }, { x: 0, y: 1, z: 7 }],
 ]) {
   test(`selected ${axis.toUpperCase()} axis snaps only that coordinate`, () => {
-    assert.deepEqual(placementPosition(point, object, null, 1, axis), expected);
+    assert.deepEqual(placementPosition(point, moving, null, 1, axis), expected);
   });
 }
