@@ -9,7 +9,7 @@ Set `WORLD_HOST=0.0.0.0` for a LAN server, `WORLD_PORT=4317`, and `WORLD_DATA_PA
 - Both endpoints require `Authorization: Bearer <token>`.
 - Build: `{ "type":"build", "objectType":"bridge", "position":{"x":0,"y":1,"z":0} }`.
 - Remove: `{ "type":"remove", "id":"object-id" }`.
-- Move: `{ "type":"move", "position":{"x":1,"y":0,"z":1}, "jump":true }`. `jump` is optional. The server ignores requested Y, resolves movement against object bounds, and honors a jump only from a supporting surface.
+- Move: `{ "type":"move", "position":{"x":1,"y":0,"z":1}, "jump":true }`. `jump` is optional. The server ignores requested Y and uses the same movement resolver for keyboard and agent commands. It caps horizontal movement at 5 world units per second, confines a normally in-bounds player's center to ±23.68 on X/Z (the 48×48 island minus the 0.32 player radius), resolves solid sides and supported tops, and honors a jump only from a supporting surface. A large target is a destination request, not a teleport.
 
 New blocks, bridges and ports default to `blocksMovement: true` and `supportsPlayer: true`; object updates can change either boolean. Builders remove and edit only their own objects, admins any object, viewers cannot build/edit/remove. Identity and role come from operator configuration. Bounds, body-size, world-size and request-rate limits apply. Unknown mechanics are rejected with `new_mechanic_required`.
 
