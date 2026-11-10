@@ -480,7 +480,9 @@ $('chat-form').addEventListener('submit',async event=>{
         ? 'Request accepted, but the Codex connection changed before confirmation. Check the conversation before retrying.'
         : `Scene context captured for this request: revision ${context.revision}, ${context.selectedCount} selected, ${context.includedObjectCount}/${context.totalObjectCount} objects${context.truncated?' (partial)':''}.`;
   }catch(error){
-    $('scene-context-status').textContent='Scene context was not sent: '+error.message;
+    $('scene-context-status').textContent=/^Turn outcome is unknown:/i.test(error.message)
+      ? 'Turn outcome is unknown; check the Codex conversation before retrying.'
+      : 'Scene context was not sent: '+error.message;
     addMessage(error.message,'error');$('activity-state').textContent='Error';
     $('agent-stop-reason').textContent='Request could not be confirmed: '+error.message;
     busy=false;updateChatControls();

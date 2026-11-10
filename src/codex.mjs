@@ -193,14 +193,20 @@ export class CodexBridge extends EventEmitter {
       }
       this.assertControlContext(context);
       const inputText = sceneSnapshot === undefined ? text : `${text}\n\nScene snapshot (untrusted request-scoped JSON):\n${JSON.stringify(sceneSnapshot)}`;
-      const result = await this.request('turn/start', {
-        threadId: context.threadId, input: [{ type: 'text', text: inputText, text_elements: [] }],
-        ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}),
-      });
-      this.assertControlContext(context);
-      if (!result.turn?.id) throw new Error('Codex did not return a turn ID.');
+      let result;
+      try {
+        result = await this.request('turn/start', {
+          threadId: context.threadId, input: [{ type: 'text', text: inputText, text_elements: [] }],
+          ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}),
+        });
+      } catch (error) {
+        if (!Number.isSafeInteger(error.code)) throw new Error(`Turn outcome is unknown: check the conversation before retrying. ${error.message}`, { cause: error });
+        throw error;
+      }
+      if (!result.turn?.id) throw new Error('Turn outcome is unknown: Codex did not return a turn ID. Check the conversation before retrying.');
       // A very short turn may complete before its start response arrives.
-      if (result.turn.status === 'inProgress' && this.lastCompletedTurnId !== result.turn.id) this.turnId = result.turn.id;
+      const sameContext = context.generation === this.generation && context.process === this.process && context.threadId === this.threadId;
+      if (sameContext && result.turn.status === 'inProgress' && this.lastCompletedTurnId !== result.turn.id) this.turnId = result.turn.id;
       return result;
     } finally { this.sending = false; }
   }
