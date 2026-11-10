@@ -191,6 +191,7 @@ test('interactive controls send explicit state and button versions without clien
  h.context.selectedId='door-1';h.context.objectData=new Map([['door-1',{id:'door-1',type:'door',version:4}],['button-1',{id:'button-1',type:'button',version:3,targetId:'door-1'}]]);h.context.fillInspector=()=>{};
  h.context.document.querySelectorAll=()=>[];
  h.load('async function command(body)',"for (const button of document.querySelectorAll(");
+ assert.equal(typeof h.element('edit-open').listeners.click,'function','open action must be wired');
  await h.element('edit-open').listeners.click();
  h.context.inspectorBase={id:'button-1',type:'button',version:3,targetId:'door-1'};
  await h.element('edit-use-button').listeners.click();
@@ -219,9 +220,11 @@ test('inspector submits access and button links with exact current values',async
  }
  const door={id:'door-1',type:'door',ownerId:'alice',color:'#886644',position:{x:0,y:1.5,z:0},size:{x:1,y:3,z:.25},blocksMovement:true,supportsPlayer:false,state:'closed',usePolicy:'owner_admin',version:0};
  const policy=await submit(door,{usePolicy:'all_players'});
+ assert.ok(policy,'access policy changes must produce a server command');
  assert.equal(policy.usePolicy,'all_players');assert.deepEqual(policy.expected,{usePolicy:'owner_admin'});
  const button={id:'button-1',type:'button',ownerId:'alice',color:'#886644',position:{x:1,y:.25,z:0},size:{x:.5,y:.5,z:.25},blocksMovement:false,supportsPlayer:false,targetId:null,targetState:'open',usePolicy:'owner_admin',version:0};
  const link=await submit(button,{targetId:'door-1',targetState:'closed'});
+ assert.ok(link,'button link changes must produce a server command');
  assert.equal(link.targetId,'door-1');assert.equal(link.targetState,'closed');
  assert.deepEqual(link.expected,{targetId:null,targetState:'open'});
 });
