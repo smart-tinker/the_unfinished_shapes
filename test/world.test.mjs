@@ -392,7 +392,7 @@ test('doors and gates persist an explicit, versioned open state without toggling
 });
 
 test('button links one stable target and access settings are owner/admin-controlled',()=>{
- let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'door',position:{x:4,y:1.5,z:0},size:{x:1.5,y:3,z:.25}}).state;
+ let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'door',position:{x:2,y:1.5,z:0},size:{x:1.5,y:3,z:.25}}).state;
  const door=world.objects[0];
  world=applyCommand(world,builder,{type:'build',objectType:'button',position:{x:1,y:.25,z:0},size:{x:.5,y:.5,z:.25}}).state;
  const button=world.objects[1];
