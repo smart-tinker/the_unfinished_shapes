@@ -478,7 +478,7 @@ function selectObject(id, fromPoll = false, additive = false) {
   if (additive) {
     if (next.has(id)) { next.delete(id); primary = selectedId === id ? [...next].at(-1) ?? null : selectedId; }
     else if (next.size < MAX_GROUP_SELECTION) next.add(id);
-    else { $('selection-label').textContent = 'Selection is limited to ' + MAX_GROUP_SELECTION + ' shapes.'; return false; }
+    else { $('group-move-status').textContent = 'Selection is limited to ' + MAX_GROUP_SELECTION + ' shapes.'; return false; }
   } else if (id && next.has(id)) return true;
   else { next.clear(); if (id) next.add(id); }
   return applySelection(next,primary);
