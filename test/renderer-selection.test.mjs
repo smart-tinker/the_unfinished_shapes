@@ -62,7 +62,7 @@ test('box selection uses projected object centers and includes occluded objects'
  assert.deepEqual(JSON.parse(h.run('JSON.stringify([...selectedIds])')),['one','two']);
 });
 
-test('group move preview applies one snapped delta and preserves relative positions locally',()=>{
+test('group move preview preserves relative positions and remains local until Apply',()=>{
  const h=rendererHarness();
  const first={id:'one',position:{x:0,y:1,z:0}};
  const second={id:'two',position:{x:3,y:1,z:2}};
@@ -85,4 +85,60 @@ test('group move preview applies one snapped delta and preserves relative positi
   {id:'two',position:{x:8,y:1,z:5},expectedPosition:{x:3,y:1,z:2}},
  ]);
  assert.equal(h.run('sends.length'),0);
+});
+
+test('multi-selection marks read-only members and caps selected stable IDs at 32',()=>{
+ const h=selectionHarness();
+ h.run("selectObject('one');selectObject('two',false,true)");
+ assert.equal(h.element('selection-label').textContent,'2 shapes selected · 1 read-only');
+ assert.equal(h.run("selectionBoxes.get('two').color"),'#aab7bd');
+ assert.equal(h.element('remove').disabled,true);
+ for(let i=1;i<=31;i++){
+  const object={id:'extra-'+i,type:'block',ownerId:'alice',position:{x:i,y:0,z:0},size:{x:1,y:1,z:1}};
+  h.context.objectData.set(object.id,object);h.context.meshes.set(object.id,{id:object.id});
+  h.run("selectObject('"+object.id+"',false,true)");
+ }
+ assert.equal(h.run('selectedIds.size'),32);
+ assert.equal(h.run("selectedIds.has('extra-31')"),false);
+ assert.match(h.element('selection-label').textContent,/32 shapes selected/);
+ assert.match(h.element('group-move-status').textContent,/limited to 32/);
+});
+
+test('Apply submits one atomic group command and waits for server confirmation',async()=>{
+ const h=rendererHarness();
+ h.run(`let movePreview={objects:[{id:'one'},{id:'two'}],changes:[
+  {id:'one',position:{x:2,y:1,z:0},expectedPosition:{x:0,y:1,z:0}},
+  {id:'two',position:{x:5,y:1,z:2},expectedPosition:{x:3,y:1,z:2}}
+ ]},settingsGeneration=0,editing=false,commands=[];
+ function clearMovePreview(){movePreview=null}
+ async function command(body){commands.push(body);return {objects:body.changes.map(change=>({id:change.id,position:change.position}))}}
+ async function request(){throw new Error('Unexpected refresh')}
+ function renderWorld(){}
+ function feedback(){}
+`);
+ h.load('async function applyGroupMove()', "$('group-move-apply').addEventListener");
+ await h.run('applyGroupMove()');
+ assert.equal(h.run('commands.length'),1);
+ assert.equal(h.run('commands[0].type'),'move_group');
+ assert.equal(h.run('commands[0].changes.length'),2);
+ assert.equal(h.element('group-move-status').textContent,'The server confirmed all 2 shapes moved in one update.');
+});
+
+test('Apply does not retry when the group outcome is unconfirmed',async()=>{
+ const h=rendererHarness();
+ h.run(`const oldObjects=[{id:'one',position:{x:0,y:1,z:0}},{id:'two',position:{x:3,y:1,z:2}}];
+ let movePreview={objects:oldObjects,changes:[
+  {id:'one',position:{x:2,y:1,z:0},expectedPosition:oldObjects[0].position},
+  {id:'two',position:{x:5,y:1,z:2},expectedPosition:oldObjects[1].position}
+ ]},settingsGeneration=0,editing=false,commands=[];
+ function clearMovePreview(){movePreview=null}
+ async function command(body){commands.push(body);throw new Error('Object two changed since it was read.')}
+ async function request(){return {revision:4,objects:oldObjects}}
+ function renderWorld(){}
+ function feedback(){}
+`);
+ h.load('async function applyGroupMove()', "$('group-move-apply').addEventListener");
+ await h.run('applyGroupMove()');
+ assert.equal(h.run('commands.length'),1);
+ assert.match(h.element('group-move-status').textContent,/no retry was sent/i);
 });
