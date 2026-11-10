@@ -31,5 +31,5 @@ test('the status distinguishes normal turns from an active native Goal', () => {
 test('disconnect never presents the agent as idle or the Goal as stopped', () => {
   const h = harness();
   h.run("codexEvent({ type: 'connected', threadId: 'thread-1' }); agentControlState = { threadStatus: 'idle', pendingApprovals: 0, goal: { id: 'goal-1', status: 'active' } }; codexEvent({ type: 'disconnected' })");
-  assert.equal(h.element('agent-status').textContent, 'Codex disconnected');
+  assert.equal(h.element('agent-status').textContent, 'Codex disconnected · Goal status unknown');
 });
