@@ -61,3 +61,19 @@ test('chat submits the captured scene in the same native request and reports the
   });
   assert.match(h.element('scene-context-status').textContent, /revision 7.*1 selected.*2\/3 objects.*partial/i);
 });
+
+test('chat warns before retry when an accepted turn loses its connection', async () => {
+  const h=sceneHarness();
+  h.context.bridge={sendPrompt:async()=>({sceneContext:{
+    revision:7,selectedCount:1,includedObjectCount:2,totalObjectCount:3,truncated:false,
+    attached:true,connectionChangedAfterAcceptance:true,
+  }})};
+  h.context.addMessage=()=>{};
+  h.context.startActivity=()=>{};
+  h.context.updateChatControls=()=>{};
+  h.run('let connected=true,busy=false,streamMessage=null;');
+  h.load('function sceneContextForPrompt() {', "$('interrupt').addEventListener");
+  h.element('prompt').value='Build this';
+  await h.element('chat-form').listeners.submit({preventDefault(){}});
+  assert.match(h.element('scene-context-status').textContent,/accepted.*connection changed.*check.*before retrying/i);
+});
