@@ -242,7 +242,11 @@ await withSmokeCleanup(async () => {
   await waitForMovePreview(alice.page, firstDrag);
   assert.deepEqual(await alice.page.locator('#edit-position-x').inputValue().then(async x => ({ x: Number(x), y: Number(await alice.page.locator('#edit-position-y').inputValue()), z: Number(await alice.page.locator('#edit-position-z').inputValue()) })), { x: 20, y: 1, z: 0 }, 'the visible 0.5 grid snaps an X-axis drag without changing other coordinates');
   const previewState = await state();
-  assert.equal(previewState.revision, beforePreview.revision, 'pointer movement and preview do not mutate the server');
+  assert.equal(previewState.revision, beforePreview.revision,
+    `pointer movement and preview do not mutate the server: ${JSON.stringify({
+      before: { revision: beforePreview.revision, players: beforePreview.players.map(({ id, position, velocityY }) => ({ id, position, velocityY })) },
+      after: { revision: previewState.revision, players: previewState.players.map(({ id, position, velocityY }) => ({ id, position, velocityY })) },
+    })}`);
   assert.deepEqual(previewState.objects, beforePreview.objects);
   assert.equal(await bob.page.locator('#move-preview-status').isHidden(), true, 'the peer does not receive the local preview');
   await alice.page.evaluate(() => {
