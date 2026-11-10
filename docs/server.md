@@ -13,4 +13,6 @@ Set `WORLD_HOST=0.0.0.0` for a LAN server, `WORLD_PORT=4317`, and `WORLD_DATA_PA
 
 New blocks, bridges and ports default to `blocksMovement: true` and `supportsPlayer: true`; object updates can change either boolean. Builders remove and edit only their own objects, admins any object, viewers cannot build/edit/remove. Identity and role come from operator configuration. Bounds, body-size, world-size and request-rate limits apply. Unknown mechanics are rejected with `new_mechanic_required`.
 
+Existing saved objects and players outside the island are preserved on load; the server does not relocate players or discard objects. Such a player cannot move farther outward, but can return toward the island at the same speed limit. Object coordinate validation remains compatible with existing saves.
+
 Mutations are serialized and written atomically before becoming visible. Invalid/corrupt saved worlds stop startup rather than silently resetting. Keep one server process per data file. Older saves receive default physics flags for existing objects and a zero vertical velocity for players; no objects are discarded. There is no general schema migration framework. The prototype does not implement distributed locks, account registration or expiry/revocation UI. Use TLS for networks you do not fully trust.
