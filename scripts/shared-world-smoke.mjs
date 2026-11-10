@@ -213,8 +213,8 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('a');
   const beforePreview = await state();
   await select(alice, built);
-  const drag = await dragObjectTo(alice.page, built, { x: 20, z: 0 });
-  await waitForMovePreview(alice.page, drag);
+  const firstDrag = await dragObjectTo(alice.page, built, { x: 20, z: 0 });
+  await waitForMovePreview(alice.page, firstDrag);
   const previewState = await state();
   assert.equal(previewState.revision, beforePreview.revision, 'pointer movement and preview do not mutate the server');
   assert.deepEqual(previewState.objects, beforePreview.objects);
@@ -223,8 +223,8 @@ await withSmokeCleanup(async () => {
   await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.hidden);
   assert.equal((await state()).revision, beforePreview.revision, 'Cancel discards only the local proposal');
 
-  const drag = await dragObjectTo(alice.page, built, { x: 20, z: 0 });
-  await waitForMovePreview(alice.page, drag);
+  const secondDrag = await dragObjectTo(alice.page, built, { x: 20, z: 0 });
+  await waitForMovePreview(alice.page, secondDrag);
   assert.equal((await state()).revision, beforePreview.revision);
   await alice.page.locator('#edit-apply').click();
   await alice.page.waitForFunction(() => document.querySelector('#edit-message').textContent.includes('saved'));
