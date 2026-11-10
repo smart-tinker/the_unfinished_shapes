@@ -302,7 +302,7 @@ function setMovePreviewPosition(draft, target) {
     $('edit-message').textContent = 'Preview only — nothing has been sent to the world server.';
   } else {
     $('group-move-status').textContent = 'Local preview for ' + objects.length + ' objects. Apply once to move the group; Cancel or Escape discards it.';
-    $('group-move-apply').disabled = false; $('group-move-cancel').hidden = false;
+    $('group-move-apply').disabled = false;
   }
   $('move-cancel').hidden = false;
   $('move-preview-status').hidden = false;
@@ -438,8 +438,10 @@ function selectObject(id, fromPoll = false, additive = false) {
     if (next.has(id)) { next.delete(id); primary = selectedId === id ? [...next].at(-1) ?? null : selectedId; }
     else if (next.size < MAX_GROUP_SELECTION) next.add(id);
     else { $('group-move-status').textContent = 'Selection is limited to ' + MAX_GROUP_SELECTION + ' shapes.'; return false; }
-  } else if (id && next.has(id)) return true;
-  else { next.clear(); if (id) next.add(id); }
+  } else if (id && next.has(id)) {
+    if (next.size === 1) return true;
+    next.clear(); next.add(id);
+  } else { next.clear(); if (id) next.add(id); }
   return applySelection(next,primary);
 }
 function selectObjectsInBox(start,end,additive=false) {
