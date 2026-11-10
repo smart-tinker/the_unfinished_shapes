@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('public CI security checks use least-permission pinned actions', () => {
@@ -40,16 +40,14 @@ test('default-branch issue and pull request templates require scope and verifiab
   for (const required of ['Issue and scope', 'Definition of Done', 'Exact tested head SHA', 'Unverified native']) assert.ok(pr.includes(required));
 });
 
-test('blank issues cannot bypass the required issue forms', () => {
-  const configPath = new URL('../.github/ISSUE_TEMPLATE/config.yml', import.meta.url);
-  assert.equal(existsSync(configPath), true);
-  assert.ok(read('.github/ISSUE_TEMPLATE/config.yml').includes('blank_issues_enabled: false'));
+test('blank issues are disabled for public contributors', () => {
+  assert.match(read('.github/ISSUE_TEMPLATE/config.yml'), /^blank_issues_enabled: false\\s*$/m);
 });
 
-test('PR template directs default-branch safeguards to main', () => {
-  const pr = read('.github/pull_request_template.md').toLowerCase();
-  assert.ok(pr.includes('target main for repository configuration'));
-  assert.ok(pr.includes('target the current rc branch for application changes'));
+test('PR template visibly directs default-branch safeguards to main', () => {
+  const visible = read('.github/pull_request_template.md').replace(/<!--[\\s\\S]*?-->/g, '').toLowerCase();
+  assert.ok(visible.includes('target main for repository configuration'));
+  assert.ok(visible.includes('target the current rc branch for application changes'));
 });
 
 test('Dependabot checks npm and GitHub Actions weekly in bounded groups', () => {
