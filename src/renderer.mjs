@@ -399,7 +399,12 @@ $('move-grid-step').disabled = !$('move-snap-enabled').checked;
 $('move-snap-enabled').addEventListener('change', () => { $('move-grid-step').disabled = !$('move-snap-enabled').checked; refreshMovePreview(); });
 $('move-grid-step').addEventListener('input', refreshMovePreview);
 $('move-cancel').addEventListener('click', cancelMovePreview);
-$('edit-form').addEventListener('input', event => { inspectorDirty = true; if (event?.target?.id?.startsWith('edit-position-')) updateMovePreviewFromInspector(); });
+$('edit-form').addEventListener('input', event => {
+  const id = event?.target?.id;
+  if (!id?.startsWith('edit-position-') && !id?.startsWith('edit-size-') && !['edit-color', 'edit-blocks-movement', 'edit-supports-player'].includes(id)) return;
+  inspectorDirty = true;
+  if (id.startsWith('edit-position-')) updateMovePreviewFromInspector();
+});
 $('edit-reset').addEventListener('click', () => { if (movePreview || dragCandidate) cancelMovePreview(); else fillInspector(objectData.get(selectedId)); });
 $('edit-form').addEventListener('submit', async event => {
   event.preventDefault(); if (!selectedId || !inspectorBase || editing) return;

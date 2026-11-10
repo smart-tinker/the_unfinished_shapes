@@ -90,14 +90,14 @@ test('unrelated concurrent change does not get overwritten by edit', async () =>
 
 test('poll preserves unapplied fields and warns of remote changes', () => {
   const h = editingHarness(); h.element('edit-color').value = '#ffffff';
-  h.element('edit-form').listeners.input(); h.run("objectData.get(selectedId).color='#000000';selectObject(selectedId,true)");
+  h.element('edit-form').listeners.input({ target: { id: 'edit-color' } }); h.run("objectData.get(selectedId).color='#000000';selectObject(selectedId,true)");
   assert.equal(h.element('edit-color').value, '#ffffff');
   assert.equal(h.run('inspectorDirty'), true);
   assert.match(h.element('edit-message').textContent, /unapplied values are preserved/);
 });
 
 test('deletion hides inspector, and cancelled selection change preserves the draft', () => {
-  const h = editingHarness(); h.element('edit-form').listeners.input();
+  const h = editingHarness(); h.element('edit-form').listeners.input({ target: { id: 'edit-color' } });
   h.context.window.confirm = () => false; h.run('selectObject(null)');
   assert.equal(h.run('selectedId'), 'shape-1');
   h.run('objectData.clear();selectObject(null,true)');
@@ -105,7 +105,7 @@ test('deletion hides inspector, and cancelled selection change preserves the dra
 });
 
 test('failed update retains draft and restores editable controls', async () => {
-  const h = editingHarness(); h.element('edit-size-x').value = '7'; h.element('edit-form').listeners.input();
+  const h = editingHarness(); h.element('edit-size-x').value = '7'; h.element('edit-form').listeners.input({ target: { id: 'edit-size-x' } });
   h.run("failure='Server rejected edit'"); await h.submit();
   assert.equal(h.element('edit-size-x').value, '7');
   assert.equal(h.run('inspectorDirty'), true);
