@@ -2,16 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { rendererHarness } from './support/renderer-harness.mjs';
 
-test('chat submission sends one immutable scene snapshot with the player request', async () => {
+test('chat submission passes one captured camera and selection view with the player request', async () => {
   const h = rendererHarness(), calls = [];
-  const snapshot = {
-    world: 'http://world.example',
-    revision: 7,
+  const view = {
     selectedIds: ['object-1'],
-    camera: { position: { x: 1, y: 2, z: 3 }, target: { x: 0, y: 0, z: 0 }, fov: 42, aspect: 1.5, width: 900, height: 600 },
-    objects: [{ id: 'object-1', type: 'block', inCameraFrustum: true }],
+    camera: { position: { x: 1, y: 2, z: 3 }, target: { x: 0, y: 0, z: 0 }, fov: 42, aspect: 1.5, near: 0.1, far: 220, viewport: { width: 900, height: 600 } },
   };
-  h.context.sceneContextForPrompt = () => structuredClone(snapshot);
+  h.context.sceneContextForPrompt = () => structuredClone(view);
   h.context.bridge = { sendPrompt: async (...args) => { calls.push(args); } };
   h.context.addMessage = () => {};
   h.context.startActivity = () => {};
@@ -24,5 +21,5 @@ test('chat submission sends one immutable scene snapshot with the player request
 
   assert.equal(calls.length, 1, 'scene context travels in the same native request, not a second turn');
   assert.equal(calls[0][0], 'Make this taller');
-  assert.deepEqual(calls[0][1], snapshot);
+  assert.deepEqual(calls[0][1], view);
 });
