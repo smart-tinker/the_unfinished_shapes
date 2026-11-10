@@ -213,10 +213,11 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('a');
   const beforePreview = await state();
   await select(alice, built);
+  await alice.page.locator('#move-grid-step').fill('0.5');
   await alice.page.locator('#move-plane').selectOption('x');
-  const firstDrag = await dragObjectTo(alice.page, built, { x: 20, y: 1, z: 0 }, true);
+  const firstDrag = await dragObjectTo(alice.page, built, { x: 20.2, y: 1, z: 0 }, true);
   await waitForMovePreview(alice.page, firstDrag);
-  assert.deepEqual(await alice.page.locator('#edit-position-x').inputValue().then(async x => ({ x: Number(x), y: Number(await alice.page.locator('#edit-position-y').inputValue()), z: Number(await alice.page.locator('#edit-position-z').inputValue()) })), { x: 20, y: 1, z: 0 }, 'X-axis dragging changes only X');
+  assert.deepEqual(await alice.page.locator('#edit-position-x').inputValue().then(async x => ({ x: Number(x), y: Number(await alice.page.locator('#edit-position-y').inputValue()), z: Number(await alice.page.locator('#edit-position-z').inputValue()) })), { x: 20, y: 1, z: 0 }, 'the visible 0.5 grid snaps an X-axis drag without changing other coordinates');
   const previewState = await state();
   assert.equal(previewState.revision, beforePreview.revision, 'pointer movement and preview do not mutate the server');
   assert.deepEqual(previewState.objects, beforePreview.objects);
@@ -239,6 +240,16 @@ await withSmokeCleanup(async () => {
     throw new Error('Escape did not cancel local preview: ' + JSON.stringify(escapeState));
   }
   assert.equal((await state()).revision, beforePreview.revision, 'Cancel discards only the local proposal');
+
+  await alice.page.locator('#move-snap-enabled').uncheck();
+  const unsnappedDrag = await dragObjectTo(alice.page, built, { x: 20.2, y: 1, z: 0 }, true);
+  await waitForMovePreview(alice.page, unsnappedDrag);
+  const unsnappedX = Number(await alice.page.locator('#edit-position-x').inputValue());
+  assert.ok(Math.abs(unsnappedX - 20.2) < 1e-6, 'disabling snap preserves exact pointer position');
+  await alice.page.locator('#move-cancel').click();
+  await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.hidden);
+  assert.equal((await state()).revision, beforePreview.revision, 'Cancel button discards only the local proposal');
+  await alice.page.locator('#move-snap-enabled').check();
 
   await alice.page.locator('#move-plane').selectOption('xz');
   const secondDrag = await dragObjectTo(alice.page, built, { x: 20, z: 10 });

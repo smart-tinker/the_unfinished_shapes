@@ -28,6 +28,8 @@ function editingHarness() {
   return h;
 }
 
+function loadObjectDrag(h) { h.load('function canEditObject(', 'function fillInspector('); }
+
 test('inspector hydrates selected shape, and role/ownership determines editing controls', () => {
   const h = editingHarness();
   assert.equal(h.element('edit-position-y').value, 1);
@@ -134,4 +136,82 @@ test('drag settings do not mark object inspector fields dirty', () => {
     h.element('edit-form').listeners.input({ target: { id } });
     assert.equal(h.run('inspectorDirty'), false, `${id} is a drag preference, not an object edit`);
   }
+});
+
+test('a second Apply while the first update is pending does not send a duplicate', async () => {
+  const h = editingHarness();
+  h.element('edit-position-x').value = '5';
+  h.run(`command = async body => {
+    sends.push(body);
+    return new Promise(resolve => {
+      globalThis.finishCommand = () => resolve({ revision: 2, object: { ...objectData.get(body.id), position: structuredClone(body.position) } });
+    });
+  }`);
+  const first = h.submit();
+  await h.submit();
+  assert.equal(h.run('sends.length'), 1);
+  h.run('finishCommand()');
+  await first;
+  assert.equal(h.run('sends.length'), 1);
+});
+
+test('a lost update response is confirmed from server state without retrying', async () => {
+  const h = editingHarness();
+  h.element('edit-position-x').value = '5';
+  h.run(`movePreview = { objectId: selectedId, ghost: null };
+    failure = 'Connection lost after write';
+    stateSnapshot = { objects: [{ ...objectData.get(selectedId), position: { x: 5, y: 1, z: 0 } }] }`);
+  await h.submit();
+  assert.equal(h.run('sends.length'), 1);
+  assert.deepEqual(JSON.parse(h.run('JSON.stringify(stateReads)')), ['/state']);
+  assert.equal(h.run('movePreview'), null);
+  assert.match(h.element('edit-message').textContent, /no retry was sent/i);
+});
+
+test('object dragging captures the pointer and suspends camera controls', () => {
+  const h = editingHarness();
+  h.context.capturedPointer = null;
+  h.context.renderer = { domElement: { dataset: {}, setPointerCapture(id) { h.context.capturedPointer = id; } } };
+  h.context.controls = { enabled: true };
+  h.context.meshes = new Map([['shape-1', {}]]);
+  loadObjectDrag(h);
+  h.run(`pointerRay = () => ({ intersectObjects: () => [{ object: { userData: { worldId: 'shape-1' } } }] });
+    beginObjectDrag({ button: 0, clientX: 5, clientY: 5, pointerId: 7 })`);
+  assert.equal(h.context.capturedPointer, 7);
+  assert.equal(h.context.controls.enabled, false);
+  h.run('clearMovePreview()');
+  assert.equal(h.context.controls.enabled, true);
+});
+
+test('pointer rays use resized canvas bounds', () => {
+  const h = editingHarness();
+  let rect = { left: 100, top: 50, width: 400, height: 300 };
+  h.context.renderer = { domElement: { getBoundingClientRect: () => rect } };
+  h.context.camera = {};
+  h.context.THREE = {
+    Vector2: class { constructor(x, y) { this.x = x; this.y = y; } },
+    Raycaster: class { setFromCamera(point, camera) { this.point = point; this.camera = camera; } },
+  };
+  loadObjectDrag(h);
+  const centeredRay = (x, y) => h.run(`pointerRay({ clientX: ${x}, clientY: ${y} })`);
+  assert.deepEqual(JSON.parse(JSON.stringify(centeredRay(300, 200).point)), { x: 0, y: 0 });
+  rect = { left: 200, top: 120, width: 1000, height: 700 };
+  assert.deepEqual(JSON.parse(JSON.stringify(centeredRay(700, 470).point)), { x: 0, y: 0 });
+});
+
+test('clearing a local preview disposes its transient geometry and material', () => {
+  const h = editingHarness();
+  let geometryDisposed = 0, materialDisposed = 0, removed = false;
+  h.context.ghostMesh = {
+    geometry: { dispose() { geometryDisposed++; } },
+    material: { dispose() { materialDisposed++; } },
+    traverse(callback) { callback(this); },
+  };
+  h.context.scene = { remove: mesh => { removed = mesh === h.context.ghostMesh; } };
+  loadObjectDrag(h);
+  h.run('movePreview = { ghost: ghostMesh }; clearMovePreview()');
+  assert.equal(geometryDisposed, 1);
+  assert.equal(materialDisposed, 1);
+  assert.equal(removed, true);
+  assert.equal(h.run('movePreview'), null);
 });
