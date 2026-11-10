@@ -35,6 +35,7 @@ test('build preview stays local until Apply and Cancel never sends a command',as
  }
  const h=rendererHarness(),commands=[],added=[],removed=[];
  h.context.THREE={Shape,ExtrudeGeometry,BoxGeometry,Group,Mesh,MeshStandardMaterial:Material};
+ h.context.SHAPE_DEFAULT_SIZES={stairs:{x:8,y:2,z:4},ramp:{x:4,y:2,z:8}};
  h.context.document.querySelectorAll=()=>[];
  h.context.scene={add(mesh){added.push(mesh);},remove(mesh){removed.push(mesh);}};
  h.context.selectedKind='stairs';h.context.selectedPreset='stairs';h.context.buildPreview=null;

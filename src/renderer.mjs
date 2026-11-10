@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { movePlayer, WALK_SPEED, WORLD_SIZE } from './movement.mjs';
+import { movePlayer, WALK_SPEED, WORLD_SIZE, SHAPE_DEFAULT_SIZES } from './movement.mjs';
 import { placementPosition, positionUpdateCommand } from './placement.mjs';
 
 const $ = id => document.getElementById(id);
 const bridge = window.tus;
 let isFullscreen = false;
 let settings = { serverUrl: 'http://127.0.0.1:4317', token: '' };
-let selectedKind = 'block', selectedId = null, worldRevision = -1, connected = false, busy = false;
+let selectedKind = 'block', selectedPreset = 'block', buildPreview = null, selectedId = null, worldRevision = -1, connected = false, busy = false;
 let settingsGeneration = 0, ordinaryTurn = false;
 let agentControlState = null, agentControlRead = 0, agentControlLoading = false, agentControlBusy = false, goalMessageContextId = null;
 let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 0, z: 0 }, playerVelocityY = 0, jumpRequested = false, meId = null, localMovementVersion = 0, latestStateRevision = -1;
@@ -200,18 +200,96 @@ function objectMesh(object) {
   const group = new THREE.Group(); group.userData.worldId = object.id;
   const { x, y, z } = object.size;
   const material = new THREE.MeshStandardMaterial({ color: object.color, roughness: .85 });
-  const addBox = (w, h, d, px, py, pz, mat = material) => { const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); mesh.position.set(px, py, pz); mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh); };
-  addBox(x, y, z, 0, 0, 0);
-  if (object.type === 'bridge') {
-    const rail = new THREE.MeshStandardMaterial({ color: '#615950', roughness: .8 });
-    addBox(x, .18, .15, 0, y / 2 + .65, z / 2 - .15, rail); addBox(x, .18, .15, 0, y / 2 + .65, -z / 2 + .15, rail);
-  }
-  if (object.type === 'port') {
-    const pole = new THREE.MeshStandardMaterial({ color: '#5b6259' });
-    addBox(.18, 3, .18, -x / 2 + .6, y / 2 + 1.5, -z / 2 + .6, pole);
-    addBox(1.2, .7, .06, -x / 2 + 1.2, y / 2 + 2.5, -z / 2 + .6, new THREE.MeshStandardMaterial({ color: '#eac16c' }));
+  const addBox = (w, h, d, px, py, pz, mat = material, placementSurface = false) => { const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); mesh.position.set(px, py, pz); mesh.castShadow = true; mesh.receiveShadow = true; mesh.userData.placementSurface = placementSurface; group.add(mesh); };
+  if (object.type === 'ramp' || object.type === 'stairs') {
+    const eastWest = object.direction === 'east' || object.direction === 'west', run = eastWest ? x : z, width = eastWest ? z : x;
+    const profile = new THREE.Shape();
+    profile.moveTo(-run / 2, -y / 2);
+    if (object.type === 'ramp') {
+      profile.lineTo(run / 2, -y / 2); profile.lineTo(run / 2, y / 2);
+    } else {
+      profile.lineTo(run / 2, -y / 2); profile.lineTo(run / 2, y / 2);
+      for (let level = 3; level >= 0; level--) {
+        const edge = -run / 2 + run * level / 4;
+        profile.lineTo(edge, -y / 2 + y * (level + 1) / 4); profile.lineTo(edge, -y / 2 + y * level / 4);
+      }
+    }
+    profile.closePath();
+    const geometry = new THREE.ExtrudeGeometry(profile, { depth: width, bevelEnabled: false }); geometry.translate(0, 0, -width / 2);
+    const mesh = new THREE.Mesh(geometry, material); mesh.castShadow = true; mesh.receiveShadow = true; mesh.userData.placementSurface = true; group.add(mesh);
+    group.rotation.y = ({ east: 0, south: -Math.PI / 2, west: Math.PI, north: Math.PI / 2 })[object.direction];
+  } else {
+    addBox(x, y, z, 0, 0, 0, material, true);
+    if (object.type === 'bridge') {
+      const rail = new THREE.MeshStandardMaterial({ color: '#615950', roughness: .8 });
+      addBox(x, .18, .15, 0, y / 2 + .65, z / 2 - .15, rail); addBox(x, .18, .15, 0, y / 2 + .65, -z / 2 + .15, rail);
+    }
+    if (object.type === 'port') {
+      const pole = new THREE.MeshStandardMaterial({ color: '#5b6259' });
+      addBox(.18, 3, .18, -x / 2 + .6, y / 2 + 1.5, -z / 2 + .6, pole);
+      addBox(1.2, .7, .06, -x / 2 + 1.2, y / 2 + 2.5, -z / 2 + .6, new THREE.MeshStandardMaterial({ color: '#eac16c' }));
+    }
   }
   group.position.set(object.position.x, object.position.y, object.position.z); return group;
+}
+function clearBuildPreview() {
+  if (buildPreview?.mesh) { scene?.remove(buildPreview.mesh); disposeGroup(buildPreview.mesh); }
+  buildPreview = null;
+  $('build-preview-actions').hidden = true; $('build-preview-status').hidden = true;
+  $('build-preview-status').textContent = ''; $('build-apply').disabled = false; $('build-cancel').disabled = false;
+}
+function buildDesign() {
+  const presets = {
+    block: { type: 'block', size: { x: 2, y: 2, z: 2 } },
+    wall: { type: 'block', size: { x: 8, y: 4, z: 1 } },
+    floor: { type: 'block', size: { x: 8, y: .5, z: 8 } },
+    column: { type: 'block', size: { x: 1, y: 4, z: 1 } },
+    bridge: { type: 'bridge', size: { x: 10, y: 1, z: 3 } },
+    port: { type: 'port', size: { x: 12, y: 1, z: 8 } },
+    stairs: { type: 'stairs', size: SHAPE_DEFAULT_SIZES.stairs },
+    ramp: { type: 'ramp', size: SHAPE_DEFAULT_SIZES.ramp },
+  };
+  const preset = presets[selectedPreset] ?? presets.block;
+  const directional = preset.type === 'stairs' || preset.type === 'ramp';
+  return {
+    type: 'build', objectType: preset.type, ...(directional ? { direction: $('build-direction').value } : {}),
+    position: { x: Number($('build-x').value), y: preset.size.y / 2, z: Number($('build-z').value) },
+    size: { ...preset.size }, color: '#c8a570',
+  };
+}
+function previewSelectedBuild() {
+  if (editing) return;
+  clearBuildPreview();
+  if (!scene) { feedback('The 3D scene is not ready; the shared world was not changed.', true); return; }
+  const design = buildDesign(), object = { id: 'build-preview', type: design.objectType, position: design.position, size: design.size, color: design.color, direction: design.direction };
+  const mesh = objectMesh(object);
+  mesh.traverse(child => {
+    if (!child.material) return;
+    child.material = child.material.clone(); child.material.color.set('#f3c969'); child.material.transparent = true; child.material.opacity = .42; child.material.depthWrite = false;
+  });
+  scene.add(mesh); buildPreview = { command: design, mesh, attempted: false };
+  $('build-preview-actions').hidden = false; $('build-preview-status').hidden = false;
+  $('build-preview-status').textContent = 'Local preview only. Apply to add this shape to the shared world.';
+  $('build-apply').disabled = false; feedback('Preview only — the shared world has not changed.');
+}
+async function applyBuildPreview() {
+  const draft = buildPreview;
+  if (!draft || draft.attempted || editing) return;
+  draft.attempted = true; editing = true; $('build-apply').disabled = true; $('build-cancel').disabled = true;
+  const generation = settingsGeneration;
+  try {
+    const result = await command(draft.command);
+    if (generation !== settingsGeneration) return;
+    if (!result.object) throw new Error('The server did not confirm the new shape.');
+    clearBuildPreview(); feedback('Shape added to the shared world.');
+  } catch (error) {
+    if (generation !== settingsGeneration) return;
+    $('build-preview-status').textContent = error.message + ' No automatic retry was sent; check the shared world before submitting again.';
+    feedback(error.message, true);
+  } finally {
+    editing = false;
+    if (buildPreview) { $('build-apply').disabled = buildPreview.attempted; $('build-cancel').disabled = false; }
+  }
 }
 function pointerRay(event) {
   const rect = renderer.domElement.getBoundingClientRect();
@@ -251,9 +329,9 @@ function placementHit(event, draft) {
   const surfaces = [...meshes.entries()].filter(([id]) => id !== draft.objectId && !moving.has(id)).map(([, mesh]) => mesh);
   for (const hit of ray.intersectObjects(surfaces, true)) {
     const id = objectIdForHit(hit.object), surface = objectData.get(id);
-    if (!surface?.supportsPlayer || meshes.get(id)?.children[0] !== hit.object) continue;
+    if (!surface?.supportsPlayer || !hit.object.userData.placementSurface) continue;
     const normal = hit.face?.normal?.clone().transformDirection(hit.object.matrixWorld);
-    if (normal?.y > .9) return { point: hit.point, surface };
+    if (normal?.y > .5) return { point: hit.point, surface };
   }
   return target;
 }
@@ -559,8 +637,17 @@ async function syncPosition() {
 }
 async function command(body) { const result = await request('/command', 'POST', body); if (result.error) throw new Error(result.message || result.error); await poll(); return result; }
 
-for (const button of document.querySelectorAll('[data-kind]')) button.addEventListener('click', () => { selectedKind = button.dataset.kind; document.querySelectorAll('[data-kind]').forEach(el => el.classList.toggle('selected', el === button)); });
-$('build-form').addEventListener('submit', async event => { event.preventDefault(); const button = event.submitter; button.disabled = true; try { await command({ type: 'build', objectType: selectedKind, position: { x: Number($('build-x').value), y: selectedKind === 'block' ? 1 : .5, z: Number($('build-z').value) } }); feedback(`${selectedKind[0].toUpperCase() + selectedKind.slice(1)} placed in the shared world.`); } catch (error) { feedback(error.message, true); } finally { button.disabled = false; } });
+for (const button of document.querySelectorAll('[data-kind]')) button.addEventListener('click', () => {
+  if (editing) return;
+  selectedKind = button.dataset.kind; selectedPreset = button.dataset.preset || selectedKind;
+  document.querySelectorAll('[data-kind]').forEach(el => el.classList.toggle('selected', el === button));
+  const directional = selectedKind === 'stairs' || selectedKind === 'ramp';
+  $('build-direction-row').hidden = !directional; $('build-direction').disabled = !directional;
+  clearBuildPreview();
+});
+$('build-form').addEventListener('submit', event => { event.preventDefault(); previewSelectedBuild(); });
+$('build-apply').addEventListener('click', applyBuildPreview);
+$('build-cancel').addEventListener('click', () => { if (!editing) { clearBuildPreview(); feedback('Build preview cancelled; the shared world was not changed.'); } });
 $('remove').addEventListener('click', async () => { if (!selectedId) return; const id = selectedId; $('remove').disabled = true; try { await command({ type: 'remove', id }); feedback('Shape removed.'); } catch (error) { feedback(error.message, true); } finally { $('remove').disabled = !selectedId; } });
 $('move-grid-step').disabled = !$('move-snap-enabled').checked;
 $('move-snap-enabled').addEventListener('change', () => { $('move-grid-step').disabled = !$('move-snap-enabled').checked; refreshMovePreview(); });
