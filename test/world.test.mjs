@@ -21,8 +21,8 @@ test('vectors, colors and corrupt saved data are rejected',()=>{
  assert.throws(()=>validateWorld({version:2,revision:0,objects:[],players:[]}));
 });
 test('move updates only the authenticated player and keeps height server-owned',()=>{
- const state=applyCommand(emptyWorld(),builder,{type:'move',position:{x:1,y:2,z:3}}).state;
- assert.deepEqual(state.players,[{id:'alice',position:{x:1,y:0,z:3},velocityY:0}]);
+ const state=applyCommand(emptyWorld(),builder,{type:'move',position:{x:.5,y:2,z:.5}}).state;
+ assert.deepEqual(state.players,[{id:'alice',position:{x:.5,y:0,z:.5},velocityY:0}]);
 });
 test('update changes only supplied fields and preserves object identity',()=>{
  const {state}=applyCommand(emptyWorld(),builder,build), original=state.objects[0];
@@ -157,4 +157,43 @@ test('jump cannot restart in the air and falling from an edge reaches lower grou
  assert.equal(player(platform).position.y,2);
  for(let i=0;i<8;i++) platform=move(platform,{x:10,y:0,z:0});
  assert.equal(player(platform).position.y,0);
+});
+
+
+test('manual and agent movement share a speed cap and stay on the island',()=>{
+ const alice={id:'alice',role:'builder'}, bob={id:'bob',role:'builder'};
+ const command={type:'move',position:{x:1000,y:99,z:1000}};
+ const manual=applyCommand(emptyWorld(),alice,command,.25).state.players[0].position;
+ const agent=applyCommand(emptyWorld(),bob,command,.25).state.players[0].position;
+ assert.deepEqual(agent,manual);
+ assert.ok(Math.hypot(manual.x,manual.z)<=1.25+1e-6,JSON.stringify(manual));
+
+ let world=applyCommand(emptyWorld(),alice,{type:'move',position:{x:0,y:0,z:0}},.25).state;
+ for(let i=0;i<50;i++) world=applyCommand(world,alice,command,.25).state;
+ assert.ok(player(world).position.x<=23.68+1e-6,JSON.stringify(player(world).position));
+ assert.ok(player(world).position.x>23.6,JSON.stringify(player(world).position));
+ for(let i=0;i<50;i++) world=applyCommand(world,alice,{type:'move',position:{x:-1000,y:0,z:0}},.25).state;
+ assert.ok(player(world).position.x>=-23.68-1e-6,JSON.stringify(player(world).position));
+ assert.ok(player(world).position.x< -23.6,JSON.stringify(player(world).position));
+});
+
+test('legacy objects and players outside the island remain intact while the player can recover inward',()=>{
+ const legacy={version:1,revision:7,
+  objects:[{id:'old-remote-object',type:'block',position:{x:500,y:1,z:-400},size:{x:2,y:2,z:2},color:'#c8a570',ownerId:'alice'}],
+  players:[{id:'alice',position:{x:31,y:0,z:0},velocityY:0}]};
+ let world=validateWorld(legacy);
+ assert.deepEqual(world.objects[0].position,{x:500,y:1,z:-400});
+ assert.deepEqual(player(world).position,{x:31,y:0,z:0});
+ world=applyCommand(world,builder,{type:'move',position:{x:32,y:0,z:0}},.25).state;
+ assert.equal(player(world).position.x,31,'outward movement from a legacy position is blocked without teleporting it');
+ world=applyCommand(world,builder,{type:'move',position:{x:29.5,y:0,z:0}},.25).state;
+ assert.ok(player(world).position.x<31,JSON.stringify(player(world).position));
+ assert.ok(player(world).position.x>=29.75-1e-6,JSON.stringify(player(world).position));
+ assert.deepEqual(world.objects[0].position,{x:500,y:1,z:-400});
+});
+
+test('movement rejects non-numeric, non-finite, and out-of-range coordinates',()=>{
+ for(const x of [NaN,Infinity,-Infinity,1001,-1001,'1',null]){
+  assert.throws(()=>applyCommand(emptyWorld(),builder,{type:'move',position:{x,y:0,z:0}}));
+ }
 });

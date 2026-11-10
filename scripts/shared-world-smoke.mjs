@@ -148,22 +148,26 @@ await withSmokeCleanup(async () => {
 
   alice.graphics.phase('agent movement observed by both clients');
   const agentMove = await worldCommand('alice', { type: 'move', position: { x: 12, y: 1, z: 0 } });
-  await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent === 'X 12.0 · Y 0.0 · Z 0.0');
+  assert.ok(agentMove.position.x > 0 && agentMove.position.x <= 1.25 + 1e-6, JSON.stringify(agentMove.position));
+  await alice.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, agentMove.revision);
+  const expectedAgentCoordinates = `X ${agentMove.position.x.toFixed(1)} · Y 0.0 · Z 0.0`;
+  await alice.page.waitForFunction(text => document.querySelector('#coordinates').textContent === text, expectedAgentCoordinates);
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, agentMove.revision);
-  const acceptedAgentPosition = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x === 12, 'the agent move to be visible in the shared state');
+  const acceptedAgentPosition = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x === agentMove.position.x, 'the agent move to be visible in the shared state');
+  const acceptedAgentX = acceptedAgentPosition.players.find(player => player.id === 'alice').position.x;
 
   await focus(alice);
   await alice.page.keyboard.down('d');
   let manualMove;
   try {
-    manualMove = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x > acceptedAgentPosition.players.find(player => player.id === 'alice').position.x, 'manual movement to continue from the agent position');
+    manualMove = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x > acceptedAgentX, 'manual movement to continue from the agent position');
   } finally {
     await alice.page.keyboard.up('d');
   }
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, manualMove.revision);
   const observedMove = (await state('bob')).players.find(player => player.id === 'alice');
-  assert.ok(observedMove.position.x > 12, 'the second client sees Alice beyond the agent destination');
-  assert.ok(Number((await alice.page.locator('#coordinates').textContent()).match(/X ([\d.-]+)/)?.[1]) > 12, 'the local GUI displays movement continuing from the agent destination');
+  assert.ok(observedMove.position.x > acceptedAgentPosition.players.find(player => player.id === 'alice').position.x, 'the second client sees Alice move farther under keyboard control');
+  await alice.page.waitForFunction(minimum => Number(document.querySelector('#coordinates').textContent.match(/X ([\d.-]+)/)?.[1]) > minimum, acceptedAgentX);
   alice.graphics.phase('manual shared construction');
   await alice.page.locator('#build-x').fill('16');
   await alice.page.locator('#build-z').fill('0');
@@ -174,8 +178,16 @@ await withSmokeCleanup(async () => {
   assert.deepEqual(built.position, { x: 16, y: 1, z: 0 });
 
   alice.graphics.phase('collision and jump onto a walkable top');
+  await focus(alice);
+  await alice.page.keyboard.down('d');
+  let reachedWall;
+  try {
+    reachedWall = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 14.68, 'Alice to reach the solid face at normal walking speed');
+  } finally {
+    await alice.page.keyboard.up('d');
+  }
   const blocked = await worldCommand('alice', { type: 'move', position: { x: 30, y: 999, z: 0 } });
-  assert.ok(blocked.position.x < 14.7, 'the server stops Alice at the solid side');
+  assert.ok(blocked.position.x >= 14.68 && blocked.position.x < 14.7, 'the server stops Alice at the solid side');
   assert.equal(blocked.position.y, 0, 'client coordinates cannot grant unsupported height');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, blocked.revision);
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('X 14.7'));
@@ -304,6 +316,25 @@ await withSmokeCleanup(async () => {
     const settings = JSON.parse(await readFile(path.join(dir, id, 'settings.json'), 'utf8'));
     assert.equal(Object.hasOwn(settings, 'token'), false);
   }
+  alice.graphics.phase('shared island boundary');
+  await focus(alice);
+  await alice.page.keyboard.down('d');
+  let atEdge;
+  try {
+    atEdge = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 23.68 - 1e-6, 'Alice to reach the island edge at normal walking speed');
+  } finally {
+    await alice.page.keyboard.up('d');
+  }
+  const edgePosition = atEdge.players.find(player => player.id === 'alice').position;
+  assert.ok(edgePosition.x >= 23.68 - 1e-6 && edgePosition.x <= 23.68 + 1e-6, JSON.stringify(edgePosition));
+  await returning.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, atEdge.revision);
+  const outwardMove = await worldCommand('alice', { type: 'move', position: { x: 1000, y: 999, z: 0 } });
+  assert.deepEqual(outwardMove.position, edgePosition, 'an agent target beyond the island cannot move Alice past its edge');
+  await Promise.all([alice.page, returning.page].map(page => page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, outwardMove.revision)));
+  const [aliceEdge, bobEdge] = await Promise.all([state('alice'), state('bob')]);
+  assert.deepEqual(aliceEdge.players.find(player => player.id === 'alice').position, outwardMove.position);
+  assert.deepEqual(bobEdge.players.find(player => player.id === 'alice').position, outwardMove.position);
+
   console.log('Shared-world acceptance passed: two real clients, UI build/select/edit/remove, owner permissions, server and client restart, shared persistence.');
 }, ...[() => Promise.allSettled(clients.map(close)).then(results => {
   const failures = results.filter(r => r.status === 'rejected').map(r => r.reason);

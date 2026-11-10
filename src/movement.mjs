@@ -1,8 +1,24 @@
+export const WORLD_SIZE = 48;
+export const WALK_SPEED = 5;
 const PLAYER_RADIUS = 0.32;
 const PLAYER_HEIGHT = 1.62;
 const JUMP_SPEED = 9.5;
 const GRAVITY = 18;
 const EPSILON = 1e-7;
+
+
+function islandPosition(start, requested) {
+  const limit = WORLD_SIZE / 2 - PLAYER_RADIUS;
+  if (start > limit) return Math.min(start, Math.max(limit, requested));
+  if (start < -limit) return Math.max(start, Math.min(-limit, requested));
+  return Math.max(-limit, Math.min(limit, requested));
+}
+function movementDestination(start, requested, duration) {
+  const x = islandPosition(start.x, requested.x), z = islandPosition(start.z, requested.z);
+  const dx = x - start.x, dz = z - start.z, distance = Math.hypot(dx, dz);
+  const scale = distance > WALK_SPEED * duration && distance > 0 ? WALK_SPEED * duration / distance : 1;
+  return { x: start.x + dx * scale, z: start.z + dz * scale };
+}
 
 function overlapsTop(object, x, z) {
   return Math.abs(x - object.position.x) < object.size.x / 2 + PLAYER_RADIUS &&
@@ -69,12 +85,13 @@ export function movePlayer(world, current, command, deltaSeconds = 0.25) {
   if (command.jump && supportAt(objects, position.x, position.z, position.y) !== null) velocityY = JUMP_SPEED;
 
   const duration = Number.isFinite(deltaSeconds) ? Math.max(0, Math.min(deltaSeconds, 0.25)) : 0;
+  const destination = movementDestination(start, command.position, duration);
   const steps = Math.max(1, Math.ceil(duration * 60));
   const step = duration / steps;
   for (let i = 1; i <= steps; i++) {
     const progress = i / steps;
-    position.x = sweepAxis(objects, position, 'x', start.x + (command.position.x - start.x) * progress);
-    position.z = sweepAxis(objects, position, 'z', start.z + (command.position.z - start.z) * progress);
+    position.x = sweepAxis(objects, position, 'x', start.x + (destination.x - start.x) * progress);
+    position.z = sweepAxis(objects, position, 'z', start.z + (destination.z - start.z) * progress);
     if (!step) continue;
 
     const support = supportAt(objects, position.x, position.z, position.y);

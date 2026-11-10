@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { movePlayer } from './movement.mjs';
+import { movePlayer, WALK_SPEED, WORLD_SIZE } from './movement.mjs';
 import { placementPosition, positionUpdateCommand } from './placement.mjs';
 
 const $ = id => document.getElementById(id);
@@ -128,8 +128,8 @@ function initScene() {
   scene.add(new THREE.HemisphereLight('#fff9df', '#4e7472', 2.6));
   const sun = new THREE.DirectionalLight('#ffe0a5', 3.1); sun.position.set(-20, 38, 18); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.camera.left = -45; sun.shadow.camera.right = 45; sun.shadow.camera.top = 45; sun.shadow.camera.bottom = -45; sun.shadow.normalBias = .04; scene.add(sun);
   const water = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), new THREE.MeshStandardMaterial({ color: '#628d97', roughness: .3, metalness: .16 })); water.rotation.x = -Math.PI / 2; water.position.y = -1.1; water.receiveShadow = true; scene.add(water);
-  const island = new THREE.Mesh(new THREE.BoxGeometry(48, 1.5, 48), new THREE.MeshStandardMaterial({ color: '#a9bca6', roughness: 1 })); island.position.y = -.85; island.receiveShadow = true; scene.add(island);
-  const grid = new THREE.GridHelper(48, 24, '#738f7f', '#91aa95'); grid.position.y = -.08; grid.material.opacity = .45; grid.material.transparent = true; scene.add(grid);
+  const island = new THREE.Mesh(new THREE.BoxGeometry(WORLD_SIZE, 1.5, WORLD_SIZE), new THREE.MeshStandardMaterial({ color: '#a9bca6', roughness: 1 })); island.position.y = -.85; island.receiveShadow = true; scene.add(island);
+  const grid = new THREE.GridHelper(WORLD_SIZE, WORLD_SIZE / 2, '#738f7f', '#91aa95'); grid.position.y = -.08; grid.material.opacity = .45; grid.material.transparent = true; scene.add(grid);
   // The island is decoration. Authoritative object positions come only from the server.
   scene.add(sceneRoot); player = avatar('#f2e7cf'); scene.add(player);
   companion = new THREE.Mesh(new THREE.OctahedronGeometry(.46), new THREE.MeshStandardMaterial({ color: '#efbd61', roughness: .35, metalness: .3 })); companion.castShadow = true; scene.add(companion);
@@ -150,9 +150,9 @@ function initScene() {
     const length = Math.hypot(x, z);
     if (length) { x /= length; z /= length; }
     const target = {
-      x: Math.max(-99, Math.min(99, playerPosition.x + x * dt * 5)),
+      x: playerPosition.x + x * dt * WALK_SPEED,
       y: playerPosition.y,
-      z: Math.max(-99, Math.min(99, playerPosition.z + z * dt * 5)),
+      z: playerPosition.z + z * dt * WALK_SPEED,
     };
     const moved = movePlayer(worldState,{position:playerPosition,velocityY:playerVelocityY},{position:target,jump:jumpRequested},dt);
     if (moved.position.x !== playerPosition.x || moved.position.y !== playerPosition.y || moved.position.z !== playerPosition.z || moved.velocityY !== playerVelocityY) {

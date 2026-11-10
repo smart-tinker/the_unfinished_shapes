@@ -238,6 +238,8 @@ test('world tool schema exposes explicit flat operations without ownership mutat
  assert.equal(command.type,'object');assert.equal(command.oneOf,undefined);assert.equal(command.anyOf,undefined);
  assert.deepEqual(command.properties.type.enum,['move','update','remove']);
  assert.match(command.properties.type.description,/move the player only/);
+ assert.match(command.properties.type.description,/same island and physics limits/);
+ assert.match(command.properties.position.description,/5 units\/second.*island boundary/);
  assert.deepEqual(command.required,['type']);
  assert.equal(command.additionalProperties,false);assert.equal(command.properties.ownerId,undefined);
  assert.deepEqual(command.properties.expected.properties.position.properties.x,{type:'number'});
