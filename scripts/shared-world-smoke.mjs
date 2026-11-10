@@ -219,6 +219,7 @@ await withSmokeCleanup(async () => {
   assert.equal(previewState.revision, beforePreview.revision, 'pointer movement and preview do not mutate the server');
   assert.deepEqual(previewState.objects, beforePreview.objects);
   assert.equal(await bob.page.locator('#move-preview-status').isHidden(), true, 'the peer does not receive the local preview');
+  await focus(alice);
   await alice.page.keyboard.press('Escape');
   await alice.page.waitForFunction(() => document.querySelector('#move-preview-status')?.hidden);
   assert.equal((await state()).revision, beforePreview.revision, 'Cancel discards only the local proposal');
