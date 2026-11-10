@@ -19,6 +19,7 @@ Read README.md and docs/server.md before changing mechanics. This is a desktop E
 - Map each DoD criterion to a check and evidence. Keep the specification stable and one dated current-status section instead of accumulating contradictory final summaries.
 - For a regression, demonstrate the missing behavior before the fix, then rerun on the final code. An import/setup failure is not evidence that the behavioral assertion failed. Validate changed test scripts too; never weaken assertions to obtain green.
 - Record exact source/head SHA, command/scenario, environment and result. Distinguish PASS, FAIL, UNRUN, BLOCKED and INVALID evidence. Recheck PR head and checks after the last edit; old green checks do not validate a new SHA.
+- For performance evidence, measure the packaged renderer separately from server/network/persistence timings and label the actual graphics backend, including software rendering.
 - Treat implemented, tested, merged, packaged, published and accepted as separate stages. A model's success text is not proof of world state; verify the server and persisted result. Mock/protocol tests do not replace native app-server, real-model or packaged GUI evidence.
 - Use checks proportionate to the change; exercise applicable stale responses, repeated actions, cancellation, reconnect and restart. Report unavailable platforms explicitly. Do not dispatch paid checks, publish, merge or deploy without the corresponding authorization.
 
