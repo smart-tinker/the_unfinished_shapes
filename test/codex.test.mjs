@@ -251,7 +251,7 @@ test('world tool schema exposes explicit flat operations without ownership mutat
 test('world_build requires every design field and general command cannot advertise build',()=>{
  const build=WORLD_TOOLS.find(t=>t.name==='world_build').inputSchema;
  assert.deepEqual(build.required,['objectType','position','size','color']);assert.equal(build.additionalProperties,false);
- assert.deepEqual(build.properties.objectType.enum,['block','bridge','port']);assert.equal(build.properties.color.type,'string');
+ assert.deepEqual(build.properties.objectType.enum,['block','bridge','port','stairs','ramp']);assert.deepEqual(build.properties.direction.enum,['north','east','south','west']);assert.match(build.properties.direction.description,/required for stairs and ramps/i);assert.equal(build.properties.color.type,'string');
  const command=WORLD_TOOLS.find(t=>t.name==='world_command').inputSchema.properties.command;
  assert.equal(command.properties.type.enum.includes('build'),false);
 });
