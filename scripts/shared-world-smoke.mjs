@@ -213,7 +213,7 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('a');
   const beforePreview = await state();
   await select(alice, built);
-  const firstDrag = await dragObjectTo(alice.page, built, { x: 20, z: 0 });
+  const firstDrag = await dragObjectTo(alice.page, built, { x: 20, z: 10 });
   await waitForMovePreview(alice.page, firstDrag);
   const previewState = await state();
   assert.equal(previewState.revision, beforePreview.revision, 'pointer movement and preview do not mutate the server');
@@ -238,14 +238,14 @@ await withSmokeCleanup(async () => {
   }
   assert.equal((await state()).revision, beforePreview.revision, 'Cancel discards only the local proposal');
 
-  const secondDrag = await dragObjectTo(alice.page, built, { x: 20, z: 0 });
+  const secondDrag = await dragObjectTo(alice.page, built, { x: 20, z: 10 });
   await waitForMovePreview(alice.page, secondDrag);
   assert.equal((await state()).revision, beforePreview.revision);
   await alice.page.locator('#edit-apply').click();
   await alice.page.waitForFunction(() => document.querySelector('#edit-message').textContent.includes('saved'));
   const movedState = await state();
   const movedObject = movedState.objects.find(item => item.id === built.id);
-  assert.deepEqual(movedObject.position, { x: 20, y: 1, z: 0 });
+  assert.deepEqual(movedObject.position, { x: 20, y: 1, z: 10 });
   assert.equal(movedState.revision, beforePreview.revision + 1, 'Apply commits exactly one update');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, movedState.revision);
   built.position = movedObject.position;
