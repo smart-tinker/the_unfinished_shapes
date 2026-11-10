@@ -23,7 +23,9 @@ test('provenance follows testing and hash-checked staging, not an automatic publ
     const next = ['macos', 'linux'][index];
     const section = stage.split(`\n  ${job}:\n`)[1].split(next ? `\n  ${next}:\n` : '\u0000')[0];
     assert.match(section, /id-token: write\n      attestations: write/);
-    assert.ok(section.indexOf(`stage ${job} dist/candidate`) < section.indexOf('actions/attest-build-provenance@'));
+    const staged = section.indexOf(`stage ${job} dist/candidate`);
+    const attested = section.indexOf('actions/attest-build-provenance@');
+    assert.ok(staged >= 0 && attested > staged);
     assert.match(section, /subject-path: dist\/candidate\/\*/);
   }
 });
