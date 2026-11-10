@@ -11,7 +11,10 @@ function vector(value, limit, minimum = -limit) {
 }
 function cameraView(value) {
   if (!exactKeys(value, ['position','target','fov','aspect','near','far','viewport'])) throw new Error('Scene context camera is invalid.');
-  const position = vector(value.position, 10000), target = vector(value.target, 10000), viewport = value.viewport;
+  const viewport = value.viewport;
+  let position, target;
+  try { position = vector(value.position, 10000); target = vector(value.target, 10000); }
+  catch { throw new Error('Scene context camera vectors must be finite and bounded.'); }
   if (!exactKeys(viewport, ['width','height']) || !Number.isSafeInteger(viewport.width) || viewport.width < 1 || viewport.width > 16384 ||
       !Number.isSafeInteger(viewport.height) || viewport.height < 1 || viewport.height > 16384 ||
       !Number.isFinite(value.fov) || value.fov <= 1 || value.fov >= 179 ||

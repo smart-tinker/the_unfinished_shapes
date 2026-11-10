@@ -93,7 +93,7 @@ const sceneWorld = (objects, players = []) => ({
   players:[{id:'alice',position:{x:0,y:0,z:0},velocityY:0},...players],
   me:{id:'alice',role:'builder'}, mechanics:['block','bridge','port'],
 });
-const sceneView = (revision=7, selectedIds=[]) => ({revision,selectedIds,camera:sceneCamera});
+const sceneView = (revision=7, selectedIds=[]) => ({revision,selectedIds,camera:structuredClone(sceneCamera)});
 
 test('scene snapshots distinguish camera-frustum objects from selected objects', () => {
   assert.equal(typeof gameTools.captureSceneSnapshot, 'function', 'scene snapshot helper must be implemented');

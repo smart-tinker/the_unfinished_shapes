@@ -31,7 +31,7 @@ test('scene capture freezes camera, revision and an empty selection', () => {
   });
   h.run('camera.position.x = 99; selectedId = "changed-after-capture";');
   assert.equal(captured.camera.position.x, 1);
-  assert.deepEqual(captured.selectedIds, []);
+  assert.deepEqual(JSON.parse(JSON.stringify(captured.selectedIds)), []);
 });
 
 test('chat submits the captured scene in the same native request and reports the accepted context', async () => {
