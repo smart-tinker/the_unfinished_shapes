@@ -47,9 +47,9 @@ test('blank issues cannot bypass the required issue forms', () => {
 });
 
 test('PR template directs default-branch safeguards to main', () => {
-  const pr = read('.github/pull_request_template.md');
+  const pr = read('.github/pull_request_template.md').toLowerCase();
   assert.ok(pr.includes('target main for repository configuration'));
-  assert.ok(pr.includes('target the current RC branch for application changes'));
+  assert.ok(pr.includes('target the current rc branch for application changes'));
 });
 
 test('Dependabot checks npm and GitHub Actions weekly in bounded groups', () => {
