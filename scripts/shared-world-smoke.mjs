@@ -352,8 +352,9 @@ await withSmokeCleanup(async () => {
   await returning.page.waitForFunction(() => document.querySelector('#selection-label').textContent === 'No shape selected');
   assert.equal((await state('bob')).objects.length, 1);
   await select(alice,lamp);await alice.page.locator('#remove').click();
-  await alice.page.waitForFunction(()=>document.querySelector('#world-message').textContent.includes('removed'));
-  assert.equal((await state('bob')).objects.length,0,'removing the lamp also removes its rendered light');
+  const removedLamp=await waitForState(snapshot=>snapshot.objects.length===0,'the lamp removal to reach shared state');
+  await Promise.all([alice,returning].map(client=>client.page.waitForFunction(revision=>Number(document.querySelector('#revision').textContent.split(' ')[1])>=revision,removedLamp.revision)));
+  assert.equal((await state('bob')).objects.length,0,'the removed lamp is absent from the shared world');
   for (const id of ['alice', 'bob']) {
     const settings = JSON.parse(await readFile(path.join(dir, id, 'settings.json'), 'utf8'));
     assert.equal(Object.hasOwn(settings, 'token'), false);
