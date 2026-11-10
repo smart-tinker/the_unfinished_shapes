@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { rendererHarness } from './support/renderer-harness.mjs';
 
@@ -141,4 +142,26 @@ test('Apply does not retry when the group outcome is unconfirmed',async()=>{
  await h.run('applyGroupMove()');
  assert.equal(h.run('commands.length'),1);
  assert.match(h.element('group-move-status').textContent,/no retry was sent/i);
+});
+
+
+test('plain click on a selected group member collapses selection to that shape',()=>{
+ const h=selectionHarness();
+ h.run("selectObject('one');selectObject('two',false,true)");
+ h.run("selectObject('one')");
+ assert.deepEqual(JSON.parse(h.run('JSON.stringify([...selectedIds])')),['one']);
+ assert.equal(h.run('selectedId'),'one');
+});
+
+test('group move preview references only controls present in the renderer document',()=>{
+ const html=readFileSync(new URL('../src/index.html',import.meta.url),'utf8');
+ const source=readFileSync(new URL('../src/renderer.mjs',import.meta.url),'utf8');
+ const start=source.indexOf('function setMovePreviewPosition(');
+ const end=source.indexOf('function refreshMovePreview(',start);
+ assert.ok(start>=0&&end>start);
+ const functionBody=source.slice(start,end);
+ const documentIds=new Set([...html.matchAll(/\\bid="([^"]+)"/g)].map(match=>match[1]));
+ for(const [,id] of functionBody.matchAll(/\\$\\('([^']+)'\\)/g)) {
+  assert.ok(documentIds.has(id),`missing renderer element #${id}`);
+ }
 });
