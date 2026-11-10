@@ -430,6 +430,37 @@ function updateMovePreviewFromInspector() {
   draft.ghost.position.set(position.x, position.y, position.z);
   $('move-preview-status').textContent = 'Manual position preview. Apply changes to update the shared world.';
 }
+function selectObject(id, fromPoll = false, additive = false) {
+  if (fromPoll) return applySelection([...selectedIds],null,true);
+  if (additive && !id) return true;
+  const next = new Set(selectedIds); let primary = id;
+  if (additive) {
+    if (next.has(id)) { next.delete(id); primary = selectedId === id ? [...next].at(-1) ?? null : selectedId; }
+    else if (next.size < MAX_GROUP_SELECTION) next.add(id);
+    else { $('group-move-status').textContent = 'Selection is limited to ' + MAX_GROUP_SELECTION + ' shapes.'; return false; }
+  } else if (id && next.has(id)) return true;
+  else { next.clear(); if (id) next.add(id); }
+  return applySelection(next,primary);
+}
+function selectObjectsInBox(start,end,additive=false) {
+  const rect = renderer.domElement.getBoundingClientRect(), left = Math.min(start.x,end.x), right = Math.max(start.x,end.x);
+  const top = Math.min(start.y,end.y), bottom = Math.max(start.y,end.y), ids = [];
+  camera.updateMatrixWorld?.();
+  for (const object of objectData.values()) {
+    const point = new THREE.Vector3(object.position.x,object.position.y,object.position.z).project(camera);
+    if (point.z < -1 || point.z > 1) continue;
+    const x = rect.left + (point.x+1)*rect.width/2, y = rect.top + (1-point.y)*rect.height/2;
+    if (x >= left && x <= right && y >= top && y <= bottom) ids.push(object.id);
+  }
+  const next = new Set(additive ? selectedIds : []); let skipped = false;
+  for (const id of ids) {
+    if (next.has(id)) continue;
+    if (next.size === MAX_GROUP_SELECTION) { skipped = true; break; }
+    next.add(id);
+  }
+  applySelection(next,[...next].at(-1));
+  if (skipped) $('group-move-status').textContent = 'Selection is limited to ' + MAX_GROUP_SELECTION + ' shapes; extra shapes were skipped.';
+}
 function refreshSelectionVisuals() {
   for (const box of selectionBoxes.values()) { scene.remove(box); box.geometry.dispose(); box.material.dispose(); }
   selectionBoxes.clear();
@@ -471,37 +502,6 @@ function applySelection(ids, primary = null, fromPoll = false) {
   }
   $('group-move-apply').disabled = true;
   return true;
-}
-function selectObject(id, fromPoll = false, additive = false) {
-  if (fromPoll) return applySelection([...selectedIds],null,true);
-  if (additive && !id) return true;
-  const next = new Set(selectedIds); let primary = id;
-  if (additive) {
-    if (next.has(id)) { next.delete(id); primary = selectedId === id ? [...next].at(-1) ?? null : selectedId; }
-    else if (next.size < MAX_GROUP_SELECTION) next.add(id);
-    else { $('group-move-status').textContent = 'Selection is limited to ' + MAX_GROUP_SELECTION + ' shapes.'; return false; }
-  } else if (id && next.has(id)) return true;
-  else { next.clear(); if (id) next.add(id); }
-  return applySelection(next,primary);
-}
-function selectObjectsInBox(start,end,additive=false) {
-  const rect = renderer.domElement.getBoundingClientRect(), left = Math.min(start.x,end.x), right = Math.max(start.x,end.x);
-  const top = Math.min(start.y,end.y), bottom = Math.max(start.y,end.y), ids = [];
-  camera.updateMatrixWorld?.();
-  for (const object of objectData.values()) {
-    const point = new THREE.Vector3(object.position.x,object.position.y,object.position.z).project(camera);
-    if (point.z < -1 || point.z > 1) continue;
-    const x = rect.left + (point.x+1)*rect.width/2, y = rect.top + (1-point.y)*rect.height/2;
-    if (x >= left && x <= right && y >= top && y <= bottom) ids.push(object.id);
-  }
-  const next = new Set(additive ? selectedIds : []); let skipped = false;
-  for (const id of ids) {
-    if (next.has(id)) continue;
-    if (next.size === MAX_GROUP_SELECTION) { skipped = true; break; }
-    next.add(id);
-  }
-  applySelection(next,[...next].at(-1));
-  if (skipped) $('group-move-status').textContent = 'Selection is limited to ' + MAX_GROUP_SELECTION + ' shapes; extra shapes were skipped.';
 }
 function renderWorld(state, movementVersion = localMovementVersion) {
   if (state.revision < latestStateRevision) return;
