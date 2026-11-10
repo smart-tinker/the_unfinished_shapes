@@ -140,7 +140,7 @@ function initScene() {
     if (dragCandidate?.pointerId !== event.pointerId) return;
     const draft = dragCandidate; dragCandidate = null; controls.enabled = true;
     if (draft.started && draft.previewPosition) movePreview = draft;
-    else if (draft.ghost) { scene.remove(draft.ghost); disposeGroup(draft.ghost); }
+    else { if (draft.ghost) { scene.remove(draft.ghost); disposeGroup(draft.ghost); } $('move-plane').disabled = false; }
   });
   window.addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
   renderer.setAnimationLoop(() => {
@@ -194,11 +194,18 @@ function objectIdForHit(object) {
 function canEditObject(object) {
   return Boolean(object && (role === 'admin' || (role === 'builder' && object.ownerId === meId)));
 }
-function placementHit(event, movingId) {
+function placementHit(event, draft) {
   const ray = pointerRay(event); if (!ray) return null;
-  const ground = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
-  const target = ground ? { point: ground, surface: null } : null;
-  const surfaces = [...meshes.entries()].filter(([id]) => id !== movingId).map(([, mesh]) => mesh);
+  const origin = draft.object.position;
+  const plane = draft.plane === 'xy'
+    ? new THREE.Plane(new THREE.Vector3(0, 0, 1), -origin.z)
+    : draft.plane === 'yz'
+      ? new THREE.Plane(new THREE.Vector3(1, 0, 0), -origin.x)
+      : new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const point = ray.ray.intersectPlane(plane, new THREE.Vector3());
+  const target = point ? { point, surface: null } : null;
+  if (!target || draft.plane !== 'xz') return target;
+  const surfaces = [...meshes.entries()].filter(([id]) => id !== draft.objectId).map(([, mesh]) => mesh);
   for (const hit of ray.intersectObjects(surfaces, true)) {
     const id = objectIdForHit(hit.object), surface = objectData.get(id);
     if (!surface?.supportsPlayer || meshes.get(id)?.children[0] !== hit.object) continue;
@@ -213,6 +220,7 @@ function clearMovePreview() {
   if (controls) controls.enabled = true;
   $('move-preview-status').hidden = true; $('move-preview-status').textContent = '';
   $('move-cancel').hidden = true;
+  $('move-plane').disabled = false;
 }
 function cancelMovePreview() {
   const draft = movePreview ?? dragCandidate, id = draft?.objectId;
@@ -226,9 +234,10 @@ function setMovePreviewPosition(draft, target) {
     $('move-preview-status').textContent = 'Grid step must be between 0.25 and 10.';
     return;
   }
-  const position = placementPosition(target.point, draft.object, target.surface, step);
+  const position = placementPosition(target.point, draft.object, target.surface, step, draft.plane);
   draft.target = { point: { x: target.point.x, y: target.point.y, z: target.point.z }, surfaceId: target.surface?.id ?? null };
   draft.previewPosition = position;
+  draft.manualPosition = false;
   draft.ghost.position.set(position.x, position.y, position.z);
   for (const axis of ['x', 'y', 'z']) $('edit-position-' + axis).value = String(position[axis]);
   inspectorDirty = true;
@@ -239,7 +248,7 @@ function setMovePreviewPosition(draft, target) {
 }
 function refreshMovePreview() {
   const draft = movePreview ?? (dragCandidate?.started ? dragCandidate : null);
-  if (!draft?.target) return;
+  if (!draft?.target || draft.manualPosition) return;
   try {
     const surface = draft.target.surfaceId ? objectData.get(draft.target.surfaceId) : null;
     setMovePreviewPosition(draft, { point: draft.target.point, surface });
@@ -252,15 +261,16 @@ function beginObjectDrag(event) {
   const objectId = hit ? objectIdForHit(hit.object) : null;
   if (!canEditObject(objectData.get(objectId))) return;
   controls.enabled = false;
-  dragCandidate = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, objectId, started: false, ghost: null };
+  dragCandidate = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, objectId, plane: $('move-plane').value, started: false, ghost: null };
+  $('move-plane').disabled = true;
 }
 function updateObjectDrag(event) {
   const draft = dragCandidate;
   if (!draft || draft.pointerId !== event.pointerId || (!draft.started && Math.hypot(event.clientX - draft.startX, event.clientY - draft.startY) <= 5)) return;
   const object = objectData.get(draft.objectId);
-  if (!canEditObject(object) || editing || (!draft.started && selectedId === draft.objectId && inspectorDirty)) { controls.enabled = true; dragCandidate = null; return; }
+  if (!canEditObject(object) || editing || (!draft.started && selectedId === draft.objectId && inspectorDirty)) { controls.enabled = true; dragCandidate = null; $('move-plane').disabled = false; return; }
   if (!draft.started) {
-    if (!selectObject(draft.objectId)) { controls.enabled = true; dragCandidate = null; return; }
+    if (!selectObject(draft.objectId)) { controls.enabled = true; dragCandidate = null; $('move-plane').disabled = false; return; }
     draft.object = structuredClone(object); draft.ghost = objectMesh(object);
     draft.ghost.traverse(child => {
       if (!child.material) return;
@@ -270,7 +280,7 @@ function updateObjectDrag(event) {
     $('move-preview-status').hidden = false; $('move-preview-status').textContent = 'Drag preview — the shared world has not changed.';
     $('move-cancel').hidden = false;
   }
-  const target = placementHit(event, draft.objectId);
+  const target = placementHit(event, draft);
   if (target) setMovePreviewPosition(draft, target);
 }
 function finishObjectDrag(event) {
@@ -278,7 +288,7 @@ function finishObjectDrag(event) {
   if (draft && draft.pointerId === event.pointerId) {
     dragCandidate = null; controls.enabled = true;
     if (draft.started && draft.previewPosition) movePreview = draft;
-    else if (draft.ghost) { scene.remove(draft.ghost); disposeGroup(draft.ghost); }
+    else { if (draft.ghost) { scene.remove(draft.ghost); disposeGroup(draft.ghost); } $('move-plane').disabled = false; }
   }
   if (Math.hypot(event.clientX - Number(renderer.domElement.dataset.startX), event.clientY - Number(renderer.domElement.dataset.startY)) > 5) return;
   const ray = pointerRay(event), hit = ray?.intersectObjects([...meshes.values()], true)[0];
@@ -296,6 +306,19 @@ function fillInspector(object) {
   const canEdit = role === 'admin' || (role === 'builder' && object.ownerId === meId);
   $('edit-fields').disabled = editing || !canEdit;
   $('edit-message').textContent = !canEdit ? 'Read-only: you do not have permission to edit this shape.' : 'Changes are checked by the world server.';
+}
+function updateMovePreviewFromInspector() {
+  const draft = movePreview;
+  if (!draft?.ghost) return;
+  const values = ['x', 'y', 'z'].map(axis => $('edit-position-' + axis).value);
+  if (values.some(value => value === '' || !Number.isFinite(Number(value)))) {
+    $('move-preview-status').textContent = 'Enter a finite position for each axis.';
+    return;
+  }
+  const position = Object.fromEntries(['x', 'y', 'z'].map((axis, index) => [axis, Number(values[index])]));
+  draft.previewPosition = position; draft.manualPosition = true;
+  draft.ghost.position.set(position.x, position.y, position.z);
+  $('move-preview-status').textContent = 'Manual position preview. Apply changes to update the shared world.';
 }
 function selectObject(id, fromPoll = false) {
   if (editing && id !== selectedId) return false;
@@ -365,7 +388,7 @@ $('move-grid-step').disabled = !$('move-snap-enabled').checked;
 $('move-snap-enabled').addEventListener('change', () => { $('move-grid-step').disabled = !$('move-snap-enabled').checked; refreshMovePreview(); });
 $('move-grid-step').addEventListener('input', refreshMovePreview);
 $('move-cancel').addEventListener('click', cancelMovePreview);
-$('edit-form').addEventListener('input', () => { inspectorDirty = true; });
+$('edit-form').addEventListener('input', event => { inspectorDirty = true; if (event.target?.id?.startsWith('edit-position-')) updateMovePreviewFromInspector(); });
 $('edit-reset').addEventListener('click', () => { if (movePreview || dragCandidate) cancelMovePreview(); else fillInspector(objectData.get(selectedId)); });
 $('edit-form').addEventListener('submit', async event => {
   event.preventDefault(); if (!selectedId || !inspectorBase || editing) return;
