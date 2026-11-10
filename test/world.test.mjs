@@ -270,16 +270,18 @@ test('stairs and ramps reject invalid or missing directions and corrupt saved di
 
 test('a north-facing ramp carries manual and agent movement up its continuous slope',()=>{
  const ramp={type:'build',objectType:'ramp',direction:'north',position:{x:0,y:1,z:10},size:{x:4,y:2,z:8}};
- let world=applyCommand(emptyWorld(),builder,ramp).state;
- for(let z=1.25;z<=15;z+=1.25)world=move(world,{x:0,y:0,z});
- for(let z=13.75;z>=6.25;z-=1.25)world=move(world,{x:0,y:0,z});
- const manual=player(world);
- const agentState=applyCommand(world,{id:'bob',role:'builder'},{type:'move',position:{x:0,y:0,z:6.25}}).state.players.find(item=>item.id==='bob');
- assert.ok(manual.position.y>1.5,JSON.stringify(manual.position));
- assert.ok(manual.position.y<=2+1e-6,JSON.stringify(manual.position));
- assert.deepEqual(agentState.position,manual.position);
+ const base=applyCommand(emptyWorld(),builder,ramp).state;
+ base.players.push({id:'alice',position:{x:0,y:0,z:15},velocityY:0},{id:'bob',position:{x:0,y:0,z:15},velocityY:0});
+ let manual=structuredClone(base), agent=structuredClone(base);
+ for(let z=13.75;z>=6.25;z-=1.25){
+  manual=move(manual,{x:0,y:0,z});
+  agent=applyCommand(agent,{id:'bob',role:'builder'},{type:'move',position:{x:0,y:0,z}}).state;
+ }
+ const manualPlayer=player(manual), agentPlayer=agent.players.find(item=>item.id==='bob');
+ assert.ok(manualPlayer.position.y>1.5,JSON.stringify(manualPlayer.position));
+ assert.ok(manualPlayer.position.y<=2+1e-6,JSON.stringify(manualPlayer.position));
+ assert.deepEqual(agentPlayer.position,manualPlayer.position);
 });
-
 test('stairs provide four equal walkable rises toward their saved cardinal direction',()=>{
  const stair={type:'build',objectType:'stairs',direction:'east',position:{x:10,y:1,z:0},size:{x:8,y:2,z:4}};
  let world=applyCommand(emptyWorld(),builder,stair).state;
