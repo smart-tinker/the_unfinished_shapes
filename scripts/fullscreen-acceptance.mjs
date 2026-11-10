@@ -22,6 +22,14 @@ export async function fullscreenAcceptance(app, page) {
   }
   assert.ok(before, 'initial player position is persisted before fullscreen is tested');
   const normalBounds = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNormalBounds());
+  const recordNormalBounds = async stage => {
+    const value = await app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      return { normal: win.getNormalBounds(), bounds: win.getBounds(), size: win.getSize(), fullscreen: win.isFullScreen() };
+    });
+    console.log(`Fullscreen window bounds (${stage}): ${JSON.stringify(value)}`);
+  };
+  console.log(`Fullscreen initial normal bounds: ${JSON.stringify(normalBounds)}`);
   const button = page.locator('#fullscreen-toggle');
   assert.equal(await button.count(), 1);
   assert.equal(await button.getAttribute('aria-pressed'), 'false');
@@ -40,16 +48,19 @@ export async function fullscreenAcceptance(app, page) {
   assert.equal(await isFullscreen(), true, 'closing a dialog does not exit fullscreen');
   await page.keyboard.press('Escape');
   await expectFullscreen(false);
+  await recordNormalBounds('button and Escape');
 
   await page.keyboard.press('F11');
   await expectFullscreen(true);
   await page.keyboard.press('F11');
   await expectFullscreen(false);
+  await recordNormalBounds('F11');
 
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(true));
   await expectFullscreen(true);
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(false));
   await expectFullscreen(false);
+  await recordNormalBounds('native events');
 
   const after = await readWorld();
   assert.deepEqual(after.players, before.players, 'fullscreen leaves player position unchanged');
