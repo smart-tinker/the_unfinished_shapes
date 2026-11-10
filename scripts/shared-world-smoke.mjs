@@ -205,12 +205,15 @@ await withSmokeCleanup(async () => {
     return player?.position.y > 0 && player.velocityY > 0;
   }, 'the server to accept the jump while Alice is ascending');
   await alice.page.keyboard.up('Space');
-  await alice.page.waitForFunction(() => {
-    const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
-    const x = Number(xPart?.slice(2)), y = Number(yPart?.slice(2));
-    return x >= 15 && x <= 16.2 && y > 0;
-  }, undefined, { polling: 'raf', timeout: 5000 });
+  await waitForState(snapshot => {
+    const player = snapshot.players.find(item => item.id === 'alice');
+    return player?.position.x >= 15 && player.position.y > 0;
+  }, 'Alice to reach the platform while airborne');
   await alice.page.keyboard.up('d');
+  await alice.page.waitForFunction(() => {
+    const yPart = document.querySelector('#coordinates')?.textContent.split(' · ')[1];
+    return Number(yPart?.slice(2)) > 0;
+  }, undefined, { polling: 'raf', timeout: 5000 });
   const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
@@ -223,7 +226,14 @@ await withSmokeCleanup(async () => {
     return player?.position.y === 0 && player.position.x < 14;
   }, 'Alice to leave the platform before moving it');
   await alice.page.keyboard.up('a');
-  const beforePreview = await state();
+  // Renderer movement sync runs every 250 ms; wait across two ticks after keyup.
+  let lastStoppedSnapshot = '', stableSamples = 0;
+  const beforePreview = await waitForState(snapshot => {
+    const current = `${snapshot.revision}:${JSON.stringify(snapshot.players)}`;
+    stableSamples = current === lastStoppedSnapshot ? stableSamples + 1 : 0;
+    lastStoppedSnapshot = current;
+    return stableSamples >= 5;
+  }, 'Alice movement to settle before the local preview');
   await select(alice, built);
   await alice.page.locator('#move-grid-step').fill('0.5');
   await alice.page.locator('#move-plane').selectOption('x');
@@ -233,7 +243,11 @@ await withSmokeCleanup(async () => {
   await waitForMovePreview(alice.page, firstDrag);
   assert.deepEqual(await alice.page.locator('#edit-position-x').inputValue().then(async x => ({ x: Number(x), y: Number(await alice.page.locator('#edit-position-y').inputValue()), z: Number(await alice.page.locator('#edit-position-z').inputValue()) })), { x: 20, y: 1, z: 0 }, 'the visible 0.5 grid snaps an X-axis drag without changing other coordinates');
   const previewState = await state();
-  assert.equal(previewState.revision, beforePreview.revision, 'pointer movement and preview do not mutate the server');
+  assert.equal(previewState.revision, beforePreview.revision,
+    `pointer movement and preview do not mutate the server: ${JSON.stringify({
+      before: { revision: beforePreview.revision, players: beforePreview.players.map(({ id, position, velocityY }) => ({ id, position, velocityY })) },
+      after: { revision: previewState.revision, players: previewState.players.map(({ id, position, velocityY }) => ({ id, position, velocityY })) },
+    })}`);
   assert.deepEqual(previewState.objects, beforePreview.objects);
   assert.equal(await bob.page.locator('#move-preview-status').isHidden(), true, 'the peer does not receive the local preview');
   await alice.page.evaluate(() => {
