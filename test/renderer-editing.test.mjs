@@ -178,6 +178,7 @@ test('a permission change during drag disposes the preview and disables editing'
   };
   h.context.scene = { remove: mesh => { removed = mesh === ghost; } };
   h.context.controls = { enabled: false };
+  h.context.ghost = ghost;
   loadObjectDrag(h);
   h.run(`let objectSnapshot = JSON.stringify([objectFixture]), latestStateRevision = 1, worldRevision = 1, worldState = {},
     localMovementVersion = 0, moveRunning = false, playerPosition = {x:0,y:0,z:0}, playerVelocityY = 0,
