@@ -148,7 +148,7 @@ test('HTTP group movement is atomic, persisted once, and visible to both clients
   id:bobObject.object.id,position:{x:10,y:1,z:-1},expectedPosition:bobObject.object.position,
  }]});
  assert.equal(denied.status,403);
- const unchanged=await Promise.all([read(token),read(bobToken)]);
+ const unchanged=await Promise.all([read(token),read('test-only-bob-token')]);
  for(const state of unchanged) {
   assert.equal(state.revision,before.revision);
   assert.deepEqual(state.objects.map(object=>object.position),before.objects.map(object=>object.position));
@@ -158,7 +158,7 @@ test('HTTP group movement is atomic, persisted once, and visible to both clients
  const result=await accepted.json();
  assert.equal(result.revision,before.revision+1);
  assert.equal(result.objects.length,2);
- const after=await Promise.all([read(token),read(bobToken)]);
+ const after=await Promise.all([read(token),read('test-only-bob-token')]);
  assert.deepEqual(after[0].objects,after[1].objects);
  assert.deepEqual(after[0].objects.filter(object=>[aliceA.object.id,aliceB.object.id].includes(object.id)).map(object=>object.position),[
   {x:2,y:1,z:-1},{x:6,y:.5,z:-1},
