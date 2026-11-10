@@ -14,13 +14,14 @@ export async function fullscreenAcceptance(app, page) {
     const settings = await window.tus.loadSettings();
     return window.tus.request({ ...settings, path: '/state' });
   });
-  await page.waitForFunction(async () => {
-    const settings = await window.tus.loadSettings();
-    const state = await window.tus.request({ ...settings, path: '/state' });
-    return state.players?.some(player => player.id === state.me?.id) === true;
-  }, null, { timeout: 10000, polling: 250 });
-  const before = await readWorld();
-  const normalSize = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize());
+  let before = null;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const state = await readWorld();
+    if (state.players?.some(player => player.id === state.me?.id)) { before = state; break; }
+    await page.waitForTimeout(250);
+  }
+  assert.ok(before, 'initial player position is persisted before fullscreen is tested');
+  const normalBounds = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNormalBounds());
   const button = page.locator('#fullscreen-toggle');
   assert.equal(await button.count(), 1);
   assert.equal(await button.getAttribute('aria-pressed'), 'false');
@@ -54,5 +55,5 @@ export async function fullscreenAcceptance(app, page) {
   assert.deepEqual(after.players, before.players, 'fullscreen leaves player position unchanged');
   assert.equal(after.revision, before.revision, 'fullscreen never sends a world command');
   assert.deepEqual(after.objects, before.objects);
-  assert.deepEqual(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize()), normalSize, 'exiting fullscreen restores windowed bounds');
+  assert.deepEqual(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNormalBounds()), normalBounds, 'exiting fullscreen preserves windowed bounds');
 }
