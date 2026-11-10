@@ -79,6 +79,28 @@ test('world_build keeps authoritative validation, roles and explicit nondefault 
 });
 
 
+test('world_build sends stair and ramp direction through server validation',async()=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'tus-oriented-build-'));
+ const token='builder-secret-12345';
+ const server=await createWorldServer({dataPath:path.join(dir,'world.json'),users:{[token]:{id:'alice',role:'builder'}}});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ const connection={url:`http://127.0.0.1:${server.address().port}`,token};
+ try {
+  const designs=[['stairs','east'],['ramp','north']].map(([objectType,direction],index)=>({objectType,direction,position:{x:index*10,y:1,z:0},size:{x:8,y:2,z:4},color:'#3366cc'}));
+  for(const design of designs){
+   const result=await executeGameTool({name:'world_build',arguments:design},connection);
+   assert.equal(result.success,true,result.contentItems[0].text);
+   assert.equal(JSON.parse(result.contentItems[0].text).object.direction,design.direction);
+  }
+  const missing={...designs[1]};delete missing.direction;
+  assert.equal((await executeGameTool({name:'world_build',arguments:missing},connection)).success,false);
+  const invalid={...designs[1],direction:'up'};
+  assert.equal((await executeGameTool({name:'world_build',arguments:invalid},connection)).success,false);
+  const state=JSON.parse((await executeGameTool({name:'world_state'},connection)).contentItems[0].text);
+  assert.deepEqual(state.objects.map(({type,direction})=>({type,direction})),[{type:'stairs',direction:'east'},{type:'ramp',direction:'north'}]);
+ } finally {await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
+});
+
 const sceneCamera = {
   position:{x:0,y:2,z:10}, target:{x:0,y:2,z:0},
   fov:42, aspect:1.5, near:0.1, far:220,
