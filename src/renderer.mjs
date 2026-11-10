@@ -1047,6 +1047,7 @@ async function saveSettings() {
   if (editing) throw new Error('Finish the current world update before changing connection settings.');
   const next = readSettings();
   const changed = ['workspacePath', 'codexPath', 'serverUrl', 'token'].some(key => next[key] !== settings[key]);
+  if(changed&&worldLightingPreview?.attempted)throw new Error('A shared lighting Apply is unresolved; resolve it before changing connection settings.');
   if (changed && (connected || settings.threadId)) {
     if (!settings.threadId) throw new Error('Cannot verify the current Codex conversation; reconnect before changing connection settings.');
     const state = await bridge.readAgentControls(settings.threadId);
