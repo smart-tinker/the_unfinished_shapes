@@ -264,18 +264,28 @@ test('button use checks both access policies, server position, idempotent target
 
  
 test('object owners retain access configuration rights if their role becomes viewer',async t=>{
- const f=await fixture(t,{users:{...users,'test-only-owner-viewer-token':{id:'alice',role:'viewer'}}});
+ const f=await fixture(t);
  const door=(await (await f.send({type:'build',objectType:'door',position:{x:1,y:1.5,z:0},size:{x:1,y:3,z:.25}})).json()).object;
  const button=(await (await f.send({type:'build',objectType:'button',position:{x:1,y:.25,z:1},size:{x:.5,y:.5,z:.25}})).json()).object;
- const access=await f.send({type:'update',id:door.id,usePolicy:'all_players',expected:{usePolicy:'owner_admin'}},'test-only-owner-viewer-token');
- assert.equal(access.status,200);
- const linked=await f.send({type:'update',id:button.id,targetId:door.id,targetState:'closed',usePolicy:'all_players',
-  expected:{targetId:null,targetState:'open',usePolicy:'owner_admin'}},'test-only-owner-viewer-token');
- assert.equal(linked.status,200);
- const geometry=await f.send({type:'update',id:door.id,position:{x:4,y:1.5,z:0},expected:{position:door.position}},'test-only-owner-viewer-token');
- assert.equal(geometry.status,403);
- const stranger=await f.send({type:'update',id:door.id,usePolicy:'owner_admin',expected:{usePolicy:'all_players'}},'test-only-bob-token');
- assert.equal(stranger.status,403);
+ await f.app.shutdown();
+ const viewerApp=await createWorldServer({dataPath:f.dataPath,port:0,users:{
+  'test-only-owner-viewer-token':{id:'alice',role:'viewer'},
+  'test-only-bob-token':{id:'bob',role:'viewer'},
+ }});
+ await viewerApp.start();
+ try{
+  const url=`http://127.0.0.1:${viewerApp.address().port}`;
+  const send=(body,auth='test-only-owner-viewer-token')=>fetch(url+'/command',{method:'POST',headers:{Authorization:`Bearer ${auth}`,'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const access=await send({type:'update',id:door.id,usePolicy:'all_players',expected:{usePolicy:'owner_admin'}});
+  assert.equal(access.status,200);
+  const linked=await send({type:'update',id:button.id,targetId:door.id,targetState:'closed',usePolicy:'all_players',
+   expected:{targetId:null,targetState:'open',usePolicy:'owner_admin'}});
+  assert.equal(linked.status,200);
+  const geometry=await send({type:'update',id:door.id,position:{x:4,y:1.5,z:0},expected:{position:door.position}});
+  assert.equal(geometry.status,403);
+  const stranger=await send({type:'update',id:door.id,usePolicy:'owner_admin',expected:{usePolicy:'all_players'}},'test-only-bob-token');
+  assert.equal(stranger.status,403);
+ }finally{await viewerApp.shutdown();}
 });
 
 test('concurrent opposite state requests serialize without toggling',async t=>{
@@ -283,18 +293,20 @@ test('concurrent opposite state requests serialize without toggling',async t=>{
  const door=(await (await f.send({type:'build',objectType:'door',position:{x:2,y:1.5,z:0},size:{x:1,y:3,z:.25}})).json()).object;
  const publicAccess=await f.send({type:'update',id:door.id,usePolicy:'all_players',expected:{usePolicy:'owner_admin'}});
  assert.equal(publicAccess.status,200);
- const opened=await f.send({type:'set_state',id:door.id,state:'open',expectedVersion:0});
- assert.equal(opened.status,200);assert.equal((await opened.json()).object.version,1);
+ const policyObject=(await publicAccess.json()).object;
+ const opened=await f.send({type:'set_state',id:door.id,state:'open',expectedVersion:policyObject.version});
+ assert.equal(opened.status,200);
+ const openedObject=(await opened.json()).object;
  const results=await Promise.all([
-  f.send({type:'set_state',id:door.id,state:'closed',expectedVersion:1}),
-  f.send({type:'set_state',id:door.id,state:'open',expectedVersion:1},'test-only-bob-token'),
+  f.send({type:'set_state',id:door.id,state:'closed',expectedVersion:openedObject.version}),
+  f.send({type:'set_state',id:door.id,state:'open',expectedVersion:openedObject.version},'test-only-bob-token'),
  ]);
  const statuses=results.map(response=>response.status);
  assert.ok(statuses.every(status=>status===200||status===409));
  assert.ok(statuses.filter(status=>status===409).length<=1);
  const state=await (await fetch(f.url+'/state',{headers:{Authorization:`Bearer ${token}`}})).json();
  const current=state.objects.find(object=>object.id===door.id);
- assert.equal(current.state,'closed');assert.equal(current.version,2);assert.equal(state.revision,4);
+ assert.equal(current.state,'closed');assert.equal(current.version,openedObject.version+1);assert.equal(state.revision,openedObject.version+2);
 });
 
 test('retry after a lost set_state response does not change the object twice',async t=>{
