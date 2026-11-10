@@ -17,7 +17,7 @@ function selectionHarness() {
   editing:false,inspectorDirty:false,role:'builder',meId:'alice',objectData,meshes,
   scene:{add(){},remove(){}},window:{confirm:()=>true},clearMovePreview(){},
   refreshSelectionVisuals(){},fillInspector(){},MAX_GROUP_SELECTION:32,
-  renderer:{domElement:{getBoundingClientRect:()=>({left:0,top:0,width:100,height:100})}},
+  renderer:{domElement:{getBoundingClientRect:()=>({left:0,top:0,width:100,height:100})}},\n  canEditObject:object=>Boolean(object&&(h.context.role==='admin'||(h.context.role==='builder'&&object.ownerId===h.context.meId))),
   camera:{},
   THREE:{BoxHelper:class {constructor(mesh,color){this.mesh=mesh;this.color=color;this.geometry={dispose(){}};this.material={dispose(){}};}}},
  });
@@ -73,7 +73,7 @@ test('group move preview applies one snapped delta and preserves relative positi
  ]);
  h.context.placementPosition=()=>({x:5,y:1,z:3});
  h.context.first=first;h.context.second=second;
- h.element('move-snap-enabled').checked=false;
+ h.element('move-snap-enabled').checked=false;\n h.context.inspectorDirty=false;
  h.load('function setMovePreviewPosition(', 'function refreshMovePreview(');
  h.run("let sends=[];function command(body){sends.push(body)};let movePreview={objectId:'one',object:first,objects:[first,second],ghost:ghosts.get('one'),ghosts,plane:'xz'}");
  h.run("setMovePreviewPosition(movePreview,{point:{x:5,y:1,z:3},surface:null})");
