@@ -1,6 +1,7 @@
 ## Issue and scope
 Refs #
-<!-- Target main for repository configuration changes (issue forms, Dependabot, scheduled workflows and safeguards). Target the current RC branch for application changes. One issue, one bounded change. -->
+
+Target main for repository configuration changes (issue forms, Dependabot, scheduled workflows and safeguards). Target the current RC branch for application changes. One issue, one bounded change.
 
 ## Behavior and risk
 <!-- Expected behavior, invariants, compatibility/data-loss/security risk and rollback. -->
