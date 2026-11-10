@@ -25,7 +25,7 @@
   "homepage": "https://github.com/smart-tinker/the_unfinished_shapes#readme",
   "private": true,
   "dependencies": {
-    "three": "^0.180.0"
+    "three": "^0.187.0"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
