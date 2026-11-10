@@ -41,11 +41,11 @@ test('default-branch issue and pull request templates require scope and verifiab
 });
 
 test('blank issues are disabled for public contributors', () => {
-  assert.match(read('.github/ISSUE_TEMPLATE/config.yml'), /^blank_issues_enabled: false\\s*$/m);
+  assert.ok(read('.github/ISSUE_TEMPLATE/config.yml').split(String.fromCharCode(10)).includes('blank_issues_enabled: false'));
 });
 
 test('PR template visibly directs default-branch safeguards to main', () => {
-  const visible = read('.github/pull_request_template.md').replace(/<!--[\\s\\S]*?-->/g, '').toLowerCase();
+  const visible = read('.github/pull_request_template.md').split('<!--')[0].toLowerCase();
   assert.ok(visible.includes('target main for repository configuration'));
   assert.ok(visible.includes('target the current rc branch for application changes'));
 });
