@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { movePlayer, SHAPE_TYPES, SHAPE_DIRECTIONS, SHAPE_DEFAULT_SIZES, shapeDimensionsValid } from './movement.mjs';
 
-export const mechanics = ['block', 'bridge', 'port', ...SHAPE_TYPES];
-const physicsDefaults = Object.fromEntries(mechanics.map(type => [type, { blocksMovement: true, supportsPlayer: true }]));
+export const mechanics = ['block', 'bridge', 'port', 'sign', 'beacon', ...SHAPE_TYPES];
+const physicsDefaults = Object.fromEntries(mechanics.map(type => [type, { blocksMovement: !['sign','beacon'].includes(type), supportsPlayer: !['sign','beacon'].includes(type) }]));
 export class WorldError extends Error {
   constructor(code, message, status = 400) { super(message); this.code = code; this.status = status; }
 }
@@ -13,6 +13,9 @@ export function vector(value, size = false) {
 }
 function exactKeys(value, keys) { return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key)); }
 export function emptyWorld() { return { version: 1, revision: 0, objects: [], players: [] }; }
+function validLandmarkLabel(value, max, multiline = false) {
+  return typeof value === 'string' && value.trim().length > 0 && [...value].length <= max && !/[\u0000-\u0008\u000b-\u001f\u007f]/.test(value) && (multiline || !/[\r\n]/.test(value));
+}
 export function validateWorld(state) {
   if (!state || state.version !== 1 || !Number.isSafeInteger(state.revision) || state.revision < 0 || !Array.isArray(state.objects) || state.objects.length > 5000 || !Array.isArray(state.players) || state.players.length > 1000) fail('invalid_state', 'Invalid saved world. Refusing to overwrite it.', 500);
   state = structuredClone(state);
@@ -21,6 +24,7 @@ export function validateWorld(state) {
     if (!o || typeof o.id !== 'string' || ids.has(o.id) || !mechanics.includes(o.type) || typeof o.ownerId !== 'string' || !/^#[a-f0-9]{6}$/i.test(o.color)) fail('invalid_state', 'Invalid saved object.', 500);
     ids.add(o.id); vector(o.position); vector(o.size, true);
     if (SHAPE_TYPES.includes(o.type) ? (!SHAPE_DIRECTIONS.includes(o.direction) || !shapeDimensionsValid(o.type,o.direction,o.size)) : Object.hasOwn(o,'direction')) fail('invalid_state', 'Invalid saved shape direction or dimensions.', 500);
+    if ((o.type === 'sign' && !validLandmarkLabel(o.text,240,true)) || (o.type === 'beacon' && !validLandmarkLabel(o.name,48))) fail('invalid_state','Invalid saved landmark label.',500);
     for (const [key, value] of Object.entries(physicsDefaults[o.type])) {
       if (!Object.hasOwn(o, key)) o[key] = value;
       else if (typeof o[key] !== 'boolean') fail('invalid_state', 'Invalid saved object physics.', 500);
@@ -39,12 +43,14 @@ function buildObject(actor, command, defaultsAllowed = true) {
   if (!mechanics.includes(command.objectType)) fail('new_mechanic_required','This mechanic is not implemented. Develop it in the repository and pass CI before deployment.',409);
   const directional = SHAPE_TYPES.includes(command.objectType);
   if (directional ? !SHAPE_DIRECTIONS.includes(command.direction) : Object.hasOwn(command,'direction')) fail('invalid_direction','Stairs and ramps need one cardinal uphill direction.');
-  const defaults = {block:{x:2,y:2,z:2},bridge:{x:10,y:1,z:3},port:{x:12,y:1,z:8},...SHAPE_DEFAULT_SIZES};
+  const defaults = {block:{x:2,y:2,z:2},bridge:{x:10,y:1,z:3},port:{x:12,y:1,z:8},sign:{x:3,y:2,z:.5},beacon:{x:1,y:4,z:1},...SHAPE_DEFAULT_SIZES};
   const position = vector(command.position), size = vector(defaultsAllowed ? command.size ?? defaults[command.objectType] : command.size, true);
   if (directional && !shapeDimensionsValid(command.objectType,command.direction,size)) fail('invalid_shape_dimensions','Stairs need at least 0.5 units of run with rises no higher than 0.5; ramps are limited to 45 degrees.');
   const color = defaultsAllowed ? command.color ?? '#c8a570' : command.color;
   if (typeof color !== 'string' || !/^#[a-f0-9]{6}$/i.test(color)) fail('invalid_color','Use a hex color such as #c8a570.');
-  return {id:randomUUID(),type:command.objectType,...(directional?{direction:command.direction}:{}),position,size,color,ownerId:actor.id,...physicsDefaults[command.objectType]};
+  const label = command.objectType === 'sign' ? {text:command.text} : command.objectType === 'beacon' ? {name:command.name} : {};
+  if ((command.objectType === 'sign' && !validLandmarkLabel(label.text,240,true)) || (command.objectType === 'beacon' && !validLandmarkLabel(label.name,48))) fail('invalid_landmark_label','Sign text must be 1–240 characters; beacon names must be 1–48 single-line characters.');
+  return {id:randomUUID(),type:command.objectType,...(directional?{direction:command.direction}:{}),position,size,color,...label,ownerId:actor.id,...physicsDefaults[command.objectType]};
 }
 export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
   if (!command || typeof command !== 'object' || Array.isArray(command)) fail('invalid_command','Command must be an object.');
@@ -75,8 +81,11 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
       if (next.objects.length + command.objects.length > 5000) fail('world_full','Object capacity reached.',409);
       const objects = command.objects.map(design => {
         const directional = SHAPE_TYPES.includes(design?.objectType);
-        if (!exactKeys(design, directional ? ['objectType','direction','position','size','color'] : ['objectType','position','size','color']) ||
-            !exactKeys(design.position,['x','y','z']) || !exactKeys(design.size,['x','y','z'])) fail('invalid_command','Each design needs only objectType, position, size, color, and a direction for stairs or ramps.');
+        const keys=['objectType','position','size','color'];
+        if(directional)keys.push('direction');
+        if(design?.objectType==='sign')keys.push('text');
+        if(design?.objectType==='beacon')keys.push('name');
+        if (!exactKeys(design, keys) || !exactKeys(design.position,['x','y','z']) || !exactKeys(design.size,['x','y','z'])) fail('invalid_command','Each design needs its mechanic fields and explicit position, size, and color.');
         return buildObject(actor, design, false);
       });
       next.objects.push(...objects); result = {objects}; break;
@@ -103,8 +112,9 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
       const object = next.objects.find(o => o.id === command.id);
       if (!object) fail('not_found','Object not found.',404);
       if (actor.role !== 'admin' && (actor.role !== 'builder' || object.ownerId !== actor.id)) fail('forbidden','Only the owner or an admin may edit this object.',403);
-      const editable = ['position','size','color','blocksMovement','supportsPlayer'];
+      const editable = ['position','size','color','blocksMovement','supportsPlayer',...(object.type==='sign'?['text']:[]),...(object.type==='beacon'?['name']:[])];
       if (Object.keys(command).some(key => !['type','id','expected',...editable].includes(key)) || !editable.some(key => Object.hasOwn(command,key))) fail('invalid_command','Update requires position, size or color; identity and mechanic cannot be changed.');
+      if (['text','name'].some(key => Object.hasOwn(command,key)) && !Object.hasOwn(command,'expected')) fail('invalid_command','Changing a landmark label requires its current value in expected.');
       if (Object.hasOwn(command,'expected')) {
         const expected = command.expected;
         const changed = editable.filter(key => Object.hasOwn(command,key));
@@ -117,6 +127,9 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
           } else if (key === 'color') {
             if (typeof expected.color !== 'string' || !/^#[a-f0-9]{6}$/i.test(expected.color)) fail('invalid_color','Expected color must be a hex color.');
             matches = expected.color.toLowerCase() === object.color.toLowerCase();
+          } else if (key === 'text' || key === 'name') {
+            if (!validLandmarkLabel(expected[key],key==='text'?240:48,key==='text')) fail('invalid_command','Expected landmark label is invalid.');
+            matches = expected[key] === object[key];
           } else {
             const previous = vector(expected[key],key === 'size');
             matches = ['x','y','z'].every(axis => previous[axis] === object[key][axis]);
@@ -139,6 +152,10 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25) {
           if (typeof command[key] !== 'boolean') fail('invalid_command','Object physics values must be boolean.');
           object[key] = command[key];
         }
+      }
+      for (const key of ['text','name']) if (Object.hasOwn(command,key)) {
+        if (!editable.includes(key) || !validLandmarkLabel(command[key],key==='text'?240:48,key==='text')) fail('invalid_landmark_label','Landmark text or name is invalid.');
+        object[key] = command[key];
       }
       result = {object}; break;
     }

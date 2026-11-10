@@ -14,7 +14,8 @@ let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 0, z: 
 let worldState = { objects: [] };
 let scene, renderer, camera, controls, player, companion;
 let dragCandidate = null, movePreview = null, boxCandidate = null, boxSelectMode = false;
-const selectedIds = new Set(), selectionBoxes = new Map(), MAX_GROUP_SELECTION = 32;
+const selectedIds = new Set(), selectionBoxes = new Map(), beaconLabels = new Map(), MAX_GROUP_SELECTION = 32;
+const BEACON_LABEL_RANGE = 40, MAX_VISIBLE_BEACON_LABELS = 8;
 let objectSnapshot = '';
 let inspectorBase = null, inspectorDirty = false, editing = false, role = 'viewer';
 const objectData = new Map();
@@ -193,8 +194,22 @@ function initScene() {
     player.position.set(playerPosition.x, playerPosition.y, playerPosition.z);
     companion.position.lerp(new THREE.Vector3(playerPosition.x + 1.5, playerPosition.y + 1.7 + Math.sin(performance.now() / 700) * .12, playerPosition.z + 1.2), .05); companion.rotation.y += dt * .4;
     $('coordinates').textContent = `X ${playerPosition.x.toFixed(1)} · Y ${playerPosition.y.toFixed(1)} · Z ${playerPosition.z.toFixed(1)}`;
-    controls.update(); renderer.render(scene, camera);
+    controls.update(); updateBeaconLabels(); renderer.render(scene, camera);
   });
+}
+function labelTexture(value, background) {
+  const canvas=document.createElement('canvas');canvas.width=512;canvas.height=320;
+  const context=canvas.getContext('2d');context.fillStyle=background;context.fillRect(0,0,canvas.width,canvas.height);
+  const rows=[''];
+  for(const character of Array.from(value)){
+    if(character==='\n'||Array.from(rows.at(-1)).length>=30)rows.push(character==='\n'?'':character);
+    else rows[rows.length-1]+=character;
+  }
+  if(rows.length>6){rows[5]=Array.from(rows[5]).slice(0,29).join('')+'…';rows.length=6;}
+  const lineHeight=(canvas.height-28)/rows.length, fontSize=Math.max(10,Math.min(24,lineHeight*.68));
+  context.font=fontSize+'px system-ui';context.fillStyle='#26312e';context.textAlign='center';context.textBaseline='middle';
+  rows.forEach((line,index)=>context.fillText(line,canvas.width/2,14+lineHeight*(index+.5),canvas.width-28));
+  const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;return texture;
 }
 function objectMesh(object) {
   const group = new THREE.Group(); group.userData.worldId = object.id;
@@ -229,8 +244,27 @@ function objectMesh(object) {
       addBox(.18, 3, .18, -x / 2 + .6, y / 2 + 1.5, -z / 2 + .6, pole);
       addBox(1.2, .7, .06, -x / 2 + 1.2, y / 2 + 2.5, -z / 2 + .6, new THREE.MeshStandardMaterial({ color: '#eac16c' }));
     }
+    if (object.type === 'sign') {
+      const post=new THREE.MeshStandardMaterial({color:'#554533'}), board=new THREE.MeshStandardMaterial({color:object.color,roughness:.8});
+      addBox(.16,y*.82,.16,0,-y*.08,0,post);addBox(x*.94,y*.58,.18,0,y*.1,0,board);
+      const face=new THREE.Sprite(new THREE.SpriteMaterial({map:labelTexture(object.text,'#ead9ad'),depthTest:true}));
+      face.position.set(0,y*.1,.096);face.scale.set(x*.84,y*.48,1);group.add(face);
+    }
+    if (object.type === 'beacon') {
+      const dark=new THREE.MeshStandardMaterial({color:'#394449',roughness:.55}), signal=new THREE.MeshStandardMaterial({color:object.color,emissive:object.color,emissiveIntensity:.65,roughness:.35});
+      addBox(x*.8,.22,z*.8,0,-y*.39,0,dark);addBox(x*.18,y*.68,z*.18,0,0,0,dark);
+      addBox(x*.58,.18,z*.58,0,y*.28,0,signal);addBox(x*.42,.16,z*.42,0,y*.42,0,signal);
+      const label=new THREE.Sprite(new THREE.SpriteMaterial({map:labelTexture(object.name,'#ead9ad'),transparent:false,depthTest:true}));
+      label.position.set(0,y*.62,0);label.scale.set(4,1.1,1);label.visible=true;group.add(label);group.userData.beaconLabel=label;
+    }
   }
   group.position.set(object.position.x, object.position.y, object.position.z); return group;
+}
+function updateBeaconLabels() {
+  if(!camera)return;
+  for(const item of beaconLabels.values())item.label.visible=false;
+  const nearby=[...beaconLabels.values()].map(({mesh,label})=>({label,distance:camera.position.distanceTo(mesh.position)})).filter(item=>item.distance<=BEACON_LABEL_RANGE).sort((a,b)=>a.distance-b.distance);
+  for(const [index,item] of nearby.entries())if(index<MAX_VISIBLE_BEACON_LABELS)item.label.visible=true;
 }
 function clearBuildPreview() {
   if (buildPreview?.mesh) { scene?.remove(buildPreview.mesh); disposeGroup(buildPreview.mesh); }
@@ -255,8 +289,8 @@ function showAgentBuildPreview(value, threadId = settings.threadId) {
   const meshes=[];
   try {
     for(const design of value.objects){
-      if(!design||!['block','bridge','port','stairs','ramp'].includes(design.objectType)||!design.position||!design.size)throw new Error('Invalid preview object.');
-      const mesh=objectMesh({type:design.objectType,direction:design.direction,position:design.position,size:design.size,color:design.color});
+      if(!design||!['block','bridge','port','stairs','ramp','sign','beacon'].includes(design.objectType)||!design.position||!design.size)throw new Error('Invalid preview object.');
+      const mesh=objectMesh({type:design.objectType,direction:design.direction,position:design.position,size:design.size,color:design.color,text:design.text,name:design.name});
       mesh.traverse(child=>{if(!child.material)return;child.material=child.material.clone();child.material.color.set('#efbd61');child.material.transparent=true;child.material.opacity=.48;child.material.depthWrite=false;});
       meshes.push(mesh);scene.add(mesh);
     }
@@ -292,6 +326,8 @@ function buildDesign() {
     port: { type: 'port', size: { x: 12, y: 1, z: 8 } },
     stairs: { type: 'stairs', size: SHAPE_DEFAULT_SIZES.stairs },
     ramp: { type: 'ramp', size: SHAPE_DEFAULT_SIZES.ramp },
+    sign: { type: 'sign', size: { x: 3, y: 2, z: .5 } },
+    beacon: { type: 'beacon', size: { x: 1, y: 4, z: 1 } },
   };
   const preset = presets[selectedPreset] ?? presets.block;
   const directional = preset.type === 'stairs' || preset.type === 'ramp';
@@ -299,13 +335,14 @@ function buildDesign() {
     type: 'build', objectType: preset.type, ...(directional ? { direction: $('build-direction').value } : {}),
     position: { x: Number($('build-x').value), y: preset.size.y / 2, z: Number($('build-z').value) },
     size: { ...preset.size }, color: '#c8a570',
+    ...(preset.type==='sign'?{text:$('build-sign-text').value}:{}),...(preset.type==='beacon'?{name:$('build-beacon-name').value}:{}),
   };
 }
 function previewSelectedBuild() {
   if (editing) return;
   clearBuildPreview();
   if (!scene) { feedback('The 3D scene is not ready; the shared world was not changed.', true); return; }
-  const design = buildDesign(), object = { id: 'build-preview', type: design.objectType, position: design.position, size: design.size, color: design.color, direction: design.direction };
+  const design = buildDesign(), object = { id: 'build-preview', type: design.objectType, position: design.position, size: design.size, color: design.color, direction: design.direction, text: design.text, name: design.name };
   const mesh = objectMesh(object);
   mesh.traverse(child => {
     if (!child.material) return;
@@ -526,13 +563,15 @@ function finishObjectDrag(event) {
   if (event.ctrlKey||event.metaKey) selectObject(id,false,true);
   else selectObject(id);
 }
-function disposeGroup(group) { group.traverse(child => { child.geometry?.dispose(); if (child.material) child.material.dispose(); }); }
+function disposeGroup(group) { group.traverse(child => { child.geometry?.dispose(); if (child.material?.map) child.material.map.dispose(); if (child.material) child.material.dispose(); }); }
 function fillInspector(object) {
   inspectorBase = object ? structuredClone(object) : null; inspectorDirty = false;
   $('edit-form').hidden = !object;
   if (!object) return;
   for (const field of ['position', 'size']) for (const axis of ['x', 'y', 'z']) $(`edit-${field}-${axis}`).value = object[field][axis];
   $('edit-color').value = object.color;
+  $('edit-sign-row').hidden=object.type!=='sign';$('edit-sign-text').disabled=object.type!=='sign';$('edit-sign-text').required=object.type==='sign';$('edit-sign-text').value=object.type==='sign'?object.text:'';
+  $('edit-beacon-row').hidden=object.type!=='beacon';$('edit-beacon-name').disabled=object.type!=='beacon';$('edit-beacon-name').required=object.type==='beacon';$('edit-beacon-name').value=object.type==='beacon'?object.name:'';
   $('edit-blocks-movement').checked = object.blocksMovement;
   $('edit-supports-player').checked = object.supportsPlayer;
   const canEdit = role === 'admin' || (role === 'builder' && object.ownerId === meId);
@@ -641,9 +680,9 @@ function renderWorld(state, movementVersion = localMovementVersion) {
   }
   const nextSnapshot = JSON.stringify(state.objects);
   if (objectSnapshot !== nextSnapshot) {
-    for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear();
+    for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear();beaconLabels.clear();
     objectData.clear();
-    for (const object of state.objects) { objectData.set(object.id, object); const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh); }
+    for (const object of state.objects) { objectData.set(object.id, object); const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh);if(mesh.userData.beaconLabel)beaconLabels.set(object.id,{mesh,label:mesh.userData.beaconLabel}); }
     objectSnapshot = nextSnapshot; selectObject(null,true);
   } else if (accessChanged) selectObject(null,true);
   const online = Array.isArray(state.onlinePlayerIds) ? new Set(state.onlinePlayerIds) : null;
@@ -687,6 +726,9 @@ for (const button of document.querySelectorAll('[data-kind]')) button.addEventLi
   document.querySelectorAll('[data-kind]').forEach(el => el.classList.toggle('selected', el === button));
   const directional = selectedKind === 'stairs' || selectedKind === 'ramp';
   $('build-direction-row').hidden = !directional; $('build-direction').disabled = !directional;
+  const sign=selectedKind==='sign',beacon=selectedKind==='beacon';
+  $('build-sign-row').hidden=!sign;$('build-sign-text').disabled=!sign;$('build-sign-text').required=sign;
+  $('build-beacon-row').hidden=!beacon;$('build-beacon-name').disabled=!beacon;$('build-beacon-name').required=beacon;
   clearBuildPreview();
 });
 $('build-form').addEventListener('submit', event => { event.preventDefault(); previewSelectedBuild(); });
@@ -734,7 +776,7 @@ async function applyGroupMove() {
 $('group-move-apply').addEventListener('click', applyGroupMove);
 $('edit-form').addEventListener('input', event => {
   const id = event?.target?.id;
-  if (!id?.startsWith('edit-position-') && !id?.startsWith('edit-size-') && !['edit-color', 'edit-blocks-movement', 'edit-supports-player'].includes(id)) return;
+  if (!id?.startsWith('edit-position-') && !id?.startsWith('edit-size-') && !['edit-color', 'edit-blocks-movement', 'edit-supports-player','edit-sign-text','edit-beacon-name'].includes(id)) return;
   inspectorDirty = true;
   if (id.startsWith('edit-position-')) updateMovePreviewFromInspector();
 });
@@ -747,6 +789,8 @@ $('edit-form').addEventListener('submit', async event => {
     if (JSON.stringify(value) !== JSON.stringify(baseline[field])) body[field] = value;
   }
   if ($('edit-color').value !== baseline.color) body.color = $('edit-color').value;
+  if(baseline.type==='sign'&&$('edit-sign-text').value!==baseline.text)body.text=$('edit-sign-text').value;
+  if(baseline.type==='beacon'&&$('edit-beacon-name').value!==baseline.name)body.name=$('edit-beacon-name').value;
   for (const [field, input] of [['blocksMovement', 'edit-blocks-movement'], ['supportsPlayer', 'edit-supports-player']]) {
     const checked = $(input).checked;
     if (checked !== baseline[field]) body[field] = checked;
@@ -862,7 +906,7 @@ async function saveSettings() {
   settings = next; settingsGeneration++;
   const { token, ...persisted } = settings; await bridge.saveSettings(persisted);
   worldRevision = -1; objectSnapshot = ''; worldState = { objects: [] }; meId = null; playerPosition = { x: 0, y: 0, z: 0 }; playerVelocityY = 0; jumpRequested = false; lastPosition = ''; latestStateRevision = -1; localMovementVersion++; moveStarts.clear();
-  if (scene) { selectObject(null); objectData.clear(); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
+  if (scene) { selectObject(null); objectData.clear(); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); beaconLabels.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
   await poll();
 }
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('settings-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('settings-message').textContent = error.message; } });

@@ -7,6 +7,7 @@ const MAX_SCENE_OBJECTS = 64, MAX_SCENE_PLAYERS = 32;
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
 const exactKeys = (value, keys) => record(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value);
+const validLandmarkLabel = (value,max,multiline=false) => typeof value==='string'&&value.trim().length>0&&[...value].length<=max&&!/[\u0000-\u0008\u000b-\u001f\u007f]/.test(value)&&(multiline||!/[\r\n]/.test(value));
 function vector(value, limit, minimum = -limit) {
   if (!exactKeys(value, ['x','y','z']) || !['x','y','z'].every(key => Number.isFinite(value[key]) && value[key] >= minimum && value[key] <= limit)) throw new Error('Scene context contains an invalid vector.');
   return { x:value.x, y:value.y, z:value.z };
@@ -55,9 +56,10 @@ export function captureSceneSnapshot(state, view, worldConnectionId) {
         !validId(object.ownerId)||typeof object.color!=='string'||!/^#[a-f0-9]{6}$/i.test(object.color)||
         typeof object.blocksMovement!=='boolean'||typeof object.supportsPlayer!=='boolean')throw new Error('World state contains an invalid object.');
     objectIds.add(object.id);
+    if((object.type==='sign'&&!validLandmarkLabel(object.text,240,true))||(object.type==='beacon'&&!validLandmarkLabel(object.name,48)))throw new Error('World state contains an invalid landmark label.');
     const oriented=SHAPE_TYPES.includes(object.type);
     if(oriented&&!SHAPE_DIRECTIONS.includes(object.direction))throw new Error('World state contains an invalid shape direction.');
-    return {id:object.id,type:object.type,ownerId:object.ownerId,color:object.color,position:vector(object.position,1000),size:vector(object.size,50,0.25),blocksMovement:object.blocksMovement,supportsPlayer:object.supportsPlayer,...(oriented?{direction:object.direction}:{})};
+    return {id:object.id,type:object.type,ownerId:object.ownerId,color:object.color,position:vector(object.position,1000),size:vector(object.size,50,0.25),blocksMovement:object.blocksMovement,supportsPlayer:object.supportsPlayer,...(oriented?{direction:object.direction}:{}),...(object.type==='sign'?{text:object.text}:{}),...(object.type==='beacon'?{name:object.name}:{})};
   });
   const selectedSet=new Set(view.selectedIds);
   if(view.selectedIds.some(id=>!objectIds.has(id)))throw new Error('A selected object no longer exists; refresh the world before sending.');
@@ -81,15 +83,16 @@ export function captureSceneSnapshot(state, view, worldConnectionId) {
     totalPlayerCount:players.length,includedPlayerCount:Math.min(players.length,MAX_SCENE_PLAYERS),playersTruncated:players.length>MAX_SCENE_PLAYERS};
 }
 
-const BUILD_TYPES = ['block','bridge','port',...SHAPE_TYPES];
+const BUILD_TYPES = ['block','bridge','port','sign','beacon',...SHAPE_TYPES];
 function buildDesign(value) {
   if (!record(value)) throw new Error('Invalid object design.');
-  const directional = SHAPE_TYPES.includes(value.objectType);
-  if (!exactKeys(value, directional ? ['objectType','direction','position','size','color'] : ['objectType','position','size','color']) ||
-      !BUILD_TYPES.includes(value.objectType) || !exactKeys(value.position,['x','y','z']) || !exactKeys(value.size,['x','y','z']) ||
+  const directional = SHAPE_TYPES.includes(value.objectType), labelField=value.objectType==='sign'?'text':value.objectType==='beacon'?'name':null;
+  const keys=['objectType','position','size','color',...(directional?['direction']:[]),...(labelField?[labelField]:[])];
+  if (!exactKeys(value, keys) || !BUILD_TYPES.includes(value.objectType) || !exactKeys(value.position,['x','y','z']) || !exactKeys(value.size,['x','y','z']) ||
       !['x','y','z'].every(key => Number.isFinite(value.position[key]) && Math.abs(value.position[key]) <= 1000 && Number.isFinite(value.size[key]) && value.size[key] >= .25 && value.size[key] <= 50) ||
       typeof value.color !== 'string' || !/^#[a-f0-9]{6}$/i.test(value.color) ||
-      (directional && (!SHAPE_DIRECTIONS.includes(value.direction) || !shapeDimensionsValid(value.objectType,value.direction,value.size)))) throw new Error('Object design is invalid.');
+      (directional && (!SHAPE_DIRECTIONS.includes(value.direction) || !shapeDimensionsValid(value.objectType,value.direction,value.size))) ||
+      (labelField && !validLandmarkLabel(value[labelField],labelField==='text'?240:48,labelField==='text'))) throw new Error('Object design is invalid.');
   return structuredClone(value);
 }
 async function sendWorldCommand(command, connection) {
