@@ -214,3 +214,52 @@ test('HTTP group movement is atomic, persisted once, and visible to both clients
  assert.equal(saved.revision,before.revision+1);
  assert.deepEqual(saved.objects,after[0].objects);
 });
+
+test('button use checks both access policies, server position, idempotent target state, and never retargets',async t=>{
+ const f=await fixture(t);
+ const response=async body=>{const r=await f.send(body,'test-only-bob-token');return {r,value:await r.json()};};
+ const door=(await (await f.send({type:'build',objectType:'door',position:{x:4,y:1.5,z:0},size:{x:1.5,y:3,z:.25}})).json()).object;
+ const second=(await (await f.send({type:'build',objectType:'gate',position:{x:6,y:1,z:0},size:{x:2,y:2,z:.5}})).json()).object;
+ const button=(await (await f.send({type:'build',objectType:'button',position:{x:1,y:.25,z:0},size:{x:.5,y:.5,z:.25}})).json()).object;
+ const configure=await f.send({type:'update',id:button.id,targetId:door.id,targetState:'open',usePolicy:'all_players',
+  expected:{targetId:null,targetState:'open',usePolicy:'owner_admin'}});
+ assert.equal(configure.status,200);
+ const savedButton=await configure.json();
+ const use={type:'use',id:button.id,expectedVersion:savedButton.object.version,expectedTargetVersion:0};
+ let denied=await response(use);
+ assert.equal(denied.r.status,403);assert.equal(denied.value.error,'forbidden','a public button cannot open a private target');
+ await f.send({type:'update',id:door.id,usePolicy:'all_players',expected:{usePolicy:'owner_admin'}});
+ const first=await response(use);
+ assert.equal(first.r.status,200);assert.equal(first.value.object.state,'open');assert.equal(first.value.object.version,1);
+ const duplicate=await response(use);
+ assert.equal(duplicate.r.status,200);assert.equal(duplicate.value.revision,first.value.revision);
+ const remote=(await (await f.send({type:'build',objectType:'button',position:{x:8,y:.25,z:0},size:{x:.5,y:.5,z:.25}})).json()).object;
+ const remoteConfig=await f.send({type:'update',id:remote.id,targetId:door.id,targetState:'closed',usePolicy:'all_players',
+  expected:{targetId:null,targetState:'open',usePolicy:'owner_admin'}});
+ const remoteObject=(await remoteConfig.json()).object;
+ const far=await response({type:'use',id:remote.id,expectedVersion:remoteObject.version,expectedTargetVersion:door.version});
+ assert.equal(far.r.status,403);assert.equal(far.value.error,'out_of_range');
+ const spoof=await response({type:'use',id:remote.id,expectedVersion:remoteObject.version,expectedTargetVersion:door.version,position:{x:8,y:0,z:0}});
+ assert.equal(spoof.r.status,400);assert.equal(spoof.value.error,'invalid_command');
+ await f.send({type:'remove',id:door.id});
+ const missing=await response(use);
+ assert.equal(missing.r.status,404);assert.equal(missing.value.error,'not_found');
+ const state=await (await fetch(f.url+'/state',{headers:{Authorization:'Bearer test-only-bob-token'}})).json();
+ assert.equal(state.objects.find(o=>o.id===second.id).state,'closed');
+ assert.equal(state.objects.find(o=>o.id===button.id).targetId,door.id);
+});
+
+test('closing an open doorway is denied while an online player occupies the passage',async t=>{
+ const f=await fixture(t);
+ await f.send({type:'move',position:{x:0,y:0,z:0}});
+ const door=(await (await f.send({type:'build',objectType:'door',position:{x:0,y:1.5,z:0},size:{x:1,y:3,z:.25}})).json()).object;
+ const open=await f.send({type:'set_state',id:door.id,state:'open',expectedVersion:0});
+ assert.equal(open.status,200);
+ const closed=await f.send({type:'set_state',id:door.id,state:'closed',expectedVersion:1});
+ assert.equal(closed.status,409);assert.equal((await closed.json()).error,'occupied');
+ await new Promise(resolve=>setTimeout(resolve,260));
+ const moved=await f.send({type:'move',position:{x:2,y:0,z:0}});
+ assert.equal(moved.status,200);
+ const safe=await f.send({type:'set_state',id:door.id,state:'closed',expectedVersion:1});
+ assert.equal(safe.status,200);assert.equal((await safe.json()).object.state,'closed');
+});

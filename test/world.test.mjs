@@ -390,3 +390,35 @@ test('doors and gates persist an explicit, versioned open state without toggling
  assert.equal(closed.result.object.version,2);
  validateWorld(closed.state);
 });
+
+test('button links one stable target and access settings are owner/admin-controlled',()=>{
+ let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'door',position:{x:4,y:1.5,z:0},size:{x:1.5,y:3,z:.25}}).state;
+ const door=world.objects[0];
+ world=applyCommand(world,builder,{type:'build',objectType:'button',position:{x:1,y:.25,z:0},size:{x:.5,y:.5,z:.25}}).state;
+ const button=world.objects[1];
+ assert.deepEqual({targetId:button.targetId,targetState:button.targetState,usePolicy:button.usePolicy,version:button.version},
+  {targetId:null,targetState:'open',usePolicy:'owner_admin',version:0});
+ world=applyCommand(world,builder,{type:'update',id:door.id,usePolicy:'all_players',expected:{usePolicy:'owner_admin'}}).state;
+ const linked=applyCommand(world,builder,{type:'update',id:button.id,targetId:door.id,targetState:'closed',usePolicy:'all_players',
+  expected:{targetId:null,targetState:'open',usePolicy:'owner_admin'}});
+ assert.equal(linked.result.object.targetId,door.id);
+ assert.equal(linked.result.object.targetState,'closed');
+ assert.equal(linked.result.object.usePolicy,'all_players');
+ assert.equal(linked.result.object.version,1);
+ const opened=applyCommand(linked.state,{id:'bob',role:'viewer'},{type:'set_state',id:door.id,state:'open',expectedVersion:1});
+ assert.equal(opened.result.object.state,'open');
+ assert.equal(opened.result.object.blocksMovement,false);
+ assert.throws(()=>applyCommand(linked.state,{id:'bob',role:'viewer'},{type:'update',id:button.id,targetId:'another-door',expected:{targetId:door.id}}),{code:'forbidden'});
+ assert.throws(()=>applyCommand(linked.state,builder,{type:'update',id:button.id,targetId:'missing',expected:{targetId:null}}),{code:'invalid_target'});
+ validateWorld(linked.state);
+});
+
+test('closed doors block player movement and the open state makes the same passage traversable',()=>{
+ let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'door',position:{x:2,y:1.5,z:0},size:{x:.5,y:3,z:.5}}).state;
+ world=move(world,{x:0,y:0,z:0});
+ world=move(world,{x:10,y:0,z:0});
+ assert.ok(player(world).position.x<=1.18+1e-6,JSON.stringify(player(world).position));
+ const opened=applyCommand(world,builder,{type:'set_state',id:world.objects[0].id,state:'open',expectedVersion:0});
+ world=move(opened.state,{x:10,y:0,z:0});
+ assert.ok(player(world).position.x>2,JSON.stringify(player(world).position));
+});
