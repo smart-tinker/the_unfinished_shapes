@@ -464,7 +464,9 @@ test('lamp position and size edits require exact expected values',()=>{
  assert.throws(()=>applyCommand(built.state,builder,{type:'update',id:lamp.id,size:{x:.75,y:2,z:.5}}),{code:'invalid_command'});
  const moved=applyCommand(built.state,builder,{type:'update',id:lamp.id,position:{x:2,y:1,z:1},expected:{position:lamp.position}});
  assert.equal(moved.result.object.position.x,2);
- assert.throws(()=>applyCommand(moved.state,builder,{type:'update',id:lamp.id,size:{x:.75,y:2,z:.5},expected:{size:lamp.size}}),{code:'conflict',status:409});
+ const resized=applyCommand(moved.state,builder,{type:'update',id:lamp.id,size:{x:.75,y:2,z:.5},expected:{size:lamp.size}});
+ assert.equal(resized.result.object.size.x,.75);
+ assert.throws(()=>applyCommand(resized.state,builder,{type:'update',id:lamp.id,size:{x:1,y:2,z:.5},expected:{size:lamp.size}}),{code:'conflict',status:409});
 });
 
 test('only an admin can set versioned world lighting within the documented ranges',()=>{

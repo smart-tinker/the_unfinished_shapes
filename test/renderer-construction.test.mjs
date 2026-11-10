@@ -334,6 +334,7 @@ test('world lighting Preview and Cancel are local; Apply sends one versioned com
  h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1,castShadow:true};h.context.renderer={shadowMap:{enabled:true}};
  h.context.controls={target:{x:0,y:0,z:0}};h.context.lampLights=new Map();
  h.context.worldState={revision:7,lighting:{version:2,ambientIntensity:2.6,sunIntensity:3.1}};
+ h.context.latestStateRevision=7;h.context.settingsGeneration=0;
  h.context.request=async(path,method,body)=>{h.context.requests.push({path,method,body});return {revision:8,lighting:{version:3,ambientIntensity:1.2,sunIntensity:2.4}};};
  h.context.requests=[];h.context.feedback=()=>{};h.context.updateLightingControls=()=>{};
  h.element('world-light-ambient').value='1.2';h.element('world-light-sun').value='2.4';
@@ -352,10 +353,10 @@ test('world lighting Preview and Cancel are local; Apply sends one versioned com
 test('unknown lighting Apply is reconciled from fresh server state before releasing its preview',async()=>{
  const h=rendererHarness();assert.ok(h.has('async function applyWorldLightingPreview('));
  h.context.worldLightingPreview={version:1,baseline:{version:1,ambientIntensity:2.6,sunIntensity:3.1},ambientIntensity:1,sunIntensity:2,attempted:false};
- h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};h.context.latestStateRevision=5;
+ h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};h.context.latestStateRevision=5;h.context.settingsGeneration=0;
  h.context.worldState={revision:5,lighting:{version:1,ambientIntensity:2.6,sunIntensity:3.1}};
  h.context.requests=[];
- h.context.request=async(path,method)=>{h.context.requests.push([path,method]);if(method==='POST')throw new Error('timed out');return {revision:6,lighting:{version:2,ambientIntensity:1,sunIntensity:2},objects:[],players:[]};};
+ h.context.request=async(path,method)=>{h.context.requests.push([path,method??'GET']);if(method==='POST')throw new Error('timed out');return {revision:6,lighting:{version:2,ambientIntensity:1,sunIntensity:2},objects:[],players:[]};};
  h.context.renderWorld=state=>{h.context.worldState=state;h.context.latestStateRevision=state.revision;};
  h.context.feedback=()=>{};h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1};h.context.renderer={shadowMap:{enabled:true}};h.context.controls={target:{x:0,y:0,z:0}};
  h.load('function updateLightingControls(','function labelTexture(');
@@ -370,7 +371,7 @@ test('unknown lighting Apply is reconciled from fresh server state before releas
 test('failed lighting refresh keeps attempted preview locked and never claims it was canceled',async()=>{
  const h=rendererHarness();assert.ok(h.has('function cancelWorldLightingPreview('));
  h.context.worldLightingPreview={version:1,baseline:{version:1,ambientIntensity:2.6,sunIntensity:3.1},ambientIntensity:1,sunIntensity:2,attempted:false};
- h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};h.context.latestStateRevision=5;
+ h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};h.context.latestStateRevision=5;h.context.settingsGeneration=0;
  h.context.worldState={revision:5,lighting:{version:1,ambientIntensity:2.6,sunIntensity:3.1}};
  h.context.requests=[];
  h.context.request=async(path,method)=>{h.context.requests.push([path,method]);throw new Error(method==='POST'?'timed out':'offline');};
