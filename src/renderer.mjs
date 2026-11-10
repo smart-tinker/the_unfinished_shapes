@@ -580,7 +580,7 @@ function fillInspector(object) {
   $('edit-sign-row').hidden=object.type!=='sign';$('edit-sign-text').disabled=object.type!=='sign';$('edit-sign-text').required=object.type==='sign';$('edit-sign-text').value=object.type==='sign'?object.text:'';
   $('edit-beacon-row').hidden=object.type!=='beacon';$('edit-beacon-name').disabled=object.type!=='beacon';$('edit-beacon-name').required=object.type==='beacon';$('edit-beacon-name').value=object.type==='beacon'?object.name:'';
   const interactive=['door','gate','button'].includes(object.type), doorway=['door','gate'].includes(object.type), button=object.type==='button';
-  const canEdit=role==='admin'||(role==='builder'&&object.ownerId===meId),canManageInteraction=role==='admin'||object.ownerId===meId,canUse=item=>role==='admin'||item.ownerId===meId||item.usePolicy==='all_players';
+  const canEdit=role==='admin'||(role==='builder'&&object.ownerId===meId),canManageInteraction=interactive&&(role==='admin'||object.ownerId===meId),canUse=item=>role==='admin'||item.ownerId===meId||item.usePolicy==='all_players';
   $('edit-use-policy').value=interactive?object.usePolicy:'owner_admin';
   $('edit-interaction-row').hidden=!interactive;$('edit-button-row').hidden=!button;$('edit-target-state-row').hidden=!button;
   $('edit-physics-options').hidden=interactive;
@@ -899,7 +899,7 @@ $('edit-form').addEventListener('submit', async event => {
       feedback(error.message, true);
     }
   }
-  finally { editing = false; const object = objectData.get(selectedId); $('edit-fields').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId)); $('edit-interaction-fields').disabled = !object || !(role === 'admin' || object.ownerId === meId); $('edit-reset').disabled = !object || !(role === 'admin' || object.ownerId === meId); }
+  finally { editing = false; const object = objectData.get(selectedId); $('edit-fields').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId)); $('edit-interaction-fields').disabled = !object || !(role === 'admin' || object.ownerId === meId); $('edit-reset').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId) || (['door','gate','button'].includes(object.type) && object.ownerId === meId)); }
 });
 function setFullscreenState(value) {
   isFullscreen = value === true;
