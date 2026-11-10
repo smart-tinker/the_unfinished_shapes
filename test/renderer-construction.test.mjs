@@ -350,6 +350,29 @@ test('world lighting Preview and Cancel are local; Apply sends one versioned com
  assert.deepEqual(h.context.worldState.lighting,{version:3,ambientIntensity:1.2,sunIntensity:2.4});
 });
 
+test('late lighting Apply from an old connection cannot overwrite the new world',async()=>{
+ const h=rendererHarness();h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};
+ h.context.settingsGeneration=0;h.context.latestStateRevision=7;h.context.worldRevision=7;
+ h.context.worldState={revision:7,lighting:{version:2,ambientIntensity:2.6,sunIntensity:3.1},objects:[]};
+ h.context.worldLightingPreview={version:2,baseline:{version:2,ambientIntensity:2.6,sunIntensity:3.1},ambientIntensity:1.2,sunIntensity:2.4,attempted:false};
+ h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1};h.context.renderer={shadowMap:{enabled:true}};h.context.controls={target:{x:0,y:0,z:0}};
+ let resolveApply;h.context.requests=[];
+ h.context.request=(path,method)=>{h.context.requests.push([path,method]);return new Promise(resolve=>{resolveApply=resolve;});};
+ h.load('function updateLightingControls(','function labelTexture(');
+ const pending=h.run('applyWorldLightingPreview()');
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.requests)),[['/command','POST']]);
+ h.context.settingsGeneration=1;h.context.latestStateRevision=-1;h.context.worldRevision=-1;
+ h.context.worldState={revision:0,lighting:{version:0,ambientIntensity:2.6,sunIntensity:3.1},objects:[]};
+ h.context.worldLightingPreview=null;
+ resolveApply({revision:8,lighting:{version:3,ambientIntensity:1.2,sunIntensity:2.4}});
+ await pending;
+ assert.equal(h.context.worldState.revision,0);
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.worldState.lighting)),{version:0,ambientIntensity:2.6,sunIntensity:3.1});
+ assert.equal(h.context.worldRevision,-1);
+ assert.equal(h.context.latestStateRevision,-1);
+ assert.doesNotMatch(h.element('world-light-message').textContent,/shared world lighting saved/i);
+});
+
 test('unknown lighting Apply is reconciled from fresh server state before releasing its preview',async()=>{
  const h=rendererHarness();assert.ok(h.has('async function applyWorldLightingPreview('));
  h.context.worldLightingPreview={version:1,baseline:{version:1,ambientIntensity:2.6,sunIntensity:3.1},ambientIntensity:1,sunIntensity:2,attempted:false};
