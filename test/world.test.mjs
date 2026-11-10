@@ -285,8 +285,11 @@ test('a north-facing ramp carries manual and agent movement up its continuous sl
 test('stairs provide four equal walkable rises toward their saved cardinal direction',()=>{
  const stair={type:'build',objectType:'stairs',direction:'east',position:{x:10,y:1,z:0},size:{x:8,y:2,z:4}};
  let world=applyCommand(emptyWorld(),builder,stair).state;
- for(let x=1.25;x<=15;x+=1.25)world=move(world,{x,y:0,z:0});
- for(let x=13.75;x>=6.25;x-=1.25)world=move(world,{x,y:0,z:0});
- assert.ok(player(world).position.y>1.5,JSON.stringify(player(world).position));
- assert.ok(player(world).position.y<=2+1e-6,JSON.stringify(player(world).position));
+ world=move(world,{x:5,y:0,z:0});
+ const heights=[];
+ for(const x of [6.25,7.5,8.5,9.5,10.5,11.5,12.5,13.5]){
+  world=move(world,{x,y:0,z:0});
+  if([7.5,9.5,11.5,13.5].includes(x))heights.push(player(world).position.y);
+ }
+ assert.deepEqual(heights,[.5,1,1.5,2]);
 });
