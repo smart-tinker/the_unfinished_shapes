@@ -131,6 +131,29 @@ test('reports persistence phase timings only after the atomic world write when o
 });
 
 
+test('stair and ramp directions are shared by clients and survive a server restart',async t=>{
+ const f=await fixture(t);
+ const shapes=[
+  {type:'build',objectType:'stairs',direction:'east',position:{x:10,y:1,z:0},size:{x:8,y:2,z:4}},
+  {type:'build',objectType:'ramp',direction:'north',position:{x:0,y:1,z:10},size:{x:4,y:2,z:8}},
+ ];
+ const created=[];
+ for(const shape of shapes){
+  const response=await f.send(shape);assert.equal(response.status,200);
+  created.push((await response.json()).object);
+ }
+ const read=async url=>fetch(url+'/state',{headers:{Authorization:'Bearer test-only-bob-token'}}).then(response=>response.json());
+ const visible=await read(f.url);
+ assert.deepEqual(visible.objects,created);
+ assert.deepEqual(JSON.parse(await readFile(f.dataPath,'utf8')).objects,created);
+ await f.app.shutdown();
+ const restarted=await createWorldServer({dataPath:f.dataPath,users,port:0});await restarted.start();
+ try {
+  const restored=await read(`http://127.0.0.1:${restarted.address().port}`);
+  assert.deepEqual(restored.objects,created);
+ } finally {await restarted.shutdown();}
+});
+
 test('HTTP group movement is atomic, persisted once, and visible to both clients',async t=>{
  const carolToken='test-only-carol-builder-token';
  const f=await fixture(t,{users:{...users,[carolToken]:{id:'carol',role:'builder'}}});
