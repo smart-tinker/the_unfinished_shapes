@@ -364,3 +364,29 @@ test('stair and ramp size edits cannot persist geometry beyond their traversal l
   assert.deepEqual(built.state,before);
  }
 });
+
+test('doors and gates persist an explicit, versioned open state without toggling on retry',()=>{
+ const world=emptyWorld();
+ const door=applyCommand(world,builder,{type:'build',objectType:'door',position:{x:0,y:1.5,z:0},size:{x:1.5,y:3,z:.25}});
+ const gate=applyCommand(door.state,builder,{type:'build',objectType:'gate',position:{x:8,y:1,z:0},size:{x:4,y:2,z:.5}});
+ assert.ok(mechanics.includes('door'));assert.ok(mechanics.includes('gate'));
+ for(const object of gate.state.objects){
+  assert.equal(object.state,'closed');
+  assert.equal(object.usePolicy,'owner_admin');
+  assert.equal(object.version,0);
+  assert.equal(object.blocksMovement,true);
+  assert.equal(object.supportsPlayer,false);
+ }
+ const opened=applyCommand(gate.state,builder,{type:'set_state',id:door.result.object.id,state:'open',expectedVersion:0});
+ assert.equal(opened.result.object.state,'open');
+ assert.equal(opened.result.object.blocksMovement,false);
+ assert.equal(opened.result.object.version,1);
+ const retry=applyCommand(opened.state,builder,{type:'set_state',id:door.result.object.id,state:'open',expectedVersion:0});
+ assert.equal(retry.result.revision,opened.result.revision);
+ assert.equal(retry.result.object.version,1);
+ assert.throws(()=>applyCommand(retry.state,builder,{type:'set_state',id:door.result.object.id,state:'closed',expectedVersion:0}),{code:'conflict',status:409});
+ const closed=applyCommand(retry.state,builder,{type:'set_state',id:door.result.object.id,state:'closed',expectedVersion:1});
+ assert.equal(closed.result.object.blocksMovement,true);
+ assert.equal(closed.result.object.version,2);
+ validateWorld(closed.state);
+});
