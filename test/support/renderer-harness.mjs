@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { SHAPE_DEFAULT_SIZES } from '../../src/movement.mjs';
 import assert from 'node:assert/strict';
 
 // Execute renderer state/event logic without pretending this is a WebGL or Electron test.
@@ -19,7 +20,7 @@ export function rendererHarness() {
     });
     return elements.get(id);
   }
-  const context = vm.createContext({ console, structuredClone, JSON, Number, Object, Map, String, Boolean,
+  const context = vm.createContext({ console, structuredClone, JSON, Number, Object, Map, String, Boolean, SHAPE_DEFAULT_SIZES,
     selectedId: null, selectedIds: new Set(), selectionBoxes: new Map(), MAX_GROUP_SELECTION: 32,
     boxSelectMode: false, boxCandidate: null, movePreview: null, dragCandidate: null,
     agentBuildPreview: null, clearAgentBuildPreview: () => {}, updateAgentBuildPreviewControls: () => {}, poll: async () => {},
