@@ -261,7 +261,8 @@ await withSmokeCleanup(async () => {
   assert.equal((await state('bob')).objects[0].size.x, 5);
   const denied = await fetch(url + '/command', { method: 'POST', headers: { Authorization: 'Bearer ' + tokens.bob, 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'remove', id: built.id }) });
   assert.equal(denied.status, 403, 'server rejects bypassing the disabled UI');
-  assert.equal((await state()).objects[0].id, built.id);
+  const beforeRestart = await state();
+  assert.equal(beforeRestart.objects[0].id, built.id);
 
   for (const client of clients) { client.graphics.phase('server restart'); await client.graphics.assertHealthy(); }
   await stopServer();
@@ -270,7 +271,7 @@ await withSmokeCleanup(async () => {
   for (const client of clients) await client.page.waitForFunction(() => document.querySelector('#connection').textContent.includes('World connected'));
   const restored = await state('bob');
   assert.equal(restored.objects[0].id, built.id); assert.equal(restored.objects[0].size.x, 5);
-  assert.equal(restored.players.find(player => player.id === 'alice').position.y, 2, 'server restart preserves the landing surface position');
+  assert.deepEqual(restored.players.find(player => player.id === 'alice').position, beforeRestart.players.find(player => player.id === 'alice').position, 'server restart preserves the last accepted player position');
   assert.deepEqual(restored.players.map(p => p.id).sort(), ['alice', 'bob']);
   await close(bob);
   const returning = await launch('bob');
