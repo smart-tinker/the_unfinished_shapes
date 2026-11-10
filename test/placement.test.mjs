@@ -43,3 +43,13 @@ test('apply contains one conditional update and preserves the original server po
   });
   moving.position.x = 0;
 });
+
+for (const [axis, point, expected] of [
+  ['x', { x: 2.2, y: 9.9, z: 7.2 }, { x: 2, y: 1, z: 0 }],
+  ['y', { x: 2.2, y: 9.9, z: 7.2 }, { x: 0, y: 10, z: 0 }],
+  ['z', { x: 2.2, y: 9.9, z: 7.2 }, { x: 0, y: 1, z: 7 }],
+]) {
+  test(`selected ${axis.toUpperCase()} axis snaps only that coordinate`, () => {
+    assert.deepEqual(placementPosition(point, object, null, 1, axis), expected);
+  });
+}
