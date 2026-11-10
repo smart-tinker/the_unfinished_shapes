@@ -61,8 +61,9 @@ export function captureSceneSnapshot(state, view, worldConnectionId) {
   const visible=objects.filter(object=>inCameraView(object,camera));
   const candidates=[...selected,...visible.filter(object=>!selectedSet.has(object.id))];
   const included=candidates.slice(0,MAX_SCENE_OBJECTS).map(object=>({...object,selected:selectedSet.has(object.id),inCameraView:inCameraView(object,camera)}));
+  const online=Array.isArray(state.onlinePlayerIds)?new Set(state.onlinePlayerIds):null;
   const playerIds=new Set();
-  const players=state.players.map(player=>{
+  const players=state.players.filter(player=>!online||online.has(player.id)).map(player=>{
     if(!record(player)||!validId(player.id)||playerIds.has(player.id))throw new Error('World state contains an invalid player.');
     playerIds.add(player.id);
     const result={id:player.id,position:vector(player.position,1000),isSelf:player.id===state.me?.id};
@@ -91,6 +92,7 @@ export async function executeGameTool(event,{url,token,connectionId}) {
     const response=await fetch(url+(isRead?'/state':'/command'),{method:isRead?'GET':'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:isRead?undefined:JSON.stringify(command),signal:AbortSignal.timeout(5000),redirect:'error'});
     const value=await response.json();
     if(!response.ok||!isRead)return toolResult(response.ok,value);
-    return toolResult(true,{...value,worldConnectionId:connectionId});
+    const online=Array.isArray(value.onlinePlayerIds)?new Set(value.onlinePlayerIds):null;
+    return toolResult(true,{...value,...(online?{players:value.players.filter(player=>online.has(player.id))}:{}),worldConnectionId:connectionId});
   }catch(error){return toolResult(false,{error:error.message});}
 }
