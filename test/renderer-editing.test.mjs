@@ -1,11 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { rendererHarness } from './support/renderer-harness.mjs';
+import { positionUpdateCommand } from '../src/placement.mjs';
 
 function editingHarness() {
   const h = rendererHarness();
-  Object.assign(h.context, { window: { confirm: () => true }, THREE: {}, scene: {}, meshes: new Map(), feedback: () => {}, settingsGeneration: 0, poll: async () => {} });
-  h.run(`let selectedId='shape-1', inspectorBase=null, inspectorDirty=false, editing=false, role='builder', meId='alice';
+  Object.assign(h.context, { window: { confirm: () => true }, THREE: {}, scene: {}, meshes: new Map(), feedback: () => {}, settingsGeneration: 0, poll: async () => {}, positionUpdateCommand });
+  h.run(`let selectedId='shape-1', inspectorBase=null, inspectorDirty=false, editing=false, role='builder', meId='alice', dragCandidate=null, movePreview=null;
+    function clearMovePreview(){dragCandidate=null;movePreview=null;} function cancelMovePreview(){clearMovePreview();} function refreshMovePreview(){}
     const objectData=new Map(); let selectionBox=null; let sends=[]; let failure=null;
     async function command(body) {
       sends.push(body); if(failure) throw new Error(failure);

@@ -8,7 +8,8 @@ function settingsHarness(controlState) {
   h.run(`let settings = { workspacePath: '/old-workspace', codexPath: '/codex', serverUrl: 'http://world-a', token: 'session-token', threadId: 'game-thread' };
 let connected = true, busy = false, settingsGeneration = 0, worldRevision = 1, objectSnapshot = '', worldState = {}, meId = 'player';
 let playerPosition = { x: 1, y: 0, z: 1 }, playerVelocityY = 0, jumpRequested = false, lastPosition = '', latestStateRevision = 1, localMovementVersion = 0;
-let scene = null, calls = [], moveStarts = new Map();
+let scene = null, calls = [], moveStarts = new Map(), movePreview = null, dragCandidate = null, cancelCount = 0;
+function cancelMovePreview() { movePreview = null; dragCandidate = null; cancelCount++; }
 const liveControls = ${state};
 const bridge = {
   readAgentControls: async threadId => { calls.push('read:' + threadId); return liveControls; },
@@ -31,6 +32,10 @@ test('changing workspace is blocked while a native Goal is active', async () => 
   assert.equal(h.run('JSON.stringify(calls)'), '["read:game-thread"]');
   assert.equal(h.run('settings.workspacePath'), '/old-workspace');
   assert.equal(h.run('settings.threadId'), 'game-thread');
+  h.run("movePreview = { objectId: 'shape-1' }");
+  await assert.rejects(h.run('saveSettings()'), /Goal|pause|wait/i);
+  assert.equal(h.run('cancelCount'), 0, 'a rejected connection change preserves the local proposal');
+  assert.ok(h.run('movePreview'));
 });
 
 test('changing workspace is blocked while a paused Goal still has a running turn', async () => {
@@ -78,8 +83,11 @@ test('an idle conversation can disconnect when native Goals are confirmed unsupp
 
 test('an idle conversation can disconnect after fresh state confirms no active Goal or turn', async () => {
   const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'idle', goalSupported: true, pendingApprovals: 0, turnId: null, goal: null });
+  h.run("movePreview = { objectId: 'shape-1' }");
   await h.run('saveSettings()');
   assert.equal(h.run('settings.workspacePath'), '/new-workspace');
   assert.equal(h.run('settings.threadId'), '');
+  assert.equal(h.run('cancelCount'), 1, 'a confirmed connection change discards the local proposal');
+  assert.equal(h.run('movePreview'), null);
   assert.equal(h.run('JSON.stringify(calls)'), '["read:game-thread","disconnect","save","poll"]');
 });

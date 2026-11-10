@@ -442,7 +442,6 @@ function readSettings() { return { ...settings, workspacePath: $('workspace').va
 async function saveSettings() {
   const next = readSettings();
   const changed = ['workspacePath', 'codexPath', 'serverUrl', 'token'].some(key => next[key] !== settings[key]);
-  if (changed && (movePreview || dragCandidate)) cancelMovePreview();
   if (changed && (connected || settings.threadId)) {
     if (!settings.threadId) throw new Error('Cannot verify the current Codex conversation; reconnect before changing connection settings.');
     const state = await bridge.readAgentControls(settings.threadId);
@@ -459,6 +458,7 @@ async function saveSettings() {
   }
   if (next.workspacePath !== settings.workspacePath) next.threadId = '';
   if (changed) {
+    if (movePreview || dragCandidate) cancelMovePreview();
     await bridge.disconnectCodex(); connected = false; busy = false; updateChatControls();
     $('agent-status').textContent = 'Settings changed · reconnect Codex';
   }
