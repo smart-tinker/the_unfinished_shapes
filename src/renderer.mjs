@@ -388,7 +388,7 @@ $('move-grid-step').disabled = !$('move-snap-enabled').checked;
 $('move-snap-enabled').addEventListener('change', () => { $('move-grid-step').disabled = !$('move-snap-enabled').checked; refreshMovePreview(); });
 $('move-grid-step').addEventListener('input', refreshMovePreview);
 $('move-cancel').addEventListener('click', cancelMovePreview);
-$('edit-form').addEventListener('input', event => { inspectorDirty = true; if (event.target?.id?.startsWith('edit-position-')) updateMovePreviewFromInspector(); });
+$('edit-form').addEventListener('input', event => { inspectorDirty = true; if (event?.target?.id?.startsWith('edit-position-')) updateMovePreviewFromInspector(); });
 $('edit-reset').addEventListener('click', () => { if (movePreview || dragCandidate) cancelMovePreview(); else fillInspector(objectData.get(selectedId)); });
 $('edit-form').addEventListener('submit', async event => {
   event.preventDefault(); if (!selectedId || !inspectorBase || editing) return;
