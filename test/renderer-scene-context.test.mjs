@@ -88,6 +88,6 @@ test('chat treats a lost turn-start acknowledgment as uncertain and blocks a bli
   h.load('function sceneContextForPrompt() {', "$('interrupt').addEventListener");
   h.element('prompt').value='Build this';
   await h.element('chat-form').listeners.submit({preventDefault(){}});
-  assert.match(h.element('scene-context-status').textContent,/outcome is unknown.*check the conversation before retrying/i);
+  assert.match(h.element('scene-context-status').textContent,/outcome is unknown.*check the (?:Codex )?conversation before retrying/i);
   assert.doesNotMatch(h.element('scene-context-status').textContent,/was not sent/i);
 });
