@@ -132,11 +132,11 @@ test('reports persistence phase timings only after the atomic world write when o
 
 
 test('HTTP group movement is atomic, persisted once, and visible to both clients',async t=>{
- const bobToken='test-only-bob-builder-token';
- const f=await fixture(t,{users:{...users,[bobToken]:{id:'bob',role:'builder'}}});
+ const carolToken='test-only-carol-builder-token';
+ const f=await fixture(t,{users:{...users,[carolToken]:{id:'carol',role:'builder'}}});
  const aliceA=await (await f.send({type:'build',objectType:'block',position:{x:0,y:1,z:0}})).json();
  const aliceB=await (await f.send({type:'build',objectType:'bridge',position:{x:4,y:.5,z:0}})).json();
- const bobObject=await (await f.send({type:'build',objectType:'block',position:{x:8,y:1,z:0}},bobToken)).json();
+ const bobObject=await (await f.send({type:'build',objectType:'block',position:{x:8,y:1,z:0}},carolToken)).json();
  const read=async auth=>fetch(f.url+'/state',{headers:{Authorization:'Bearer '+auth}}).then(response=>response.json());
  const before=await read(token);
  const changes=[aliceA.object,aliceB.object].map(object=>({
