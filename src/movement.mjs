@@ -146,7 +146,8 @@ export function movePlayer(world, current, command, deltaSeconds = 0.25) {
       const surface = reachableSurfaceAt(objects, position.x, position.z, position.y);
       if (surface !== null) {
         if (surface > position.y + EPSILON && objects.some(object =>
-          object.blocksMovement && overlapsTop(object, position.x, position.z) && intersectsVertically(object, surface))) {
+          object.blocksMovement && surfaceAt(object, position.x, position.z) !== surface &&
+          overlapsTop(object, position.x, position.z) && intersectsVertically(object, surface))) {
           position.x = previousX; position.z = previousZ; continue;
         }
         position.y = surface; continue;
