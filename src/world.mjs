@@ -145,10 +145,12 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25, context
     case 'update': {
       const object = next.objects.find(o => o.id === command.id);
       if (!object) fail('not_found','Object not found.',404);
-      if (actor.role !== 'admin' && (actor.role !== 'builder' || object.ownerId !== actor.id)) fail('forbidden','Only the owner or an admin may edit this object.',403);
       const interactive = ['door','gate','button'].includes(object.type), button = object.type === 'button';
       const editable = ['position','size','color',...(interactive?[]:['blocksMovement','supportsPlayer']),...(object.type==='sign'?['text']:[]),...(object.type==='beacon'?['name']:[]),...(interactive?['usePolicy']:[]),...(button?['targetId','targetState']:[])];
       const configFields = ['usePolicy',...(button?['targetId','targetState']:[])];
+      const updateFields = Object.keys(command).filter(key => !['type','id','expected'].includes(key));
+      const ownerConfigOnly = interactive && object.ownerId === actor.id && updateFields.length > 0 && updateFields.every(key => configFields.includes(key));
+      if (actor.role !== 'admin' && !(object.ownerId === actor.id && (actor.role === 'builder' || ownerConfigOnly))) fail('forbidden','Only the owner or an admin may edit this object.',403);
       if (Object.keys(command).some(key => !['type','id','expected',...editable].includes(key)) || !editable.some(key => Object.hasOwn(command,key))) fail('invalid_command','Update requires editable object fields; identity, state and interactive physics cannot be changed.');
       if ([...configFields,'text','name'].some(key => Object.hasOwn(command,key)) && !Object.hasOwn(command,'expected')) fail('invalid_command','Changing access, button links or landmark labels requires current values in expected.');
       if (Object.hasOwn(command,'expected')) {

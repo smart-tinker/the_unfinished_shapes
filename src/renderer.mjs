@@ -580,10 +580,13 @@ function fillInspector(object) {
   $('edit-sign-row').hidden=object.type!=='sign';$('edit-sign-text').disabled=object.type!=='sign';$('edit-sign-text').required=object.type==='sign';$('edit-sign-text').value=object.type==='sign'?object.text:'';
   $('edit-beacon-row').hidden=object.type!=='beacon';$('edit-beacon-name').disabled=object.type!=='beacon';$('edit-beacon-name').required=object.type==='beacon';$('edit-beacon-name').value=object.type==='beacon'?object.name:'';
   const interactive=['door','gate','button'].includes(object.type), doorway=['door','gate'].includes(object.type), button=object.type==='button';
-  const canEdit=role==='admin'||(role==='builder'&&object.ownerId===meId),canUse=item=>role==='admin'||item.ownerId===meId||item.usePolicy==='all_players';
+  const canEdit=role==='admin'||(role==='builder'&&object.ownerId===meId),canManageInteraction=role==='admin'||object.ownerId===meId,canUse=item=>role==='admin'||item.ownerId===meId||item.usePolicy==='all_players';
   $('edit-use-policy').value=interactive?object.usePolicy:'owner_admin';
   $('edit-interaction-row').hidden=!interactive;$('edit-button-row').hidden=!button;$('edit-target-state-row').hidden=!button;
   $('edit-physics-options').hidden=interactive;
+  $('edit-interaction-fields').hidden=!interactive;$('edit-interaction-fields').disabled=editing||!canManageInteraction;
+  $('edit-interaction-apply').hidden=!interactive;$('edit-apply').hidden=interactive;
+  $('edit-reset').disabled=editing||(!canEdit&&!canManageInteraction);
   const targetSelect=$('edit-target-id'),targets=(typeof worldState==='undefined'?[]:worldState.objects||[]).filter(item=>['door','gate'].includes(item.type));
   targetSelect.replaceChildren();
   const none=document.createElement('option');none.value='';none.textContent='No target';targetSelect.append(none);
@@ -599,7 +602,7 @@ function fillInspector(object) {
   $('edit-open').disabled=editing||!canUse(object);$('edit-close').disabled=editing||!canUse(object);
   const target=button?targets.find(item=>item.id===object.targetId):null;
   $('edit-use-button').disabled=editing||!canUse(object)||!target||!canUse(target);
-  $('edit-message').textContent = !canEdit ? 'Read-only: you do not have permission to edit this object.' : 'Changes are checked by the world server.';
+  $('edit-message').textContent = !canEdit ? (canManageInteraction ? 'Geometry is read-only; you can manage interaction access.' : 'Read-only: you do not have permission to edit this object.') : 'Changes are checked by the world server.';
 }
 function updateMovePreviewFromInspector() {
   const draft = movePreview;
@@ -682,7 +685,7 @@ function applySelection(ids, primary = null, fromPoll = false) {
     if (previousPrimary !== selectedId || !inspectorDirty || !object) fillInspector(object);
     else if (JSON.stringify(object) !== JSON.stringify(inspectorBase)) $('edit-message').textContent = 'This shape changed on the server. Your unapplied values are preserved; Reset reloads the current shape.';
   } else {
-    inspectorBase = null; inspectorDirty = false; $('edit-fields').disabled = true;
+    inspectorBase = null; inspectorDirty = false; $('edit-fields').disabled = true; $('edit-interaction-fields').disabled = true;
     if (selected.length > 1) $('group-move-status').textContent = readOnly
       ? readOnly + ' read-only shape(s) selected. Remove them before moving this group.'
       : 'Drag any selected shape to preview one shared group move.';
@@ -751,7 +754,8 @@ async function applyInteractiveAction(object, body) {
   try {
     const result = await command(body);
     if (generation !== settingsGeneration) return;
-    if (result.object) objectData.set(object.id, result.object);
+    if (result.object) objectData.set(result.object.id, result.object);
+    if (result.button) objectData.set(result.button.id, result.button);
     feedback('Interactive action applied.');
   } catch (error) {
     if (generation === settingsGeneration) feedback(error.message + ' Refresh world state before retrying.', true);
@@ -865,7 +869,7 @@ $('edit-form').addEventListener('submit', async event => {
     ...Object.fromEntries(fields.filter(field => field !== 'position').map(field => [field, structuredClone(baseline[field])])),
     ...movePrecondition,
   };
-  inspectorDirty = true; editing = true; $('edit-fields').disabled = true; const generation = settingsGeneration;
+  inspectorDirty = true; editing = true; $('edit-fields').disabled = true; $('edit-interaction-fields').disabled = true; $('edit-reset').disabled = true; const generation = settingsGeneration;
   try {
     const result = await command(body);
     if (generation !== settingsGeneration) return;
@@ -895,7 +899,7 @@ $('edit-form').addEventListener('submit', async event => {
       feedback(error.message, true);
     }
   }
-  finally { editing = false; const object = objectData.get(selectedId); $('edit-fields').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId)); }
+  finally { editing = false; const object = objectData.get(selectedId); $('edit-fields').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId)); $('edit-interaction-fields').disabled = !object || !(role === 'admin' || object.ownerId === meId); $('edit-reset').disabled = !object || !(role === 'admin' || object.ownerId === meId); }
 });
 function setFullscreenState(value) {
   isFullscreen = value === true;
