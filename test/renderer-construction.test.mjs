@@ -195,10 +195,28 @@ test('inspector exposes each object policy and retains a missing button target',
  assert.ok(h.element('edit-target-id').children.some(option=>option.value==='removed-door'&&/missing/i.test(option.textContent)));
  assert.equal(h.element('edit-use-button').hidden,false);
 });
+ 
+test('viewer owner can manage interactive access without editing object geometry',()=>{
+ const html=readFileSync(new URL('../src/index.html',import.meta.url),'utf8');
+ assert.match(html,/<fieldset id="edit-interaction-fields"/);
+ assert.match(html,/id="edit-interaction-apply"/);
+ const h=rendererHarness();
+ const door={id:'door-1',type:'door',ownerId:'alice',color:'#886644',position:{x:0,y:1.5,z:0},size:{x:1,y:3,z:.25},blocksMovement:true,supportsPlayer:false,state:'closed',usePolicy:'owner_admin',version:0};
+ h.context.role='viewer';h.context.meId='alice';h.context.editing=false;h.context.worldState={objects:[door]};
+ h.load('function fillInspector(object)','function updateMovePreviewFromInspector()');
+ h.context.current=door;h.run('fillInspector(current)');
+ assert.equal(h.element('edit-fields').disabled,true);
+ assert.equal(h.element('edit-interaction-fields').hidden,false);
+ assert.equal(h.element('edit-interaction-fields').disabled,false);
+ assert.equal(h.element('edit-open').disabled,false);
+ h.context.meId='bob';h.run('fillInspector(current)');
+ assert.equal(h.element('edit-interaction-fields').disabled,true);
+ assert.equal(h.element('edit-open').disabled,true);
+});
 
 test('interactive controls send explicit state and button versions without client positions',async()=>{
  const h=rendererHarness(),sent=[];
- h.context.request=async(path,method,body)=>{sent.push(JSON.parse(JSON.stringify(body)));return {object:{id:body.id,state:body.state??'open',version:body.expectedVersion+1}};};
+ h.context.request=async(path,method,body)=>{sent.push(JSON.parse(JSON.stringify(body)));return body.type==='use'?{object:{id:'door-1',type:'door',state:'open',version:5},button:{id:'button-1',type:'button',targetId:'door-1',version:4}}:{object:{id:body.id,type:'door',state:body.state??'open',version:body.expectedVersion+1}};};
  h.context.poll=async()=>{};h.context.feedback=()=>{};h.context.editing=false;
  h.context.inspectorBase={id:'door-1',type:'door',version:4};
  h.context.worldState={objects:[{id:'button-1',type:'button',version:3,targetId:'door-1'},{id:'door-1',type:'door',version:4}]};
@@ -212,14 +230,28 @@ test('interactive controls send explicit state and button versions without clien
  assert.equal(sent.length,2);
  assert.equal(JSON.stringify(sent[0]),JSON.stringify({type:'set_state',id:'door-1',state:'open',expectedVersion:4}));
  assert.equal(JSON.stringify(sent[1]),JSON.stringify({type:'use',id:'button-1',expectedVersion:3,expectedTargetVersion:4}));
+ assert.equal(h.context.objectData.get('door-1').version,5);
+ assert.equal(h.context.objectData.get('button-1').type,'button');assert.equal(h.context.objectData.get('button-1').version,4);
  assert.ok(sent.every(command=>!Object.hasOwn(command,'position')));
+});
+ 
+test('interactive action does not retry when the response outcome is unknown',async()=>{
+ const h=rendererHarness(),sent=[],messages=[];
+ const door={id:'door-1',type:'door',version:0};
+ h.context.settingsGeneration=0;h.context.editing=false;h.context.inspectorBase=door;h.context.objectData=new Map([[door.id,door]]);
+ h.context.command=async body=>{sent.push(JSON.parse(JSON.stringify(body)));throw new Error('Connection timed out');};
+ h.context.feedback=message=>messages.push(message);h.context.fillInspector=()=>{};
+ h.context.object=door;h.context.body={type:'set_state',id:door.id,state:'open',expectedVersion:0};
+ h.load('async function applyInteractiveAction(object, body)',"$('edit-open').addEventListener");
+ await h.run('applyInteractiveAction(object, body)');
+ assert.equal(sent.length,1);assert.match(messages[0],/Refresh world state before retrying/);
 });
 
 test('inspector submits access and button links with exact current values',async()=>{
- async function submit(baseline,changes){
+ async function submit(baseline,changes,role='admin'){
   const h=rendererHarness(),sent=[];
   h.context.selectedId=baseline.id;h.context.inspectorBase=structuredClone(baseline);h.context.objectData=new Map([[baseline.id,structuredClone(baseline)]]);
-  h.context.role='admin';h.context.meId='alice';h.context.editing=false;h.context.settingsGeneration=0;h.context.inspectorDirty=false;
+  h.context.role=role;h.context.meId='alice';h.context.editing=false;h.context.settingsGeneration=0;h.context.inspectorDirty=false;
   h.context.command=async body=>{sent.push(JSON.parse(JSON.stringify(body)));return {object:{...baseline,...changes,version:baseline.version+1}};};
   h.context.clearMovePreview=()=>{};h.context.fillInspector=()=>{};h.context.feedback=()=>{};h.context.request=async()=>({error:'unexpected'});
   for(const field of ['position','size'])for(const axis of ['x','y','z'])h.element('edit-'+field+'-'+axis).value=String(baseline[field][axis]);
@@ -241,4 +273,6 @@ test('inspector submits access and button links with exact current values',async
  assert.ok(link,'button link changes must produce a server command');
  assert.equal(link.targetId,'door-1');assert.equal(link.targetState,'closed');
  assert.deepEqual(link.expected,{targetId:null,targetState:'open'});
+ const viewerPolicy=await submit(door,{usePolicy:'all_players'},'viewer');
+ assert.deepEqual(viewerPolicy.expected,{usePolicy:'owner_admin'});
 });
