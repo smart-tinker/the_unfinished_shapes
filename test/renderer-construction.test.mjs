@@ -394,7 +394,7 @@ test('a poll begun before unknown Apply reconciliation cannot release the connec
  assert.equal(h.context.worldLightingPreview.attempted,true);
  resolveOldPoll({revision:5,lighting:{version:1,ambientIntensity:2.6,sunIntensity:3.1},objects:[],players:[]});
  await oldPoll;
- assert.equal(h.context.worldLightingPreview.attempted,true,'an older read cannot clear the unresolved Apply');
+ assert.ok(h.context.worldLightingPreview?.attempted,'an older read cannot clear the unresolved Apply');
  h.context.request=async()=>({revision:6,lighting:{version:2,ambientIntensity:1,sunIntensity:2},objects:[],players:[]});
  await h.run('poll()');
  assert.equal(h.context.worldLightingPreview,null,'a poll begun after reconciliation is required to release the lock');
