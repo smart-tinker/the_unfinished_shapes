@@ -171,8 +171,9 @@ await withSmokeCleanup(async () => {
   alice.graphics.phase('manual shared construction');
   await alice.page.locator('#build-x').fill('16');
   await alice.page.locator('#build-z').fill('0');
-  await alice.page.locator('#build-form button').click();
-  await alice.page.waitForFunction(() => document.querySelector('#world-message').textContent.includes('placed'));
+  await alice.page.locator('#build-preview').click();
+  await alice.page.locator('#build-apply').click();
+  await alice.page.waitForFunction(() => document.querySelector('#world-message').textContent.includes('Shape added to the shared world.'));
   const builtState = await state(), built = builtState.objects[0];
   assert.equal(built.ownerId, 'alice');
   assert.deepEqual(built.position, { x: 16, y: 1, z: 0 });
