@@ -83,17 +83,18 @@ async function focus(client) {
   await client.page.waitForFunction(() => document.hasFocus() && !document.querySelector('#settings').open);
 }
 async function select(client, object) { await selectObject(client.page, object); }
-async function groundPoint(page, position) {
+async function projectPoint(page, position) {
   return page.evaluate(async value => {
     const THREE = await import('three');
     const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, .1, 220);
     camera.position.set(33, 28, 38); camera.lookAt(0, 0, 0); camera.updateMatrixWorld();
-    const p = new THREE.Vector3(value.x, 0, value.z).project(camera);
+    const p = new THREE.Vector3(value.x, value.y, value.z).project(camera);
     return { x: (p.x + 1) * innerWidth / 2, y: (1 - p.y) * innerHeight / 2 };
   }, position);
 }
+async function groundPoint(page, position) { return projectPoint(page, { ...position, y: 0 }); }
 async function dragObjectTo(page, object, destination) {
-  const start = await groundPoint(page, object.position), end = await groundPoint(page, destination);
+  const start = await projectPoint(page, object.position), end = await groundPoint(page, destination);
   await page.mouse.move(start.x, start.y); await page.mouse.down();
   for (let i = 1; i <= 100; i++) await page.mouse.move(start.x + (end.x - start.x) * i / 100, start.y + (end.y - start.y) * i / 100);
   await page.mouse.up();
