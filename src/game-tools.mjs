@@ -8,6 +8,7 @@ const record = value => value && typeof value === 'object' && !Array.isArray(val
 const exactKeys = (value, keys) => record(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value);
 const validLandmarkLabel = (value,max,multiline=false) => typeof value==='string'&&value.trim().length>0&&[...value].length<=max&&!/[\u0000-\u0008\u000b-\u001f\u007f]/.test(value)&&(multiline||!/[\r\n]/.test(value));
+const inRange=(value,min,max)=>typeof value==='number'&&Number.isFinite(value)&&value>=min&&value<=max;
 function vector(value, limit, minimum = -limit) {
   if (!exactKeys(value, ['x','y','z']) || !['x','y','z'].every(key => Number.isFinite(value[key]) && value[key] >= minimum && value[key] <= limit)) throw new Error('Scene context contains an invalid vector.');
   return { x:value.x, y:value.y, z:value.z };
@@ -47,6 +48,8 @@ function inCameraView(object, camera) {
 
 export function captureSceneSnapshot(state, view, worldConnectionId) {
   if(!record(state)||!Number.isSafeInteger(state.revision)||state.revision<0||!Array.isArray(state.objects)||state.objects.length>5000||!Array.isArray(state.players)||state.players.length>1000)throw new Error('World state is invalid.');
+  const lighting=Object.hasOwn(state,'lighting')?state.lighting:{version:0,ambientIntensity:2.6,sunIntensity:3.1};
+  if(!exactKeys(lighting,['version','ambientIntensity','sunIntensity'])||!Number.isSafeInteger(lighting.version)||lighting.version<0||!inRange(lighting.ambientIntensity,0,4)||!inRange(lighting.sunIntensity,0,5))throw new Error('World state contains invalid lighting.');
   if(!/^[a-zA-Z0-9_-]{1,128}$/.test(String(worldConnectionId||'')))throw new Error('World connection is invalid.');
   if(!exactKeys(view,['revision','selectedIds','camera'])||!Number.isSafeInteger(view.revision)||view.revision!==state.revision||
       !Array.isArray(view.selectedIds)||view.selectedIds.length>32||!view.selectedIds.every(validId)||new Set(view.selectedIds).size!==view.selectedIds.length)throw new Error('Scene revision or selected IDs are invalid; refresh the world before sending.');
@@ -57,12 +60,13 @@ export function captureSceneSnapshot(state, view, worldConnectionId) {
         typeof object.blocksMovement!=='boolean'||typeof object.supportsPlayer!=='boolean')throw new Error('World state contains an invalid object.');
     objectIds.add(object.id);
     if((object.type==='sign'&&!validLandmarkLabel(object.text,240,true))||(object.type==='beacon'&&!validLandmarkLabel(object.name,48)))throw new Error('World state contains an invalid landmark label.');
-    const oriented=SHAPE_TYPES.includes(object.type),doorOrGate=['door','gate'].includes(object.type),interactive=doorOrGate||object.type==='button';
+    const oriented=SHAPE_TYPES.includes(object.type),doorOrGate=['door','gate'].includes(object.type),lamp=object.type==='lamp',interactive=doorOrGate||object.type==='button'||lamp;
     if(oriented&&!SHAPE_DIRECTIONS.includes(object.direction))throw new Error('World state contains an invalid shape direction.');
     if(interactive&&(!Number.isSafeInteger(object.version)||object.version<0||!['owner_admin','all_players'].includes(object.usePolicy)))throw new Error('World state contains an invalid interactive object version or access policy.');
+     if(lamp&&(typeof object.on!=='boolean'||!inRange(object.intensity,.25,4)||!inRange(object.range,2,16)||object.blocksMovement||object.supportsPlayer))throw new Error('World state contains invalid lamp lighting or physics.');
     if(doorOrGate&&!['open','closed'].includes(object.state))throw new Error('World state contains an invalid door or gate state.');
     if(object.type==='button'&&((object.targetId!==null&&(typeof object.targetId!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(object.targetId)))||!['open','closed'].includes(object.targetState)))throw new Error('World state contains an invalid button target or state.');
-    return {id:object.id,type:object.type,ownerId:object.ownerId,color:object.color,position:vector(object.position,1000),size:vector(object.size,50,0.25),blocksMovement:object.blocksMovement,supportsPlayer:object.supportsPlayer,...(oriented?{direction:object.direction}:{}),...(doorOrGate?{state:object.state}:{}),...(interactive?{usePolicy:object.usePolicy,version:object.version}:{}),...(object.type==='button'?{targetId:object.targetId,targetState:object.targetState}:{}),...(object.type==='sign'?{text:object.text}:{}),...(object.type==='beacon'?{name:object.name}:{})};
+    return {id:object.id,type:object.type,ownerId:object.ownerId,color:object.color,position:vector(object.position,1000),size:vector(object.size,50,0.25),blocksMovement:object.blocksMovement,supportsPlayer:object.supportsPlayer,...(oriented?{direction:object.direction}:{}),...(doorOrGate?{state:object.state}:{}),...(lamp?{on:object.on,intensity:object.intensity,range:object.range}:{}),...(interactive?{usePolicy:object.usePolicy,version:object.version}:{}),...(object.type==='button'?{targetId:object.targetId,targetState:object.targetState}:{}),...(object.type==='sign'?{text:object.text}:{}),...(object.type==='beacon'?{name:object.name}:{})};
   });
   const selectedSet=new Set(view.selectedIds);
   if(view.selectedIds.some(id=>!objectIds.has(id)))throw new Error('A selected object no longer exists; refresh the world before sending.');
@@ -81,12 +85,12 @@ export function captureSceneSnapshot(state, view, worldConnectionId) {
   });
   const selfIndex=players.findIndex(player=>player.isSelf);
   if(selfIndex>0)players.unshift(players.splice(selfIndex,1)[0]);
-  return {worldConnectionId,revision:state.revision,selectedIds:[...view.selectedIds],camera,objects:included,totalObjectCount:objects.length,
+  return {worldConnectionId,revision:state.revision,lighting:{...lighting},selectedIds:[...view.selectedIds],camera,objects:included,totalObjectCount:objects.length,
     includedObjectCount:included.length,objectsTruncated:candidates.length>MAX_SCENE_OBJECTS,players:players.slice(0,MAX_SCENE_PLAYERS),
     totalPlayerCount:players.length,includedPlayerCount:Math.min(players.length,MAX_SCENE_PLAYERS),playersTruncated:players.length>MAX_SCENE_PLAYERS};
 }
 
-const BUILD_TYPES = ['block','bridge','port','sign','beacon','door','gate','button',...SHAPE_TYPES];
+const BUILD_TYPES = ['block','bridge','port','sign','beacon','door','gate','button','lamp',...SHAPE_TYPES];
 function buildDesign(value) {
   if (!record(value)) throw new Error('Invalid object design.');
   const directional = SHAPE_TYPES.includes(value.objectType), labelField=value.objectType==='sign'?'text':value.objectType==='beacon'?'name':null;
@@ -140,6 +144,7 @@ export async function executeGameTool(event,{url,token,connectionId}) {
   if(!['world_state','world_command'].includes(event.name))return toolResult(false,{error:'Unknown game tool'});
   const isRead=event.name==='world_state';
   const command=event.arguments?.command;
+  if(!isRead&&command?.type==='set_lighting')return toolResult(false,{error:'World lighting changes must use the in-game local preview and explicit Apply.'});
   if(!isRead&&['build','build_group'].includes(command?.type))return toolResult(false,{error:'Agent construction must use world_preview, wait for the player to approve it, then call world_apply.'});
   // Flat tool schemas cannot express conditional requirements; never drop edit guards.
   if(!isRead&&command?.type==='update'&&(!command.expected||typeof command.expected!=='object'||Array.isArray(command.expected)||!Object.keys(command.expected).length))return toolResult(false,{error:'Update requires expected original values from world_state for the edited fields. Refresh before editing.'});

@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { movePlayer, playerOccupiesObject, SHAPE_TYPES, SHAPE_DIRECTIONS, SHAPE_DEFAULT_SIZES, shapeDimensionsValid } from './movement.mjs';
 
-export const mechanics = ['block', 'bridge', 'port', 'sign', 'beacon', 'door', 'gate', 'button', ...SHAPE_TYPES];
-const physicsDefaults = Object.fromEntries(mechanics.map(type => [type, { blocksMovement: !['sign','beacon','button'].includes(type), supportsPlayer: !['sign','beacon','button','door','gate'].includes(type) }]));
+export const mechanics = ['block', 'bridge', 'port', 'sign', 'beacon', 'door', 'gate', 'button', 'lamp', ...SHAPE_TYPES];
+const physicsDefaults = Object.fromEntries(mechanics.map(type => [type, { blocksMovement: !['sign','beacon','button','lamp'].includes(type), supportsPlayer: !['sign','beacon','button','door','gate','lamp'].includes(type) }]));
 const usePolicies = ['owner_admin','all_players'];
 function canUse(actor, object) { return actor.role === 'admin' || object.ownerId === actor.id || object.usePolicy === 'all_players'; }
 function requireUseRange(state, actor, object) {
@@ -24,13 +24,21 @@ export function vector(value, size = false) {
   return { x:value.x, y:value.y, z:value.z };
 }
 function exactKeys(value, keys) { return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key)); }
-export function emptyWorld() { return { version: 1, revision: 0, objects: [], players: [] }; }
+const defaultLighting = () => ({version:0,ambientIntensity:2.6,sunIntensity:3.1});
+const inRange = (value,min,max) => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
+function validateLighting(value) {
+  if (!exactKeys(value,['version','ambientIntensity','sunIntensity']) || !Number.isSafeInteger(value.version) || value.version < 0 ||
+      !inRange(value.ambientIntensity,0,4) || !inRange(value.sunIntensity,0,5)) fail('invalid_state','Invalid saved world lighting.',500);
+}
+export function emptyWorld() { return { version: 1, revision: 0, lighting:defaultLighting(), objects: [], players: [] }; }
 function validLandmarkLabel(value, max, multiline = false) {
   return typeof value === 'string' && value.trim().length > 0 && [...value].length <= max && !/[\u0000-\u0008\u000b-\u001f\u007f]/.test(value) && (multiline || !/[\r\n]/.test(value));
 }
 export function validateWorld(state) {
   if (!state || state.version !== 1 || !Number.isSafeInteger(state.revision) || state.revision < 0 || !Array.isArray(state.objects) || state.objects.length > 5000 || !Array.isArray(state.players) || state.players.length > 1000) fail('invalid_state', 'Invalid saved world. Refusing to overwrite it.', 500);
   state = structuredClone(state);
+  if (!Object.hasOwn(state,'lighting')) state.lighting = defaultLighting();
+  else validateLighting(state.lighting);
   const ids = new Set();
   for (const o of state.objects) {
     if (!o || typeof o.id !== 'string' || ids.has(o.id) || !mechanics.includes(o.type) || typeof o.ownerId !== 'string' || !/^#[a-f0-9]{6}$/i.test(o.color)) fail('invalid_state', 'Invalid saved object.', 500);
@@ -44,6 +52,18 @@ export function validateWorld(state) {
       if (!Number.isSafeInteger(o.version) || o.version < 0) fail('invalid_state','Invalid saved object version.',500);
       if (!Object.hasOwn(o,'usePolicy')) o.usePolicy = 'owner_admin';
       if (!['owner_admin','all_players'].includes(o.usePolicy)) fail('invalid_state','Invalid saved use policy.',500);
+    }
+    if (o.type === 'lamp') {
+      if (!Object.hasOwn(o,'on')) o.on = true;
+      if (typeof o.on !== 'boolean') fail('invalid_state','Invalid saved lamp state.',500);
+      if (!Object.hasOwn(o,'intensity')) o.intensity = 2;
+      if (!inRange(o.intensity,.25,4)) fail('invalid_state','Invalid saved lamp intensity.',500);
+      if (!Object.hasOwn(o,'range')) o.range = 8;
+      if (!inRange(o.range,2,16)) fail('invalid_state','Invalid saved lamp range.',500);
+      if (!Object.hasOwn(o,'version')) o.version = 0;
+      if (!Number.isSafeInteger(o.version) || o.version < 0) fail('invalid_state','Invalid saved lamp version.',500);
+      if (!Object.hasOwn(o,'usePolicy')) o.usePolicy = 'owner_admin';
+      if (!usePolicies.includes(o.usePolicy)) fail('invalid_state','Invalid saved lamp access policy.',500);
     }
     if (o.type === 'button') {
       if (!Object.hasOwn(o,'targetId')) o.targetId = null;
@@ -61,6 +81,7 @@ export function validateWorld(state) {
     }
     if ((o.type === 'door' || o.type === 'gate') && (o.blocksMovement !== (o.state === 'closed') || o.supportsPlayer)) fail('invalid_state','Door collision must match its saved state.',500);
     if (o.type === 'button' && (o.blocksMovement || o.supportsPlayer)) fail('invalid_state','Buttons cannot block or support player movement.',500);
+    if (o.type === 'lamp' && (o.blocksMovement || o.supportsPlayer)) fail('invalid_state','Lamps cannot block or support player movement.',500);
   }
   const players = new Set();
   for (const p of state.players) {
@@ -75,16 +96,18 @@ function buildObject(actor, command, defaultsAllowed = true) {
   if (!mechanics.includes(command.objectType)) fail('new_mechanic_required','This mechanic is not implemented. Develop it in the repository and pass CI before deployment.',409);
   const directional = SHAPE_TYPES.includes(command.objectType);
   if (directional ? !SHAPE_DIRECTIONS.includes(command.direction) : Object.hasOwn(command,'direction')) fail('invalid_direction','Stairs and ramps need one cardinal uphill direction.');
-  const defaults = {block:{x:2,y:2,z:2},bridge:{x:10,y:1,z:3},port:{x:12,y:1,z:8},sign:{x:3,y:2,z:.5},beacon:{x:1,y:4,z:1},...SHAPE_DEFAULT_SIZES};
+  const defaults = {block:{x:2,y:2,z:2},bridge:{x:10,y:1,z:3},port:{x:12,y:1,z:8},sign:{x:3,y:2,z:.5},beacon:{x:1,y:4,z:1},lamp:{x:.5,y:2,z:.5},...SHAPE_DEFAULT_SIZES};
   const position = vector(command.position), size = vector(defaultsAllowed ? command.size ?? defaults[command.objectType] : command.size, true);
   if (directional && !shapeDimensionsValid(command.objectType,command.direction,size)) fail('invalid_shape_dimensions','Stairs need at least 0.5 units of run with rises no higher than 0.5; ramps are limited to 45 degrees.');
   const color = defaultsAllowed ? command.color ?? '#c8a570' : command.color;
   if (typeof color !== 'string' || !/^#[a-f0-9]{6}$/i.test(color)) fail('invalid_color','Use a hex color such as #c8a570.');
   const label = command.objectType === 'sign' ? {text:command.text} : command.objectType === 'beacon' ? {name:command.name} : {};
   if ((command.objectType === 'sign' && !validLandmarkLabel(label.text,240,true)) || (command.objectType === 'beacon' && !validLandmarkLabel(label.name,48))) fail('invalid_landmark_label','Sign text must be 1–240 characters; beacon names must be 1–48 single-line characters.');
-  return {id:randomUUID(),type:command.objectType,...(directional?{direction:command.direction}:{}),position,size,color,...label,ownerId:actor.id,...physicsDefaults[command.objectType],
+  const object={id:randomUUID(),type:command.objectType,...(directional?{direction:command.direction}:{}),position,size,color,...label,ownerId:actor.id,...physicsDefaults[command.objectType],
     ...(['door','gate'].includes(command.objectType)?{state:'closed',usePolicy:'owner_admin',version:0}:{}),
     ...(command.objectType==='button'?{targetId:null,targetState:'open',usePolicy:'owner_admin',version:0}:{})};
+  if(command.objectType==='lamp')Object.assign(object,{on:true,intensity:2,range:8,usePolicy:'owner_admin',version:0});
+  return object;
 }
 export function applyCommand(state, actor, command, deltaSeconds = 0.25, context = {}) {
   if (!command || typeof command !== 'object' || Array.isArray(command)) fail('invalid_command','Command must be an object.');
@@ -145,14 +168,14 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25, context
     case 'update': {
       const object = next.objects.find(o => o.id === command.id);
       if (!object) fail('not_found','Object not found.',404);
-      const interactive = ['door','gate','button'].includes(object.type), button = object.type === 'button';
-      const editable = ['position','size','color',...(interactive?[]:['blocksMovement','supportsPlayer']),...(object.type==='sign'?['text']:[]),...(object.type==='beacon'?['name']:[]),...(interactive?['usePolicy']:[]),...(button?['targetId','targetState']:[])];
-      const configFields = ['usePolicy',...(button?['targetId','targetState']:[])];
+      const lamp=object.type==='lamp',button=object.type==='button',interactive=['door','gate','button','lamp'].includes(object.type);
+      const editable = ['position','size','color',...(interactive?[]:['blocksMovement','supportsPlayer']),...(object.type==='sign'?['text']:[]),...(object.type==='beacon'?['name']:[]),...(interactive?['usePolicy']:[]),...(lamp?['intensity','range']:[]),...(button?['targetId','targetState']:[])];
+      const configFields = ['usePolicy',...(lamp?['intensity','range']:[]),...(button?['targetId','targetState']:[])];
       const updateFields = Object.keys(command).filter(key => !['type','id','expected'].includes(key));
       const ownerConfigOnly = interactive && object.ownerId === actor.id && updateFields.length > 0 && updateFields.every(key => configFields.includes(key));
       if (actor.role !== 'admin' && !(object.ownerId === actor.id && (actor.role === 'builder' || ownerConfigOnly))) fail('forbidden','Only the owner or an admin may edit this object.',403);
       if (Object.keys(command).some(key => !['type','id','expected',...editable].includes(key)) || !editable.some(key => Object.hasOwn(command,key))) fail('invalid_command','Update requires editable object fields; identity, state and interactive physics cannot be changed.');
-      if ([...configFields,'text','name'].some(key => Object.hasOwn(command,key)) && !Object.hasOwn(command,'expected')) fail('invalid_command','Changing access, button links or landmark labels requires current values in expected.');
+      if ([...configFields,'text','name',...(lamp?['color']:[])].some(key => Object.hasOwn(command,key)) && !Object.hasOwn(command,'expected')) fail('invalid_command','Changing access, button links or landmark labels requires current values in expected.');
       if (Object.hasOwn(command,'expected')) {
         const expected = command.expected;
         const changed = editable.filter(key => Object.hasOwn(command,key));
@@ -171,6 +194,12 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25, context
           } else if (key === 'usePolicy') {
             if (!usePolicies.includes(expected[key])) fail('invalid_command','Expected access policy is invalid.');
             matches = expected[key] === object[key];
+          } else if (key === 'intensity') {
+            if (!inRange(expected[key],.25,4)) fail('invalid_command','Expected lamp intensity must be 0.25–4.');
+            matches = expected[key] === object[key];
+          } else if (key === 'range') {
+            if (!inRange(expected[key],2,16)) fail('invalid_command','Expected lamp range must be 2–16.'); 
+            matches = expected[key] === object[key];
           } else if (key === 'targetId') {
             if (expected[key] !== null && (typeof expected[key] !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(expected[key]))) fail('invalid_command','Expected button target is invalid.');
             matches = expected[key] === object[key];
@@ -185,12 +214,14 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25, context
         }
       }
       if (Object.hasOwn(command,'usePolicy') && !usePolicies.includes(command.usePolicy)) fail('invalid_command','Access policy must be owner_admin or all_players.');
+      if (Object.hasOwn(command,'intensity') && !inRange(command.intensity,.25,4)) fail('invalid_lamp','Lamp intensity must be 0.25–4.');
+      if (Object.hasOwn(command,'range') && !inRange(command.range,2,16)) fail('invalid_lamp','Lamp range must be 2–16.');
       if (Object.hasOwn(command,'targetId') && command.targetId !== null) {
         if (typeof command.targetId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(command.targetId)) fail('invalid_target','Button target ID is invalid.');
         if (!next.objects.some(item => item.id === command.targetId && ['door','gate'].includes(item.type))) fail('invalid_target','A button must link to an existing door or gate.',409);
       }
       if (Object.hasOwn(command,'targetState') && !['open','closed'].includes(command.targetState)) fail('invalid_command','Button target state must be open or closed.');
-      const before = interactive ? {position:{...object.position},size:{...object.size},usePolicy:object.usePolicy,targetId:object.targetId,targetState:object.targetState} : null;
+      const before = interactive ? {position:{...object.position},size:{...object.size},color:object.color,usePolicy:object.usePolicy,intensity:object.intensity,range:object.range,targetId:object.targetId,targetState:object.targetState} : null;
       if (Object.hasOwn(command,'position')) object.position = vector(command.position);
       if (Object.hasOwn(command,'size')) {
         const size = vector(command.size,true);
@@ -211,28 +242,42 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25, context
         if (!editable.includes(key) || !validLandmarkLabel(command[key],key==='text'?240:48,key==='text')) fail('invalid_landmark_label','Landmark text or name is invalid.');
         object[key] = command[key];
       }
-      for (const key of ['usePolicy','targetId','targetState']) if (Object.hasOwn(command,key)) object[key] = command[key];
-      if (interactive && (['position','size','usePolicy'].some(key => Object.hasOwn(command,key) && JSON.stringify(object[key]) !== JSON.stringify(before[key])) ||
-          (button && ['targetId','targetState'].some(key => Object.hasOwn(command,key) && object[key] !== before[key])))) {
+      for (const key of ['usePolicy','targetId','targetState','intensity','range']) if (Object.hasOwn(command,key)) object[key] = command[key];
+      const versionedFields=lamp?['position','size','color','usePolicy','intensity','range']:['position','size','usePolicy',...(button?['targetId','targetState']:[])];
+      if (interactive && versionedFields.some(key => Object.hasOwn(command,key) && JSON.stringify(object[key]) !== JSON.stringify(before[key]))) {
         if (object.version >= Number.MAX_SAFE_INTEGER) fail('revision_exhausted','Object version limit reached.',409);
         object.version++;
       }
       result = {object}; break;
     }
+    case 'set_lighting': {
+      if (!exactKeys(command,['type','ambientIntensity','sunIntensity','expectedVersion']) || !Number.isSafeInteger(command.expectedVersion) || command.expectedVersion < 0 ||
+          !inRange(command.ambientIntensity,0,4) || !inRange(command.sunIntensity,0,5)) fail('invalid_command','set_lighting requires ambient intensity 0–4, sun intensity 0–5 and current version.');
+      if (actor.role !== 'admin') fail('forbidden','Only an admin may change shared world lighting.',403);
+      if (command.expectedVersion !== next.lighting.version) fail('conflict','World lighting changed since it was read. Refresh before applying.',409);
+      if (next.lighting.version >= Number.MAX_SAFE_INTEGER && (command.ambientIntensity !== next.lighting.ambientIntensity || command.sunIntensity !== next.lighting.sunIntensity)) fail('revision_exhausted','World lighting version limit reached.',409);
+      if (command.ambientIntensity === next.lighting.ambientIntensity && command.sunIntensity === next.lighting.sunIntensity) changed = false;
+      else next.lighting={version:next.lighting.version+1,ambientIntensity:command.ambientIntensity,sunIntensity:command.sunIntensity};
+      result={lighting:next.lighting};break;
+    }
     case 'set_state': {
-      if (!exactKeys(command,['type','id','state','expectedVersion']) || typeof command.id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(command.id) || !['open','closed'].includes(command.state) || !Number.isSafeInteger(command.expectedVersion) || command.expectedVersion < 0) fail('invalid_command','set_state requires an object ID, open/closed state and current object version.');
-      const object = next.objects.find(o => o.id === command.id);
-      if (!object || !['door','gate'].includes(object.type)) fail('not_found','Door or gate not found.',404);
-      if (!canUse(actor,object)) fail('forbidden','You do not have permission to use this door or gate.',403);
+      const idValid=typeof command.id==='string'&&/^[a-zA-Z0-9_-]{1,128}$/.test(command.id);
+      if (!exactKeys(command,['type','id','state','expectedVersion']) || !idValid || !['open','closed','on','off'].includes(command.state) || !Number.isSafeInteger(command.expectedVersion) || command.expectedVersion < 0) fail('invalid_command','set_state requires an object ID, explicit state and current object version.');
+      const object=next.objects.find(o=>o.id===command.id);
+      if(!object||!['door','gate','lamp'].includes(object.type))fail('not_found','Interactive object not found.',404);
+      if(!canUse(actor,object))fail('forbidden','You do not have permission to use this object.',403);
       requireUseRange(next,actor,object);
-      if (command.expectedVersion > object.version || (object.state !== command.state && command.expectedVersion !== object.version)) fail('conflict','The door or gate changed since it was read. Refresh before using it.',409);
-      if (object.state === command.state) changed = false;
-      else {
-        if (command.state === 'closed' && passageOccupied(next,object,context)) fail('occupied','Cannot close a door or gate while a player occupies its passage.',409);
-        if (object.version >= Number.MAX_SAFE_INTEGER) fail('revision_exhausted','Object version limit reached.',409);
-        object.state = command.state; object.version++; object.blocksMovement = command.state === 'closed';
+      const lamp=object.type==='lamp',desired=lamp?command.state==='on':command.state==='open',current=lamp?object.on:object.state==='open';
+      if((lamp&&!['on','off'].includes(command.state))||(!lamp&&!['open','closed'].includes(command.state)))fail('invalid_command','State does not match this object type.');
+      if(lamp?command.expectedVersion!==object.version:(command.expectedVersion>object.version||(current!==desired&&command.expectedVersion!==object.version)))fail('conflict','The object changed since it was read. Refresh before using it.',409);
+      if(current===desired)changed=false;
+      else{
+        if(!lamp&&!desired&&passageOccupied(next,object,context))fail('occupied','Cannot close a door or gate while a player occupies its passage.',409);
+        if(object.version>=Number.MAX_SAFE_INTEGER)fail('revision_exhausted','Object version limit reached.',409);
+        if(lamp)object.on=desired;else{object.state=command.state;object.blocksMovement=command.state==='closed';}
+        object.version++;
       }
-      result = {object}; break;
+      result={object};break;
     }
     case 'use': {
       if (!exactKeys(command,['type','id','expectedVersion','expectedTargetVersion']) || typeof command.id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(command.id) ||
@@ -261,7 +306,7 @@ export function applyCommand(state, actor, command, deltaSeconds = 0.25, context
       if (actor.role !== 'admin' && (actor.role !== 'builder' || next.objects[index].ownerId !== actor.id)) fail('forbidden','Only the owner or an admin may remove this object.',403);
       next.objects.splice(index,1); break;
     }
-    default: fail('invalid_command','Supported commands: move, move_group, build, build_group, update, set_state, use, remove.');
+    default: fail('invalid_command','Supported commands: move, move_group, build, build_group, update, set_lighting, set_state, use, remove.');
   }
   if (!changed) return {state:next,result:{revision:state.revision,...result}};
   if (state.revision >= Number.MAX_SAFE_INTEGER) fail('revision_exhausted','World revision limit reached.',409);
