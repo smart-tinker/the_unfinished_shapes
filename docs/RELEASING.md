@@ -24,8 +24,8 @@ A release may be both a draft and a pre-release while it is being prepared. Do n
 
 ## Current RC workflow
 
-1. Merge issue-scoped PRs sequentially to the matching `release/<tag>` branch. Require the normal PR validation and security checks. Details of the PR and release runner layout are in [CI acceptance](CI.md).
-2. Review the version, release notes, known limitations and candidate branch. Create the matching immutable tag at the exact accepted commit.
+1. Merge issue-scoped PRs sequentially to the current release line (for example, `release/0.1.0-rc11`). Require the normal PR validation and security checks. Details of the PR and release runner layout are in [CI acceptance](CI.md).
+2. Choose the next RC version and, from the accepted commit on that release line, create the matching candidate branch and immutable tag. For package version `0.1.0-rc.12`, current tooling expects branch `release/0.1.0-rc12` and tag `v0.1.0-rc12`. The branch and tag must resolve to the same accepted commit.
 3. Manually dispatch [Stage release candidate](../.github/workflows/stage-release.yml) from that release branch. Preflight requires a public repository, the matching branch, tag and source SHA, and no existing release for the tag. An uncertain GitHub lookup or permission error is a failure; do not retry through a different route.
 4. After preflight and fast checks, staging creates a new empty draft. Linux x64, Windows x64 and macOS arm64 each build their final package once, test the final extracted package, and upload those same bytes with a manifest. Windows also tests the exact Setup installer. A separate Linux CPU job runs the real-model acceptance scenario. The complete staging run must succeed.
 5. Review the successful run and each platform result. Perform any required interactive desktop or hardware acceptance against the exact staged files; CI does not prove those results. Record the source/tag SHA, run and attempt, package names and SHA-256 hashes, environment, and PASS/FAIL/UNRUN/BLOCKED for each gate.
