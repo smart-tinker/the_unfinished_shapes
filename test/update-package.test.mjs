@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { verifyReleaseAttestation } from '../src/update-package.mjs';
+import { downloadVerifiedAsset, verifyReleaseAttestation } from '../src/update-package.mjs';
 
 const tag = 'v0.1.0-rc11';
 const asset = {
@@ -115,4 +115,88 @@ test('does not accept malformed provenance or a failed cryptographic verifier', 
     verifyReleaseAttestation({ bundle: malformed, asset, tag }, async () => ({})),
     /attestation|payload|provenance/i,
   );
+});
+
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+test('downloads only the exact official asset and requires its matching signed attestation', async () => {
+  const bytes = Buffer.from('verified update package');
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  const downloadAsset = { ...asset, size: bytes.length, digest: 'sha256:' + digest };
+  const signed = statement();
+  signed.subject[0].digest.sha256 = digest;
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'tus-update-download-'));
+  const calls = [];
+  try {
+    const result = await downloadVerifiedAsset({
+      asset: downloadAsset, tag, directory: dir,
+      fetcher: async (url, options) => {
+        calls.push({ url, options });
+        if (url.startsWith('https://github.com/')) {
+          return new Response(null, { status: 302, headers: {
+            location: 'https://release-assets.githubusercontent.com/package?signature=temporary',
+          } });
+        }
+        if (url.startsWith('https://release-assets.githubusercontent.com/')) {
+          return new Response(bytes, { status: 200, headers: { 'content-length': String(bytes.length) } });
+        }
+        if (url.startsWith('https://api.github.com/')) {
+          return new Response(JSON.stringify({ attestations: [{ bundle: bundle(signed) }] }), { status: 200 });
+        }
+        throw new Error('Unexpected destination');
+      },
+      verifySignature: async () => ({}),
+    });
+
+    assert.equal(await readFile(result.filePath, 'utf8'), bytes.toString());
+    assert.equal(result.sha256, digest);
+    assert.equal(result.sourceSha, sourceSha);
+    assert.equal(calls.length, 3);
+    assert.ok(calls.every(call => call.options.redirect === 'manual' || call.url.startsWith('https://api.github.com/')));
+    assert.ok(calls.some(call => call.url.includes('/attestations/sha256:')));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('rejects an untrusted redirect and removes partial update files', async () => {
+  const bytes = Buffer.from('not trusted');
+  const downloadAsset = { ...asset, size: bytes.length };
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'tus-update-redirect-'));
+  try {
+    await assert.rejects(downloadVerifiedAsset({
+      asset: downloadAsset, tag, directory: dir,
+      fetcher: async () => new Response(null, { status: 302, headers: { location: 'https://attacker.example/file' } }),
+      verifySignature: async () => ({}),
+    }), /redirect|destination|GitHub/i);
+    assert.deepEqual(await readdir(dir), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a byte digest mismatch before asking GitHub for provenance', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'tus-update-digest-'));
+  let attestationRequested = false;
+  try {
+    await assert.rejects(downloadVerifiedAsset({
+      asset: { ...asset, size: 4 },
+      tag, directory: dir,
+      fetcher: async url => {
+        if (url.startsWith('https://api.github.com/')) {
+          attestationRequested = true;
+          return new Response(JSON.stringify({ attestations: [] }), { status: 200 });
+        }
+        return new Response(Buffer.from('evil'), { status: 200 });
+      },
+      verifySignature: async () => ({}),
+    }), /digest|integrity/i);
+    assert.equal(attestationRequested, false);
+    assert.deepEqual(await readdir(dir), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
