@@ -372,7 +372,7 @@ function updateBeaconLabels() {
 }
 function clearBuildPreview() {
   if (buildPreview?.mesh) { scene?.remove(buildPreview.mesh); disposeGroup(buildPreview.mesh); }
-  if(buildPreview?.lampId){previewLampLights.delete(buildPreview.lampId);updateWorldLighting(worldState);}
+  if(buildPreview?.lampId){previewLampLights.delete(buildPreview.lampId);updateWorldLighting();}
   buildPreview = null;
   $('build-preview-actions').hidden = true; $('build-preview-status').hidden = true;
   $('build-preview-status').textContent = ''; $('build-apply').disabled = false; $('build-cancel').disabled = false;
@@ -387,7 +387,7 @@ function clearAgentBuildPreview(message = 'Preview cleared. The shared world was
 function clearPreviewLampLights(ids=[]) {
   if(!ids.length)return;
   for(const id of ids)previewLampLights.delete(id);
-  updateWorldLighting(worldState);
+  updateWorldLighting();
 }
 function registerPreviewLampLight(id,object,mesh) {
   if(!mesh.userData.lampLight)return false;
@@ -420,7 +420,7 @@ function showAgentBuildPreview(value, threadId = settings.threadId) {
   const cancelButton=document.createElement('button');cancelButton.type='button';cancelButton.textContent='Cancel';
   card.append(status);card.append(applyButton);card.append(cancelButton);
   const preview={previewId:value.previewId,threadId,meshes,lampIds,card,status,applyButton,cancelButton,attempted:false};agentBuildPreview=preview;
-  updateWorldLighting(worldState);
+  updateWorldLighting();
   cancelButton.addEventListener('click',async()=>{
     if(agentBuildPreview!==preview||preview.attempted)return;
     cancelButton.disabled=true;applyButton.disabled=true;
@@ -475,7 +475,7 @@ function previewSelectedBuild() {
   scene.add(mesh);
   const lampId=object.type==='lamp'&&registerPreviewLampLight(object.id,object,mesh)?object.id:null;
   buildPreview = { command: design, mesh, lampId, attempted: false };
-  updateWorldLighting(worldState);
+  updateWorldLighting();
   $('build-preview-actions').hidden = false; $('build-preview-status').hidden = false;
   $('build-preview-status').textContent = 'Local preview only. Apply to add this shape to the shared world.';
   $('build-apply').disabled = false; feedback('Preview only — the shared world has not changed.');
