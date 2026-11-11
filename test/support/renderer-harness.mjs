@@ -23,7 +23,7 @@ export function rendererHarness() {
   const context = vm.createContext({ console, structuredClone, JSON, Number, Object, Map, String, Boolean, SHAPE_DEFAULT_SIZES,
     selectedId: null, selectedIds: new Set(), selectionBoxes: new Map(), MAX_GROUP_SELECTION: 32,
     boxSelectMode: false, boxCandidate: null, movePreview: null, dragCandidate: null,
-    worldLightingPreview: null, lampLights: new Map(), updateWorldLighting: () => {}, updateLightingControls: () => {},
+    worldLightingPreview: null, lampLights: new Map(), previewLampLights: new Map(), updateWorldLighting: () => {}, updateLightingControls: () => {},
     agentBuildPreview: null, clearAgentBuildPreview: () => {}, updateAgentBuildPreviewControls: () => {}, poll: async () => {},
     document: { createElement: () => element(`generated-${++sequence}`) }, $: element,
   });
