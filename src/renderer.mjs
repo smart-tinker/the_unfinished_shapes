@@ -1182,7 +1182,7 @@ $('updates-check').addEventListener('click', async () => {
   try {
     await saveUpdatePreference();
     checkedUpdate = await bridge.checkUpdates($('update-distribution').value);
-    if (checkedUpdate.status === 'available') updateStatus('Update ' + checkedUpdate.version + ' is available. Review and download it when ready.');
+    if (checkedUpdate.status === 'available') updateStatus((checkedUpdate.channel === 'prerelease' ? 'Prerelease · may be unstable: ' : 'Stable: ') + checkedUpdate.version + ' is available. Review and download it when ready.\n\nRelease notes:\n' + String(checkedUpdate.notes || 'No release notes were provided.').trim().slice(0, 1200));
     else if (checkedUpdate.status === 'current') updateStatus('No newer release is available on this channel.');
     else if (checkedUpdate.status === 'downgrade') updateStatus('This release is older than the installed version. It will not be downloaded or installed.');
     else if (checkedUpdate.status === 'unsupported') updateStatus('This release has no package for this device.');
