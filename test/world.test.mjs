@@ -457,6 +457,23 @@ test('lamps are bounded, persistent world objects with explicit versioned access
  validateWorld(switched.state);
 });
 
+test('lamp owner_admin access denies nearby nonowners and allows a nearby admin',()=>{
+ const built=applyCommand(emptyWorld(),builder,{type:'build',objectType:'lamp',position:{x:1,y:.5,z:0},size:{x:.5,y:.5,z:.5}});
+ const lamp=built.result.object, actors=[{id:'bob',role:'viewer'},{id:'carol',role:'builder'},{id:'root',role:'admin'}];
+ const state=validateWorld({...built.state,players:actors.map(actor=>({id:actor.id,position:{x:0,y:0,z:0},velocityY:0}))});
+ const command={type:'set_state',id:lamp.id,state:'off',expectedVersion:lamp.version}, before=structuredClone(state);
+ assert.equal(lamp.usePolicy,'owner_admin');
+ for(const actor of actors.slice(0,2)){
+  assert.throws(()=>applyCommand(state,actor,command),{code:'forbidden',status:403});
+  assert.deepEqual(state,before);
+ }
+ const switched=applyCommand(state,actors[2],command);
+ assert.equal(switched.result.object.on,false);
+ assert.equal(switched.result.object.version,lamp.version+1);
+ assert.equal(switched.result.object.usePolicy,'owner_admin');
+ assert.deepEqual(state,before);
+});
+
 test('lamp position and size edits require exact expected values',()=>{
  const built=applyCommand(emptyWorld(),builder,{type:'build',objectType:'lamp',position:{x:1,y:1,z:1},size:{x:.5,y:2,z:.5}});
  const lamp=built.result.object;
