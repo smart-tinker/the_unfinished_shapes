@@ -31,14 +31,19 @@ function summary(values, name) {
 function seedWorld(objectCount, clientCount) {
   const players = [{id:'alice',position:{x:-22,y:0,z:-22},velocityY:0}];
   if (clientCount === 2) players.push({id:'bob',position:{x:22,y:0,z:22},velocityY:0});
-  const columns = Math.ceil(Math.sqrt(objectCount));
-  const objects = Array.from({length:objectCount},(_,i)=>({
+  const lampCount=Math.min(8,objectCount),blockCount=objectCount-lampCount,columns=Math.ceil(Math.sqrt(blockCount));
+  const lamps=Array.from({length:lampCount},(_,i)=>({
+    id:'lamp-'+i,type:'lamp',position:{x:-6+(i%4)*4,y:1,z:-4+Math.floor(i/4)*8},
+    size:{x:.6,y:2,z:.6},color:'#ffcc66',ownerId:'alice',blocksMovement:false,supportsPlayer:false,
+    on:true,intensity:2,range:16,usePolicy:'owner_admin',version:0,
+  }));
+  const blocks=Array.from({length:blockCount},(_,i)=>({
     id:'object-'+i,type:'block',
     position:{x:-18+(i%columns)*2.1,y:1,z:-18+Math.floor(i/columns)*2.1},
     size:{x:.8,y:2,z:.8},color:i%2?'#aabbcc':'#c8a570',ownerId:'alice',
     blocksMovement:true,supportsPlayer:true,
   }));
-  return {version:1,revision:0,objects,players};
+  return {version:1,revision:0,lighting:{version:0,ambientIntensity:2.6,sunIntensity:3.1},objects:[...lamps,...blocks],players};
 }
 function sleep(ms) { return new Promise(resolve=>setTimeout(resolve,ms)); }
 async function measureFrames(page,durationMs) {
@@ -168,13 +173,13 @@ async function runScenario(root,scenario) {
       bytes:summary(events.map(event=>event.bytes),'persisted state bytes'),
     });
     const raw={
-      objects:scenario.objects,clients:scenario.clients,gl,
+      objects:scenario.objects,lamps:Math.min(8,scenario.objects),clients:scenario.clients,gl,
       pollSamples:polls,updateRttMs:updateRtt,updateFrameIntervalsMs:updateFrames,
       updatePersistence:updateSaves,movementRttMs:movementRtt,movementFrameIntervalsMs:movementFrames,
       movementPersistence:movementSaves,idleFrameIntervalsMs:idleFrames,
     };
     const result={
-      objects:scenario.objects,clients:scenario.clients,
+      objects:scenario.objects,lamps:Math.min(8,scenario.objects),clients:scenario.clients,
       idleFrames:summary(idleFrames,'idle frame time'),
       pollRtt:summary(polls.map(sample=>sample.elapsedMs),'GET /state RTT'),
       pollBytes:summary(polls.map(sample=>sample.bytes),'GET /state bytes'),
@@ -214,9 +219,9 @@ try{
     '',
     'Renderer: '+report.renderer+'; '+glDescription(results)+'. Warm-up: 2 s. Fixed synthetic scenes and command counts; no speed threshold is used for PASS.',
     '',
-    '| Objects | Clients | State bytes p50 | GET RTT p50/p95 ms | Update RTT p50/p95 ms | Update save p95 serialize/write/rename ms | Update frame p95 ms | Move RTT p50/p95 ms | Move save p95 serialize/write/rename ms | Move frame p95 ms |',
-    '|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
-    ...results.map(result=>'| '+result.objects+' | '+result.clients+' | '+result.pollBytes.p50+' | '+result.pollRtt.p50+' / '+result.pollRtt.p95+' | '+result.updateRtt.p50+' / '+result.updateRtt.p95+' | '+result.updatePersistence.serializeMs.p95+' / '+result.updatePersistence.writeMs.p95+' / '+result.updatePersistence.renameMs.p95+' | '+result.updateFrames.p95+' | '+result.movementRtt.p50+' / '+result.movementRtt.p95+' | '+result.movementPersistence.serializeMs.p95+' / '+result.movementPersistence.writeMs.p95+' / '+result.movementPersistence.renameMs.p95+' | '+result.movementFrames.p95+' |'),
+    '| Objects | Lamps | Clients | State bytes p50 | GET RTT p50/p95 ms | Update RTT p50/p95 ms | Update save p95 serialize/write/rename ms | Update frame p95 ms | Move RTT p50/p95 ms | Move save p95 serialize/write/rename ms | Move frame p95 ms |',
+    '|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+    ...results.map(result=>'| '+result.objects+' | '+result.lamps+' | '+result.clients+' | '+result.pollBytes.p50+' | '+result.pollRtt.p50+' / '+result.pollRtt.p95+' | '+result.updateRtt.p50+' / '+result.updateRtt.p95+' | '+result.updatePersistence.serializeMs.p95+' / '+result.updatePersistence.writeMs.p95+' / '+result.updatePersistence.renameMs.p95+' | '+result.updateFrames.p95+' | '+result.movementRtt.p50+' / '+result.movementRtt.p95+' | '+result.movementPersistence.serializeMs.p95+' / '+result.movementPersistence.writeMs.p95+' / '+result.movementPersistence.renameMs.p95+' | '+result.movementFrames.p95+' |'),
     '',
     'Raw sample arrays are in the Actions log in the TUS_BENCHMARK_RAW record. GET /state is a read-only loopback HTTP RTT plus body transfer; JSON parsing is validated but excluded from timing; command RTT includes the server and HTTP path, with serialization, file write and atomic rename timed separately. File writes measure OS API completion and do not imply fsync or physical-media latency. GUI frame intervals are from the actual packaged Electron canvas and use software SwiftShader; they do not represent real-GPU performance.',
     '',

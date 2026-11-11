@@ -285,3 +285,60 @@ test('scene snapshots preserve validated interaction state and stable button tar
   {id:'button-1',state:undefined,version:3,usePolicy:'owner_admin',targetId:'removed-door',targetState:'open'},
  ]);
 });
+
+
+test('lamp scene context and agent preview preserve shared lighting defaults',async()=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'tus-lamp-preview-'));
+ const token='lamp-builder-token-12345';
+ const server=await createWorldServer({dataPath:path.join(dir,'world.json'),users:{[token]:{id:'alice',role:'builder'}}});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const connection={url:'http://127.0.0.1:'+server.address().port,token,connectionId:'alice-world'};
+ const session=gameTools.createGameToolSession(connection),threadId='lamp-preview';
+ const design={objectType:'lamp',position:{x:2,y:1,z:0},size:{x:1,y:2,z:1},color:'#ffcc66'};
+ try{
+  const before=JSON.parse((await executeGameTool({name:'world_state'},connection)).contentItems[0].text);
+  assert.deepEqual(before.lighting,{version:0,ambientIntensity:2.6,sunIntensity:3.1});
+  const preview=await session.execute({name:'world_preview',threadId,arguments:{objects:[design]}});
+  assert.equal(preview.success,true);
+  const proposal=JSON.parse(preview.contentItems[0].text);
+  assert.equal(JSON.parse((await executeGameTool({name:'world_state'},connection)).contentItems[0].text).objects.length,0);
+  session.decide(proposal.previewId,'apply',threadId);
+  assert.equal((await session.execute({name:'world_apply',threadId,arguments:{previewId:proposal.previewId}})).success,true);
+  const current=JSON.parse((await executeGameTool({name:'world_state'},connection)).contentItems[0].text);
+  assert.deepEqual(current.lighting,before.lighting);
+  assert.deepEqual({type:current.objects[0].type,on:current.objects[0].on,intensity:current.objects[0].intensity,range:current.objects[0].range,usePolicy:current.objects[0].usePolicy},
+   {type:'lamp',on:true,intensity:2,range:8,usePolicy:'owner_admin'});
+  const snapshot=gameTools.captureSceneSnapshot(current,sceneView(current.revision,[]),connection.connectionId);
+  assert.deepEqual(snapshot.lighting,before.lighting);
+  assert.deepEqual({on:snapshot.objects[0].on,intensity:snapshot.objects[0].intensity,range:snapshot.objects[0].range,version:snapshot.objects[0].version},
+   {on:true,intensity:2,range:8,version:0});
+ }finally{session.clear();await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}
+});
+
+test('lamp agent schema has explicit on/off state and global lighting cannot bypass local preview',async()=>{
+ const preview=WORLD_TOOLS.find(tool=>tool.name==='world_preview').inputSchema.properties.objects.items.properties;
+ assert.ok(preview.objectType.enum.includes('lamp'));
+ const command=WORLD_TOOLS.find(tool=>tool.name==='world_command').inputSchema.properties.command;
+ assert.ok(command.properties.state.enum.includes('on'));
+ assert.ok(command.properties.state.enum.includes('off'));
+ assert.ok(command.properties.intensity);
+ assert.ok(command.properties.range);
+ assert.ok(command.properties.expected.properties.intensity);
+ assert.ok(command.properties.expected.properties.range);
+ const result=await executeGameTool({name:'world_command',arguments:{command:{type:'set_lighting',ambientIntensity:1,sunIntensity:2,expectedVersion:0}}},
+  {url:'http://127.0.0.1:1',token:'builder-secret-12345'});
+ assert.equal(result.success,false);
+ assert.match(result.contentItems[0].text,/local preview|in-game/i);
+});
+
+test('scene snapshots validate and preserve versioned lighting and lamp access',()=>{
+ const lamp={...sceneObject('lamp-1',{x:0,y:1,z:0}),type:'lamp',blocksMovement:false,supportsPlayer:false,
+  on:true,intensity:3,range:11,usePolicy:'all_players',version:4};
+ const state={...sceneWorld([lamp]),lighting:{version:2,ambientIntensity:1.5,sunIntensity:2.4}};
+ const snapshot=gameTools.captureSceneSnapshot(state,sceneView(7,['lamp-1']),'connection-1');
+ assert.deepEqual(snapshot.lighting,state.lighting);
+ assert.deepEqual({on:snapshot.objects[0].on,intensity:snapshot.objects[0].intensity,range:snapshot.objects[0].range,usePolicy:snapshot.objects[0].usePolicy,version:snapshot.objects[0].version},
+  {on:true,intensity:3,range:11,usePolicy:'all_players',version:4});
+ assert.throws(()=>gameTools.captureSceneSnapshot({...state,lighting:{version:-1,ambientIntensity:1,sunIntensity:2}},sceneView(),'connection-1'),/lighting/i);
+ assert.throws(()=>gameTools.captureSceneSnapshot({...state,objects:[{...lamp,range:0}]},sceneView(),'connection-1'),/lamp|light/i);
+});

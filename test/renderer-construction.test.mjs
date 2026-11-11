@@ -276,3 +276,256 @@ test('inspector submits access and button links with exact current values',async
  const viewerPolicy=await submit(door,{usePolicy:'all_players'},'viewer');
  assert.deepEqual(viewerPolicy.expected,{usePolicy:'owner_admin'});
 });
+
+
+test('lamp and lighting controls are exposed in the client',()=>{
+ const html=readFileSync(new URL('../src/index.html',import.meta.url),'utf8');
+ assert.match(html,/data-kind="lamp"/);
+ for(const id of ['edit-lamp-intensity','edit-lamp-range','edit-lamp-on','edit-lamp-off','world-light-ambient','world-light-sun','world-light-preview','world-light-apply','world-light-cancel','world-light-message','lighting-quality'])
+  assert.match(html,new RegExp('id="'+id+'"'));
+});
+
+test('lamp mesh has a visible on/off emitter and a bounded point light without shadows',()=>{
+ class Group{constructor(){this.children=[];this.userData={};this.position={set(){}};this.rotation={y:0};}add(child){this.children.push(child);}traverse(callback){callback(this);for(const child of this.children)child.traverse?child.traverse(callback):callback(child);}}
+ class BoxGeometry{constructor(...dimensions){this.dimensions=dimensions;}dispose(){}}
+ class SphereGeometry{constructor(...dimensions){this.dimensions=dimensions;}dispose(){}}
+ class Material{constructor(options){this.options=options;this.color={value:options.color,set(value){this.value=value;}};this.emissive=options.emissive;this.emissiveIntensity=options.emissiveIntensity??0;}dispose(){}}
+ class Mesh{constructor(geometry,material){this.geometry=geometry;this.material=material;this.userData={};this.position={x:0,y:0,z:0,set(x,y,z){this.x=x;this.y=y;this.z=z;}};}}
+ class PointLight{constructor(color,intensity,distance,decay){this.color=color;this.intensity=intensity;this.distance=distance;this.decay=decay;this.visible=true;this.castShadow=false;this.position={x:0,y:0,z:0,set(x,y,z){this.x=x;this.y=y;this.z=z;}};}}
+ const h=rendererHarness();h.context.THREE={Group,BoxGeometry,SphereGeometry,Mesh,PointLight,MeshStandardMaterial:Material};
+ h.load('function objectMesh(object)','function updateBeaconLabels()');
+ h.context.lamp={id:'lamp-1',type:'lamp',position:{x:0,y:1,z:0},size:{x:1,y:2,z:1},color:'#ffcc66',on:true,intensity:3,range:11};
+ const on=h.run('objectMesh(lamp)'),light=on.children.find(child=>child instanceof PointLight);
+ assert.ok(light);assert.equal(light.intensity,3);assert.equal(light.distance,11);assert.equal(light.castShadow,false);
+ assert.ok(on.userData.lampEmitter.material.emissiveIntensity>0);
+ assert.ok(on.userData.lampEmitter.position.y-on.userData.lampEmitter.geometry.dimensions[0]>=h.context.lamp.size.y/2,'the complete emitter must sit above the opaque lamp body');
+ assert.ok(light.position.y>h.context.lamp.size.y/2,'the point light must sit outside the opaque lamp body');
+ h.context.lamp={...h.context.lamp,on:false};const off=h.run('objectMesh(lamp)');
+ assert.equal(off.userData.lampLight.intensity,0);assert.equal(off.userData.lampEmitter.material.emissiveIntensity,0);
+});
+
+test('local quality caps nearest enabled lamps and reduced mode removes sun shadows',()=>{
+ const h=rendererHarness();assert.ok(h.has('function updateWorldLighting('),'renderer must apply shared and local lighting settings');
+ h.context.worldLightingPreview=null;h.context.role='admin';h.context.settings={lightingQuality:'full'};
+ h.context.ambientLight={intensity:0};h.context.sunLight={intensity:0,castShadow:false};h.context.renderer={shadowMap:{enabled:false}};
+ h.context.controls={target:{x:0,y:0,z:0}};h.context.lampLights=new Map();
+ for(let i=0;i<10;i++){
+  const id='lamp-'+i,object={id,type:'lamp',on:true,intensity:2,range:20,position:{x:i+1,y:0,z:0}};
+  h.context.lampLights.set(id,{object,light:{visible:false},emitter:{material:{emissiveIntensity:0}}});
+ }
+ h.context.lampLights.get('lamp-0').object.on=false;
+ h.context.worldState={lighting:{version:0,ambientIntensity:1.25,sunIntensity:2.5}};
+ h.load('function updateWorldLighting(','function updateBeaconLabels()');
+ h.run('updateWorldLighting(worldState)');
+ assert.equal(h.context.ambientLight.intensity,1.25);assert.equal(h.context.sunLight.intensity,2.5);
+ assert.equal([...h.context.lampLights].filter(([,item])=>item.light.visible).length,8);
+ assert.equal(h.context.lampLights.get('lamp-0').light.visible,false);
+ assert.deepEqual([...h.context.lampLights].filter(([,item])=>item.light.visible).map(([id])=>id),Array.from({length:8},(_,i)=>'lamp-'+(i+1)));
+ assert.equal(h.context.sunLight.castShadow,true);assert.equal(h.context.renderer.shadowMap.enabled,true);
+ h.context.settings.lightingQuality='reduced';h.run('updateWorldLighting(worldState)');
+ assert.equal([...h.context.lampLights].filter(([,item])=>item.light.visible).length,4);
+ assert.deepEqual([...h.context.lampLights].filter(([,item])=>item.light.visible).map(([id])=>id),['lamp-1','lamp-2','lamp-3','lamp-4']);
+ assert.equal(h.context.sunLight.castShadow,false);assert.equal(h.context.renderer.shadowMap.enabled,false);
+});
+
+test('world lighting Preview and Cancel are local; Apply sends one versioned command',async()=>{
+ const h=rendererHarness();assert.ok(h.has('function previewWorldLighting('),'lighting controls must support a local preview');
+ h.context.worldLightingPreview=null;h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};
+ h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1,castShadow:true};h.context.renderer={shadowMap:{enabled:true}};
+ h.context.controls={target:{x:0,y:0,z:0}};h.context.lampLights=new Map();
+ h.context.worldState={revision:7,lighting:{version:2,ambientIntensity:2.6,sunIntensity:3.1}};
+ h.context.latestStateRevision=7;h.context.settingsGeneration=0;
+ h.context.request=async(path,method,body)=>{h.context.requests.push({path,method,body});return {revision:8,lighting:{version:3,ambientIntensity:1.2,sunIntensity:2.4}};};
+ h.context.requests=[];h.context.feedback=()=>{};h.context.updateLightingControls=()=>{};
+ h.element('world-light-ambient').value='1.2';h.element('world-light-sun').value='2.4';
+ h.load('function updateWorldLighting(','function updateBeaconLabels()');
+ h.run('previewWorldLighting()');
+ assert.equal(h.context.requests.length,0);assert.equal(h.context.ambientLight.intensity,1.2);assert.match(h.element('world-light-message').textContent,/preview/i);
+ h.run('cancelWorldLightingPreview()');
+ assert.equal(h.context.requests.length,0);assert.equal(h.context.ambientLight.intensity,2.6);
+ h.element('world-light-ambient').value='1.2';h.element('world-light-sun').value='2.4';
+ h.run('previewWorldLighting()');await h.run('applyWorldLightingPreview()');
+ assert.equal(h.context.requests.length,1);
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.requests[0])),{path:'/command',method:'POST',body:{type:'set_lighting',ambientIntensity:1.2,sunIntensity:2.4,expectedVersion:2}});
+ assert.deepEqual(h.context.worldState.lighting,{version:3,ambientIntensity:1.2,sunIntensity:2.4});
+});
+
+test('a later successful poll releases a lighting Apply locked after refresh fails',async()=>{
+ const h=rendererHarness();
+ h.context.worldLightingPreview={version:1,baseline:{version:1,ambientIntensity:2.6,sunIntensity:3.1},ambientIntensity:1,sunIntensity:2,attempted:false};
+ h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};h.context.latestStateRevision=5;h.context.settingsGeneration=0;
+ h.context.worldState={revision:5,lighting:{version:1,ambientIntensity:2.6,sunIntensity:3.1}};
+ h.context.request=async(path,method)=>{throw new Error(method==='POST'?'timed out':'offline');};
+ h.context.renderWorld=()=>{throw new Error('must not render unavailable state');};
+ h.context.feedback=()=>{};h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1};h.context.renderer={shadowMap:{enabled:true}};h.context.controls={target:{x:0,y:0,z:0}};
+ h.load('function updateLightingControls(','function labelTexture(');
+ await h.run('applyWorldLightingPreview()');
+ assert.equal(h.context.worldLightingPreview.attempted,true);
+ assert.equal(h.element('world-light-cancel').disabled,true);
+ h.context.bridge={};h.context.pollRunning=false;h.context.localMovementVersion=0;h.context.scene={};
+ h.context.renderWorld=state=>{h.context.worldState=state;h.context.latestStateRevision=state.revision;};
+ h.context.$('connection').classList={remove(){},add(){}};
+ h.context.request=async()=>({revision:6,lighting:{version:2,ambientIntensity:1,sunIntensity:2},objects:[],players:[]});
+ h.load('async function poll()','function positionKey(');
+ await h.run('poll()');
+ assert.equal(h.context.worldLightingPreview,null);
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.worldState.lighting)),{version:2,ambientIntensity:1,sunIntensity:2});
+ assert.match(h.element('world-light-message').textContent,/confirmed|refreshed/i);
+});
+
+test('a poll begun before unknown Apply reconciliation cannot release the connection lock',async()=>{
+ const h=rendererHarness();
+ h.context.worldLightingPreview={version:1,baseline:{version:1,ambientIntensity:2.6,sunIntensity:3.1},ambientIntensity:1,sunIntensity:2,attempted:false};
+ h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};h.context.latestStateRevision=5;h.context.settingsGeneration=0;
+ h.context.worldState={revision:5,lighting:{version:1,ambientIntensity:2.6,sunIntensity:3.1}};
+ h.context.bridge={};h.context.pollRunning=false;h.context.localMovementVersion=0;h.context.scene={};
+ h.context.renderWorld=state=>{h.context.worldState=state;h.context.latestStateRevision=state.revision;};
+ h.context.$('connection').classList={remove(){},add(){}};h.context.feedback=()=>{};
+ let resolveOldPoll,stateCalls=0;
+ h.context.request=(path,method)=>{
+  if(path==='/state'&&stateCalls++===0)return new Promise(resolve=>{resolveOldPoll=resolve;});
+  return Promise.reject(new Error(method==='POST'?'timed out':'offline'));
+ };
+ h.load('async function poll()','function positionKey(');
+ const oldPoll=h.run('poll()');
+ h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1};h.context.renderer={shadowMap:{enabled:true}};h.context.controls={target:{x:0,y:0,z:0}};
+ h.load('function updateLightingControls(','function labelTexture(');
+ await h.run('applyWorldLightingPreview()');
+ assert.equal(h.context.worldLightingPreview.attempted,true);
+ resolveOldPoll({revision:5,lighting:{version:1,ambientIntensity:2.6,sunIntensity:3.1},objects:[],players:[]});
+ await oldPoll;
+ assert.ok(h.context.worldLightingPreview?.attempted,'an older read cannot clear the unresolved Apply');
+ h.context.request=async()=>({revision:6,lighting:{version:2,ambientIntensity:1,sunIntensity:2},objects:[],players:[]});
+ await h.run('poll()');
+ assert.equal(h.context.worldLightingPreview,null,'a poll begun after reconciliation is required to release the lock');
+});
+
+test('connection settings cannot change while a shared lighting Apply is unresolved',async()=>{
+ const h=rendererHarness(),effects=[];
+ h.context.editing=false;h.context.settingsGeneration=0;h.context.worldLightingPreview={attempted:true};
+ h.context.settings={workspacePath:'old',codexPath:'codex',serverUrl:'http://old',token:'',threadId:'',lightingQuality:'full'};
+ h.context.readSettings=()=>({...h.context.settings,serverUrl:'http://new'});
+ h.context.connected=false;h.context.movePreview=null;h.context.dragCandidate=null;h.context.inspectorDirty=false;
+ h.context.clearAgentBuildPreview=()=>effects.push('clear-preview');
+ h.context.cancelMovePreview=()=>{};h.context.updateChatControls=()=>{};h.context.updateWorldLighting=()=>{};
+ h.context.bridge={disconnectCodex:async()=>effects.push('disconnect'),saveSettings:async()=>effects.push('save-settings')};
+ h.context.poll=async()=>effects.push('poll');h.context.worldState={lighting:{version:0,ambientIntensity:2.6,sunIntensity:3.1},objects:[]};
+ h.context.worldRevision=0;h.context.objectSnapshot='';h.context.lightingInputVersion=-1;h.context.lampLights=new Map();
+ h.context.meId=null;h.context.playerPosition={x:0,y:0,z:0};h.context.playerVelocityY=0;h.context.jumpRequested=false;h.context.lastPosition='';
+ h.context.latestStateRevision=-1;h.context.localMovementVersion=0;h.context.moveStarts=new Map();h.context.scene=null;
+ h.load('async function saveSettings()', "$('save-world').addEventListener");
+ await assert.rejects(h.run('saveSettings()'),/shared lighting Apply.*resolve/i);
+ assert.deepEqual(effects,[]);
+});
+
+test('late lighting Apply from an old connection cannot overwrite the new world',async()=>{
+ const h=rendererHarness();h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};
+ h.context.settingsGeneration=0;h.context.latestStateRevision=7;h.context.worldRevision=7;
+ h.context.worldState={revision:7,lighting:{version:2,ambientIntensity:2.6,sunIntensity:3.1},objects:[]};
+ h.context.worldLightingPreview={version:2,baseline:{version:2,ambientIntensity:2.6,sunIntensity:3.1},ambientIntensity:1.2,sunIntensity:2.4,attempted:false};
+ h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1};h.context.renderer={shadowMap:{enabled:true}};h.context.controls={target:{x:0,y:0,z:0}};
+ let resolveApply;h.context.requests=[];
+ h.context.request=(path,method)=>{h.context.requests.push([path,method]);return new Promise(resolve=>{resolveApply=resolve;});};
+ h.load('function updateLightingControls(','function labelTexture(');
+ const pending=h.run('applyWorldLightingPreview()');
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.requests)),[['/command','POST']]);
+ h.context.settingsGeneration=1;h.context.latestStateRevision=-1;h.context.worldRevision=-1;
+ h.context.worldState={revision:0,lighting:{version:0,ambientIntensity:2.6,sunIntensity:3.1},objects:[]};
+ h.context.worldLightingPreview=null;
+ resolveApply({revision:8,lighting:{version:3,ambientIntensity:1.2,sunIntensity:2.4}});
+ await pending;
+ assert.equal(h.context.worldState.revision,0);
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.worldState.lighting)),{version:0,ambientIntensity:2.6,sunIntensity:3.1});
+ assert.equal(h.context.worldRevision,-1);
+ assert.equal(h.context.latestStateRevision,-1);
+ assert.doesNotMatch(h.element('world-light-message').textContent,/shared world lighting saved/i);
+});
+
+test('unknown lighting Apply is reconciled from fresh server state before releasing its preview',async()=>{
+ const h=rendererHarness();assert.ok(h.has('async function applyWorldLightingPreview('));
+ h.context.worldLightingPreview={version:1,baseline:{version:1,ambientIntensity:2.6,sunIntensity:3.1},ambientIntensity:1,sunIntensity:2,attempted:false};
+ h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};h.context.latestStateRevision=5;h.context.settingsGeneration=0;
+ h.context.worldState={revision:5,lighting:{version:1,ambientIntensity:2.6,sunIntensity:3.1}};
+ h.context.requests=[];
+ h.context.request=async(path,method)=>{h.context.requests.push([path,method??'GET']);if(method==='POST')throw new Error('timed out');return {revision:6,lighting:{version:2,ambientIntensity:1,sunIntensity:2},objects:[],players:[]};};
+ h.context.renderWorld=state=>{h.context.worldState=state;h.context.latestStateRevision=state.revision;};
+ h.context.feedback=()=>{};h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1};h.context.renderer={shadowMap:{enabled:true}};h.context.controls={target:{x:0,y:0,z:0}};
+ h.load('function updateLightingControls(','function labelTexture(');
+ await h.run('applyWorldLightingPreview()');
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.requests)),[['/command','POST'],['/state','GET']]);
+ assert.equal(h.context.worldLightingPreview,null);
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.worldState.lighting)),{version:2,ambientIntensity:1,sunIntensity:2});
+ assert.match(h.element('world-light-message').textContent,/refreshed/i);
+ assert.doesNotMatch(h.element('world-light-message').textContent,/shared lighting was not changed/i);
+});
+
+test('failed lighting refresh keeps attempted preview locked and never claims it was canceled',async()=>{
+ const h=rendererHarness();assert.ok(h.has('function cancelWorldLightingPreview('));
+ h.context.worldLightingPreview={version:1,baseline:{version:1,ambientIntensity:2.6,sunIntensity:3.1},ambientIntensity:1,sunIntensity:2,attempted:false};
+ h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};h.context.latestStateRevision=5;h.context.settingsGeneration=0;
+ h.context.worldState={revision:5,lighting:{version:1,ambientIntensity:2.6,sunIntensity:3.1}};
+ h.context.requests=[];
+ h.context.request=async(path,method)=>{h.context.requests.push([path,method]);throw new Error(method==='POST'?'timed out':'offline');};
+ h.context.renderWorld=()=>{throw new Error('must not render unavailable state');};
+ h.context.feedback=()=>{};h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1};h.context.renderer={shadowMap:{enabled:true}};h.context.controls={target:{x:0,y:0,z:0}};
+ h.load('function updateLightingControls(','function labelTexture(');
+ await h.run('applyWorldLightingPreview()');
+ assert.equal(h.context.worldLightingPreview.attempted,true);
+ assert.equal(h.element('world-light-cancel').disabled,true);
+ h.run('cancelWorldLightingPreview()');
+ assert.equal(h.context.worldLightingPreview.attempted,true);
+ assert.match(h.element('world-light-message').textContent,/unknown|reconnect/i);
+ assert.doesNotMatch(h.element('world-light-message').textContent,/shared lighting was not changed/i);
+});
+
+test('lighting quality cap is shared by world and local preview lamps',()=>{
+ const h=rendererHarness();h.context.worldLightingPreview=null;h.context.role='admin';h.context.settings={lightingQuality:'full'};
+ h.context.ambientLight={intensity:0};h.context.sunLight={intensity:0,castShadow:false};h.context.renderer={shadowMap:{enabled:false}};
+ h.context.controls={target:{x:0,y:0,z:0}};h.context.lampLights=new Map();h.context.previewLampLights=new Map();
+ const addLamp=(map,id,x)=>map.set(id,{object:{id,type:'lamp',on:true,intensity:2,range:20,color:'#fff',position:{x,y:0,z:0}},light:{visible:true,intensity:2,distance:20,color:{set(){}}},emitter:{material:{emissiveIntensity:1}}});
+ for(let i=1;i<=10;i++)addLamp(i<=6?h.context.lampLights:h.context.previewLampLights,'lamp-'+i,i);
+ h.context.worldState={lighting:{version:0,ambientIntensity:1.25,sunIntensity:2.5}};
+ h.load('function updateWorldLighting(','function updateLightingControls(');
+ h.run('updateWorldLighting(worldState)');
+ const visible=()=>[...h.context.lampLights,...h.context.previewLampLights].filter(([,item])=>item.light.visible).map(([id])=>id);
+ assert.deepEqual(visible(),Array.from({length:8},(_,i)=>'lamp-'+(i+1)));
+ h.context.settings.lightingQuality='reduced';h.run('updateWorldLighting(worldState)');
+ assert.deepEqual(visible(),['lamp-1','lamp-2','lamp-3','lamp-4']);
+});
+
+test('agent lamp preview registers its local light and clear releases the budget slot',()=>{
+ const h=rendererHarness(),added=new Set(),removed=new Set();
+ h.context.previewLampLights=new Map();h.context.agentBuildPreview=null;h.context.settings={threadId:'thread-1'};
+ h.context.connected=true;h.context.busy=false;h.context.scene={add:mesh=>added.add(mesh),remove:mesh=>removed.add(mesh)};
+ h.context.objectMesh=object=>({userData:{lampLight:{visible:true,intensity:object.intensity,distance:object.range},lampEmitter:{}},traverse(callback){callback(this);}});
+ h.context.disposeGroup=()=>{};h.context.updateWorldLighting=()=>{};h.context.updateAgentBuildPreviewControls=()=>{};
+ h.context.addMessage=()=>({append(){}});
+ h.load('function clearAgentBuildPreview(','function buildDesign()');
+ h.run("showAgentBuildPreview({previewId:'preview-1',objects:[{objectType:'lamp',position:{x:2,y:1,z:3},size:{x:1,y:2,z:1},color:'#fff'}]},'thread-1')");
+ assert.equal(h.context.previewLampLights.size,1);
+ const registered=[...h.context.previewLampLights.values()][0];
+ assert.equal(registered.object.type,'lamp');assert.equal(registered.light.visible,true);
+ assert.equal(added.size,1);
+ h.run('clearAgentBuildPreview()');
+ assert.equal(h.context.previewLampLights.size,0);
+ assert.equal(removed.size,1);
+});
+
+test('late lighting Apply response cannot replace a newer polled world state',async()=>{
+ const h=rendererHarness();h.context.worldLightingPreview={version:2,baseline:{version:2,ambientIntensity:2.6,sunIntensity:3.1},ambientIntensity:1.2,sunIntensity:2.4,attempted:false};
+ h.context.role='admin';h.context.editing=false;h.context.settings={lightingQuality:'full'};h.context.latestStateRevision=7;h.context.settingsGeneration=0;
+ h.context.worldRevision=7;h.context.worldState={revision:7,lighting:{version:2,ambientIntensity:2.6,sunIntensity:3.1},objects:[]};
+ h.context.ambientLight={intensity:2.6};h.context.sunLight={intensity:3.1,castShadow:true};h.context.renderer={shadowMap:{enabled:true}};h.context.controls={target:{x:0,y:0,z:0}};
+ h.context.feedback=()=>{};h.context.requests=[];let resolveApply;
+ h.context.request=(path,method)=>{h.context.requests.push([path,method??'GET']);if(method==='POST')return new Promise(resolve=>{resolveApply=resolve;});return Promise.resolve({revision:9,lighting:{version:4,ambientIntensity:1.8,sunIntensity:2.2},objects:[]});};
+ h.context.renderWorld=state=>{h.context.worldState=state;h.context.worldRevision=state.revision;h.context.latestStateRevision=state.revision;};
+ h.load('function updateLightingControls(','function labelTexture(');
+ const pending=h.run('applyWorldLightingPreview()');
+ h.context.worldState={revision:9,lighting:{version:4,ambientIntensity:1.8,sunIntensity:2.2},objects:[]};h.context.worldRevision=9;h.context.latestStateRevision=9;
+ resolveApply({revision:8,lighting:{version:3,ambientIntensity:1.2,sunIntensity:2.4}});
+ await pending;
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.requests)),[['/command','POST'],['/state','GET']]);
+ assert.equal(h.context.worldState.revision,9);
+ assert.deepEqual(JSON.parse(JSON.stringify(h.context.worldState.lighting)),{version:4,ambientIntensity:1.8,sunIntensity:2.2});
+ assert.doesNotMatch(h.element('world-light-message').textContent,/shared world lighting saved/i);
+});

@@ -11,8 +11,10 @@ let selectedKind = 'block', selectedPreset = 'block', buildPreview = null, agent
 let settingsGeneration = 0, ordinaryTurn = false;
 let agentControlState = null, agentControlRead = 0, agentControlLoading = false, agentControlBusy = false, goalMessageContextId = null;
 let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 0, z: 0 }, playerVelocityY = 0, jumpRequested = false, meId = null, localMovementVersion = 0, latestStateRevision = -1;
-let worldState = { objects: [] };
-let scene, renderer, camera, controls, player, companion;
+let worldState = { lighting:{version:0,ambientIntensity:2.6,sunIntensity:3.1}, objects: [] };
+let scene, renderer, camera, controls, player, companion, ambientLight, sunLight, worldLightingPreview=null, lightingInputVersion=-1;
+const lampLights = new Map();
+const previewLampLights = new Map();
 let dragCandidate = null, movePreview = null, boxCandidate = null, boxSelectMode = false;
 const selectedIds = new Set(), selectionBoxes = new Map(), beaconLabels = new Map(), MAX_GROUP_SELECTION = 32;
 const BEACON_LABEL_RANGE = 40, MAX_VISIBLE_BEACON_LABELS = 8;
@@ -156,9 +158,9 @@ function initScene() {
   camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, .1, 220); camera.position.set(33, 28, 38);
   renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; renderer.outputColorSpace = THREE.SRGBColorSpace;
-  $('viewport').append(renderer.domElement); controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0, 0, 0); controls.maxPolarAngle = Math.PI / 2.1; controls.minDistance = 8; controls.maxDistance = 100; controls.enableDamping = true;
-  scene.add(new THREE.HemisphereLight('#fff9df', '#4e7472', 2.6));
-  const sun = new THREE.DirectionalLight('#ffe0a5', 3.1); sun.position.set(-20, 38, 18); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.camera.left = -45; sun.shadow.camera.right = 45; sun.shadow.camera.top = 45; sun.shadow.camera.bottom = -45; sun.shadow.normalBias = .04; scene.add(sun);
+  $('viewport').append(renderer.domElement); controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0, 0, 0); controls.maxPolarAngle = Math.PI / 2.1; controls.minDistance = 8; controls.maxDistance = 100; controls.enableDamping = true; controls.addEventListener('end',()=>updateWorldLighting(worldState));
+  ambientLight = new THREE.HemisphereLight('#fff9df', '#4e7472', 2.6); scene.add(ambientLight);
+  sunLight = new THREE.DirectionalLight('#ffe0a5', 3.1); sunLight.position.set(-20, 38, 18); sunLight.castShadow = true; sunLight.shadow.mapSize.set(2048, 2048); sunLight.shadow.camera.left = -45; sunLight.shadow.camera.right = 45; sunLight.shadow.camera.top = 45; sunLight.shadow.camera.bottom = -45; sunLight.shadow.normalBias = .04; scene.add(sunLight);
   const water = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), new THREE.MeshStandardMaterial({ color: '#628d97', roughness: .3, metalness: .16 })); water.rotation.x = -Math.PI / 2; water.position.y = -1.1; water.receiveShadow = true; scene.add(water);
   const island = new THREE.Mesh(new THREE.BoxGeometry(WORLD_SIZE, 1.5, WORLD_SIZE), new THREE.MeshStandardMaterial({ color: '#a9bca6', roughness: 1 })); island.position.y = -.85; island.receiveShadow = true; scene.add(island);
   const grid = new THREE.GridHelper(WORLD_SIZE, WORLD_SIZE / 2, '#738f7f', '#91aa95'); grid.position.y = -.08; grid.material.opacity = .45; grid.material.transparent = true; scene.add(grid);
@@ -197,6 +199,97 @@ function initScene() {
     controls.update(); updateBeaconLabels(); renderer.render(scene, camera);
   });
 }
+function updateWorldLighting(state=worldState) {
+  if(!ambientLight||!sunLight||!renderer)return;
+  const lighting=worldLightingPreview??state.lighting??{ambientIntensity:2.6,sunIntensity:3.1};
+  ambientLight.intensity=lighting.ambientIntensity;
+  sunLight.intensity=lighting.sunIntensity;
+  const limit=settings.lightingQuality==='reduced'?4:8,target=controls?.target??{x:0,y:0,z:0};
+  const lamps=[...lampLights.values(),...previewLampLights.values()];
+  const active=lamps.filter(item=>item.object.on).sort((a,b)=>{
+    const distance=item=>{const p=item.object.position;return (p.x-target.x)**2+(p.y-target.y)**2+(p.z-target.z)**2;};
+    return distance(a)-distance(b)||a.object.id.localeCompare(b.object.id);
+  }).slice(0,limit);
+  const visible=new Set(active);
+  for(const item of lamps){item.light.visible=visible.has(item);item.light.intensity=item.object.on?item.object.intensity:0;item.light.distance=item.object.range;if(item.light.color?.set)item.light.color.set(item.object.color);}
+  const shadows=settings.lightingQuality!=='reduced';
+  sunLight.castShadow=shadows;renderer.shadowMap.enabled=shadows;
+}
+function updateLightingControls(reset=false) {
+  const panel=$('world-lighting-panel');
+  if(!panel)return;
+  panel.hidden=role!=='admin';
+  const lighting=worldState.lighting??{version:0,ambientIntensity:2.6,sunIntensity:3.1};
+  if(role==='admin'&&(worldLightingPreview||reset||lightingInputVersion!==lighting.version)){
+    $('world-light-ambient').value=worldLightingPreview?.ambientIntensity??lighting.ambientIntensity;
+    $('world-light-sun').value=worldLightingPreview?.sunIntensity??lighting.sunIntensity;
+    if(!worldLightingPreview)lightingInputVersion=lighting.version;
+  }
+  const frozen=editing||Boolean(worldLightingPreview?.attempted);
+  $('world-light-ambient').disabled=role!=='admin'||frozen;
+  $('world-light-sun').disabled=role!=='admin'||frozen;
+  $('world-light-preview').disabled=role!=='admin'||editing||Boolean(worldLightingPreview?.attempted);
+  $('world-light-apply').disabled=role!=='admin'||editing||!worldLightingPreview||Boolean(worldLightingPreview.attempted);
+  $('world-light-cancel').disabled=role!=='admin'||!worldLightingPreview||Boolean(worldLightingPreview.attempted);
+}
+function previewWorldLighting() {
+  if(role!=='admin'||editing||worldLightingPreview?.attempted)return;
+  const ambientIntensity=Number($('world-light-ambient').value),sunIntensity=Number($('world-light-sun').value);
+  if($('world-light-ambient').value===''||$('world-light-sun').value===''||!Number.isFinite(ambientIntensity)||ambientIntensity<0||ambientIntensity>4||!Number.isFinite(sunIntensity)||sunIntensity<0||sunIntensity>5){
+    $('world-light-message').textContent='Ambient must be 0–4 and sun must be 0–5.';return;
+  }
+  const current=worldState.lighting??{version:0,ambientIntensity:2.6,sunIntensity:3.1};
+  const baseline=worldLightingPreview?.baseline??{version:current.version,ambientIntensity:current.ambientIntensity,sunIntensity:current.sunIntensity};
+  worldLightingPreview={version:baseline.version,baseline,ambientIntensity,sunIntensity,attempted:false};
+  updateWorldLighting(worldState);updateLightingControls();
+  $('world-light-message').textContent='Local preview only. Apply to change the shared world.';
+}
+function cancelWorldLightingPreview() {
+  if(!worldLightingPreview||worldLightingPreview.attempted)return;
+  worldLightingPreview=null;updateWorldLighting(worldState);updateLightingControls(true);
+  $('world-light-message').textContent='Local preview canceled; shared lighting was not changed.';
+}
+async function applyWorldLightingPreview() {
+  const preview=worldLightingPreview;
+  if(!preview||preview.attempted||role!=='admin'||editing)return;
+  const generation=settingsGeneration;
+  preview.attempted=true;updateLightingControls();
+  const command={type:'set_lighting',ambientIntensity:preview.ambientIntensity,sunIntensity:preview.sunIntensity,expectedVersion:preview.version};
+  try{
+    const result=await request('/command','POST',command);
+    if(generation!==settingsGeneration)return;
+    if(result?.error)throw new Error(result.message||result.error);
+    const baseline=preview.baseline??worldState.lighting??{ambientIntensity:2.6,sunIntensity:3.1};
+    const expectedVersion=preview.version+(preview.ambientIntensity===baseline.ambientIntensity&&preview.sunIntensity===baseline.sunIntensity?0:1);
+    if(!Number.isSafeInteger(result?.revision)||!result.lighting||result.lighting.version!==expectedVersion||
+       result.lighting.ambientIntensity!==preview.ambientIntensity||result.lighting.sunIntensity!==preview.sunIntensity)throw new Error('The server response did not confirm the requested lighting.');
+    if(result.revision<latestStateRevision)throw new Error('A newer world revision arrived while Apply was pending.');
+    worldState={...worldState,revision:result.revision,lighting:result.lighting};worldRevision=result.revision;latestStateRevision=Math.max(latestStateRevision,result.revision);
+    worldLightingPreview=null;updateWorldLighting(worldState);updateLightingControls(true);
+    $('world-light-message').textContent='Shared world lighting saved.';
+  }catch(error){
+    if(generation!==settingsGeneration)return;
+    $('world-light-message').textContent='Apply outcome is unknown or conflicted. No retry was sent; refreshing the server state before another attempt. '+error.message;
+    try{
+      const state=await request('/state');
+      if(generation!==settingsGeneration)return;
+      if(state?.error||!Number.isSafeInteger(state?.revision)||state.revision<latestStateRevision||!state.lighting)throw new Error(state?.message||'The server state could not be confirmed.');
+      renderWorld(state);
+      if(worldLightingPreview===preview){
+        worldLightingPreview=null;updateWorldLighting(worldState);updateLightingControls(true);
+        $('world-light-message').textContent='World state refreshed after Apply. Review current lighting before making another preview.';
+      }
+    }catch(refreshError){
+      if(generation!==settingsGeneration)return;
+      if(worldLightingPreview===preview)preview.needsReconcile=true;
+      $('world-light-message').textContent='Apply outcome remains unknown. No retry was sent; reconnect or reload to refresh before trying again. '+error.message;
+      updateLightingControls();
+    }
+  }
+}
+$('world-light-preview').addEventListener('click',previewWorldLighting);
+$('world-light-apply').addEventListener('click',applyWorldLightingPreview);
+$('world-light-cancel').addEventListener('click',cancelWorldLightingPreview);
 function labelTexture(value, background) {
   const canvas=document.createElement('canvas');canvas.width=512;canvas.height=320;
   const context=canvas.getContext('2d');context.fillStyle=background;context.fillRect(0,0,canvas.width,canvas.height);
@@ -252,6 +345,13 @@ function objectMesh(object) {
       const face=new THREE.Sprite(new THREE.SpriteMaterial({map:labelTexture(object.text,'#ead9ad'),depthTest:true}));
       face.position.set(0,y*.1,.096);face.scale.set(x*.84,y*.48,1);group.add(face);
     }
+    if (object.type === 'lamp') {
+      const emitterMaterial=new THREE.MeshStandardMaterial({color:object.color,emissive:object.on?object.color:'#000000',emissiveIntensity:object.on ? .9 : 0,roughness:.35});
+      const radius=Math.max(.12,Math.min(x,z)*.34),emitterY=y/2+radius;
+      const emitter=new THREE.Mesh(new THREE.SphereGeometry(radius,12,8),emitterMaterial);emitter.position.set(0,emitterY,0);group.add(emitter);
+      const light=new THREE.PointLight(object.color,object.on?object.intensity:0,object.range,2);light.position.set(0,emitterY,0);light.castShadow=false;group.add(light);
+      group.userData.lampEmitter=emitter;group.userData.lampLight=light;
+    }
     if (object.type === 'beacon') {
       const dark=new THREE.MeshStandardMaterial({color:'#394449',roughness:.55}), signal=new THREE.MeshStandardMaterial({color:object.color,emissive:object.color,emissiveIntensity:.65,roughness:.35});
       addBox(x*.8,.22,z*.8,0,-y*.39,0,dark);addBox(x*.18,y*.68,z*.18,0,0,0,dark);
@@ -272,6 +372,7 @@ function updateBeaconLabels() {
 }
 function clearBuildPreview() {
   if (buildPreview?.mesh) { scene?.remove(buildPreview.mesh); disposeGroup(buildPreview.mesh); }
+  if(buildPreview?.lampId){previewLampLights.delete(buildPreview.lampId);updateWorldLighting();}
   buildPreview = null;
   $('build-preview-actions').hidden = true; $('build-preview-status').hidden = true;
   $('build-preview-status').textContent = ''; $('build-apply').disabled = false; $('build-cancel').disabled = false;
@@ -279,8 +380,20 @@ function clearBuildPreview() {
 function clearAgentBuildPreview(message = 'Preview cleared. The shared world was not changed.') {
   const preview=agentBuildPreview;if(!preview)return;
   for(const mesh of preview.meshes){scene?.remove(mesh);disposeGroup(mesh);}
+  clearPreviewLampLights(preview.lampIds);
   preview.applyButton.disabled=true;preview.cancelButton.disabled=true;
   preview.status.textContent=message;agentBuildPreview=null;
+}
+function clearPreviewLampLights(ids=[]) {
+  if(!ids.length)return;
+  for(const id of ids)previewLampLights.delete(id);
+  updateWorldLighting();
+}
+function registerPreviewLampLight(id,object,mesh) {
+  if(!mesh.userData.lampLight)return false;
+  const lamp={...object,id,type:'lamp',on:true,intensity:object.intensity??2,range:object.range??8};
+  previewLampLights.set(id,{object:lamp,light:mesh.userData.lampLight,emitter:mesh.userData.lampEmitter});
+  return true;
 }
 function updateAgentBuildPreviewControls() {
   if(!agentBuildPreview)return;
@@ -290,21 +403,24 @@ function updateAgentBuildPreviewControls() {
 function showAgentBuildPreview(value, threadId = settings.threadId) {
   if(!value||typeof value.previewId!=='string'||!Array.isArray(value.objects)||value.objects.length<1||value.objects.length>32||typeof threadId!=='string'||!scene) { addMessage('The agent preview could not be displayed, so it cannot be approved.','error');return; }
   clearAgentBuildPreview('Replaced by a newer proposal. No shared-world changes were made.');
-  const meshes=[];
+  const meshes=[],lampIds=[];
   try {
-    for(const design of value.objects){
-      if(!design||!['block','bridge','port','stairs','ramp','sign','beacon','door','gate','button'].includes(design.objectType)||!design.position||!design.size)throw new Error('Invalid preview object.');
-      const mesh=objectMesh({type:design.objectType,direction:design.direction,position:design.position,size:design.size,color:design.color,text:design.text,name:design.name});
+    for(const [index,design] of value.objects.entries()){
+      if(!design||!['block','bridge','port','stairs','ramp','sign','beacon','door','gate','button','lamp'].includes(design.objectType)||!design.position||!design.size)throw new Error('Invalid preview object.');
+      const object={id:'agent-preview:'+value.previewId+':'+index,type:design.objectType,direction:design.direction,position:design.position,size:design.size,color:design.color,text:design.text,name:design.name,...(design.objectType==='lamp'?{on:true,intensity:2,range:8}:{})};
+      const mesh=objectMesh(object);
       mesh.traverse(child=>{if(!child.material)return;child.material=child.material.clone();child.material.color.set('#efbd61');child.material.transparent=true;child.material.opacity=.48;child.material.depthWrite=false;});
       meshes.push(mesh);scene.add(mesh);
+      if(object.type==='lamp'){if(!registerPreviewLampLight(object.id,object,mesh))throw new Error('Lamp preview light is unavailable.');lampIds.push(object.id);}
     }
-  } catch(error){for(const mesh of meshes){scene.remove(mesh);disposeGroup(mesh);}addMessage('The agent preview could not be displayed: '+error.message,'error');return;}
+  } catch(error){clearPreviewLampLights(lampIds);for(const mesh of meshes){scene.remove(mesh);disposeGroup(mesh);}addMessage('The agent preview could not be displayed: '+error.message,'error');return;}
   const card=addMessage('The agent proposes '+value.objects.length+' shapes. Does the complete set look right?','system');
   const status=document.createElement('p');status.textContent='Amber shapes are local previews only; nothing has changed on the server.';
   const applyButton=document.createElement('button');applyButton.type='button';applyButton.textContent='Approve and Apply';
   const cancelButton=document.createElement('button');cancelButton.type='button';cancelButton.textContent='Cancel';
   card.append(status);card.append(applyButton);card.append(cancelButton);
-  const preview={previewId:value.previewId,threadId,meshes,card,status,applyButton,cancelButton,attempted:false};agentBuildPreview=preview;
+  const preview={previewId:value.previewId,threadId,meshes,lampIds,card,status,applyButton,cancelButton,attempted:false};agentBuildPreview=preview;
+  updateWorldLighting();
   cancelButton.addEventListener('click',async()=>{
     if(agentBuildPreview!==preview||preview.attempted)return;
     cancelButton.disabled=true;applyButton.disabled=true;
@@ -331,6 +447,7 @@ function buildDesign() {
     door: { type: 'door', size: { x: 1, y: 3, z: .25 } },
     gate: { type: 'gate', size: { x: 4, y: 2, z: .5 } },
     button: { type: 'button', size: { x: .5, y: .5, z: .25 } },
+    lamp: { type: 'lamp', size: { x: .5, y: 2, z: .5 } },
     stairs: { type: 'stairs', size: SHAPE_DEFAULT_SIZES.stairs },
     ramp: { type: 'ramp', size: SHAPE_DEFAULT_SIZES.ramp },
     sign: { type: 'sign', size: { x: 3, y: 2, z: .5 } },
@@ -349,13 +466,16 @@ function previewSelectedBuild() {
   if (editing) return;
   clearBuildPreview();
   if (!scene) { feedback('The 3D scene is not ready; the shared world was not changed.', true); return; }
-  const design = buildDesign(), object = { id: 'build-preview', type: design.objectType, position: design.position, size: design.size, color: design.color, direction: design.direction, text: design.text, name: design.name };
+  const design = buildDesign(), object = { id: 'build-preview', type: design.objectType, position: design.position, size: design.size, color: design.color, direction: design.direction, text: design.text, name: design.name, ...(design.objectType==='lamp'?{on:true,intensity:2,range:8}:{}) };
   const mesh = objectMesh(object);
   mesh.traverse(child => {
     if (!child.material) return;
     child.material = child.material.clone(); child.material.color.set('#f3c969'); child.material.transparent = true; child.material.opacity = .42; child.material.depthWrite = false;
   });
-  scene.add(mesh); buildPreview = { command: design, mesh, attempted: false };
+  scene.add(mesh);
+  const lampId=object.type==='lamp'&&registerPreviewLampLight(object.id,object,mesh)?object.id:null;
+  buildPreview = { command: design, mesh, lampId, attempted: false };
+  updateWorldLighting();
   $('build-preview-actions').hidden = false; $('build-preview-status').hidden = false;
   $('build-preview-status').textContent = 'Local preview only. Apply to add this shape to the shared world.';
   $('build-apply').disabled = false; feedback('Preview only — the shared world has not changed.');
@@ -579,7 +699,9 @@ function fillInspector(object) {
   $('edit-color').value = object.color;
   $('edit-sign-row').hidden=object.type!=='sign';$('edit-sign-text').disabled=object.type!=='sign';$('edit-sign-text').required=object.type==='sign';$('edit-sign-text').value=object.type==='sign'?object.text:'';
   $('edit-beacon-row').hidden=object.type!=='beacon';$('edit-beacon-name').disabled=object.type!=='beacon';$('edit-beacon-name').required=object.type==='beacon';$('edit-beacon-name').value=object.type==='beacon'?object.name:'';
-  const interactive=['door','gate','button'].includes(object.type), doorway=['door','gate'].includes(object.type), button=object.type==='button';
+  const lamp=object.type==='lamp';
+  $('edit-lamp-row').hidden=!lamp;$('edit-lamp-intensity').disabled=!lamp;$('edit-lamp-range').disabled=!lamp;$('edit-lamp-intensity').value=lamp?object.intensity:'';$('edit-lamp-range').value=lamp?object.range:'';
+  const interactive=['door','gate','button','lamp'].includes(object.type), doorway=['door','gate'].includes(object.type), button=object.type==='button';
   const canEdit=role==='admin'||(role==='builder'&&object.ownerId===meId),canManageInteraction=interactive&&(role==='admin'||object.ownerId===meId),canUse=item=>role==='admin'||item.ownerId===meId||item.usePolicy==='all_players';
   $('edit-use-policy').value=interactive?object.usePolicy:'owner_admin';
   $('edit-interaction-row').hidden=!interactive;$('edit-button-row').hidden=!button;$('edit-target-state-row').hidden=!button;
@@ -598,8 +720,8 @@ function fillInspector(object) {
   $('edit-supports-player').checked = object.supportsPlayer;
   $('edit-fields').disabled = editing || !canEdit;
   $('interactive-actions').hidden=!interactive;
-  $('edit-open').hidden=!doorway;$('edit-close').hidden=!doorway;$('edit-use-button').hidden=!button;
-  $('edit-open').disabled=editing||!canUse(object);$('edit-close').disabled=editing||!canUse(object);
+  $('edit-open').hidden=!doorway;$('edit-close').hidden=!doorway;$('edit-use-button').hidden=!button;$('edit-lamp-on').hidden=!lamp;$('edit-lamp-off').hidden=!lamp;
+  $('edit-open').disabled=editing||!canUse(object);$('edit-close').disabled=editing||!canUse(object);$('edit-lamp-on').disabled=editing||!canUse(object)||object.on;$('edit-lamp-off').disabled=editing||!canUse(object)||!object.on;
   const target=button?targets.find(item=>item.id===object.targetId):null;
   $('edit-use-button').disabled=editing||!canUse(object)||!target||!canUse(target);
   $('edit-message').textContent = !canEdit ? (canManageInteraction ? 'Geometry is read-only; you can manage interaction access.' : 'Read-only: you do not have permission to edit this object.') : 'Changes are checked by the world server.';
@@ -706,11 +828,13 @@ function renderWorld(state, movementVersion = localMovementVersion) {
   }
   const nextSnapshot = JSON.stringify(state.objects);
   if (objectSnapshot !== nextSnapshot) {
-    for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear();beaconLabels.clear();
+    for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear();beaconLabels.clear();lampLights.clear();
     objectData.clear();
-    for (const object of state.objects) { objectData.set(object.id, object); const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh);if(mesh.userData.beaconLabel)beaconLabels.set(object.id,{mesh,label:mesh.userData.beaconLabel}); }
+    for (const object of state.objects) { objectData.set(object.id, object); const mesh = objectMesh(object); meshes.set(object.id, mesh); sceneRoot.add(mesh);if(mesh.userData.beaconLabel)beaconLabels.set(object.id,{mesh,label:mesh.userData.beaconLabel});if(mesh.userData.lampLight)lampLights.set(object.id,{object,light:mesh.userData.lampLight,emitter:mesh.userData.lampEmitter}); }
     objectSnapshot = nextSnapshot; selectObject(null,true);
   } else if (accessChanged) selectObject(null,true);
+  if(accessChanged&&role!=='admin'&&worldLightingPreview){worldLightingPreview=null;$('world-light-message').textContent='Lighting preview discarded because admin access changed.';}
+  updateWorldLighting(state);updateLightingControls(accessChanged);
   const online = Array.isArray(state.onlinePlayerIds) ? new Set(state.onlinePlayerIds) : null;
   const live = new Set();
   for (const remote of state.players) {
@@ -721,9 +845,11 @@ function renderWorld(state, movementVersion = localMovementVersion) {
   for (const [id, mesh] of otherPlayers) if (!live.has(id)) { scene.remove(mesh); disposeGroup(mesh); otherPlayers.delete(id); }
 }
 async function poll() {
-  if (pollRunning || !bridge) return; pollRunning = true;
+  if (pollRunning || !bridge) return;
+  const reconciliationPreview=worldLightingPreview?.needsReconcile?worldLightingPreview:null;
+  pollRunning = true;
   const generation = settingsGeneration, movementVersion = localMovementVersion;
-  try { const state = await request('/state'); if (generation !== settingsGeneration) return; if (state.error) throw new Error(state.message || state.error); if (scene) renderWorld(state, movementVersion); $('connection').textContent = '● World connected'; $('connection').classList.remove('offline'); }
+  try { const state = await request('/state'); if (generation !== settingsGeneration) return; if (state.error) throw new Error(state.message || state.error); if (scene) renderWorld(state, movementVersion); if(reconciliationPreview&&worldLightingPreview===reconciliationPreview&&worldState===state){worldLightingPreview=null;$('world-light-message').textContent='World state confirmed after the Apply outcome became unknown. Review current lighting before changing connections.';updateLightingControls(true);} $('connection').textContent = '● World connected'; $('connection').classList.remove('offline'); }
   catch (error) { if (generation !== settingsGeneration) return; $('connection').textContent = '○ World offline'; $('connection').classList.add('offline'); feedback(error.message, true); }
   finally { pollRunning = false; }
 }
@@ -749,7 +875,7 @@ async function command(body) { const result = await request('/command', 'POST', 
 async function applyInteractiveAction(object, body) {
   if (editing) return;
   editing = true;
-  for (const id of ['edit-open','edit-close','edit-use-button']) $(id).disabled = true;
+  for (const id of ['edit-open','edit-close','edit-use-button','edit-lamp-on','edit-lamp-off']) $(id).disabled = true;
   const generation = settingsGeneration;
   try {
     const result = await command(body);
@@ -779,6 +905,8 @@ $('edit-use-button').addEventListener('click', () => {
   if(!target){feedback('The button target is missing. Refresh the world before retrying.',true);return;}
   return applyInteractiveAction(button,{type:'use',id:button.id,expectedVersion:button.version,expectedTargetVersion:target.version});
 });
+$('edit-lamp-on').addEventListener('click',()=>{const lamp=inspectorBase&&(objectData.get(inspectorBase.id)??inspectorBase);if(lamp?.type==='lamp')return applyInteractiveAction(lamp,{type:'set_state',id:lamp.id,state:'on',expectedVersion:lamp.version});});
+$('edit-lamp-off').addEventListener('click',()=>{const lamp=inspectorBase&&(objectData.get(inspectorBase.id)??inspectorBase);if(lamp?.type==='lamp')return applyInteractiveAction(lamp,{type:'set_state',id:lamp.id,state:'off',expectedVersion:lamp.version});});
 
 for (const button of document.querySelectorAll('[data-kind]')) button.addEventListener('click', () => {
   if (editing) return;
@@ -836,7 +964,7 @@ async function applyGroupMove() {
 $('group-move-apply').addEventListener('click', applyGroupMove);
 $('edit-form').addEventListener('input', event => {
   const id = event?.target?.id;
-  if (!id?.startsWith('edit-position-') && !id?.startsWith('edit-size-') && !['edit-color', 'edit-blocks-movement', 'edit-supports-player','edit-sign-text','edit-beacon-name','edit-use-policy','edit-target-id','edit-target-state'].includes(id)) return;
+  if (!id?.startsWith('edit-position-') && !id?.startsWith('edit-size-') && !['edit-color', 'edit-blocks-movement', 'edit-supports-player','edit-sign-text','edit-beacon-name','edit-use-policy','edit-target-id','edit-target-state','edit-lamp-intensity','edit-lamp-range'].includes(id)) return;
   inspectorDirty = true;
   if (id.startsWith('edit-position-')) updateMovePreviewFromInspector();
 });
@@ -851,11 +979,12 @@ $('edit-form').addEventListener('submit', async event => {
   if ($('edit-color').value !== baseline.color) body.color = $('edit-color').value;
   if(baseline.type==='sign'&&$('edit-sign-text').value!==baseline.text)body.text=$('edit-sign-text').value;
   if(baseline.type==='beacon'&&$('edit-beacon-name').value!==baseline.name)body.name=$('edit-beacon-name').value;
-  if (!['door','gate','button'].includes(baseline.type)) for (const [field, input] of [['blocksMovement', 'edit-blocks-movement'], ['supportsPlayer', 'edit-supports-player']]) {
+  if(baseline.type==='lamp')for(const field of ['intensity','range']){const value=Number($('edit-lamp-'+field).value);if(value!==baseline[field])body[field]=value;}
+  if (!['door','gate','button','lamp'].includes(baseline.type)) for (const [field, input] of [['blocksMovement', 'edit-blocks-movement'], ['supportsPlayer', 'edit-supports-player']]) {
     const checked = $(input).checked;
     if (checked !== baseline[field]) body[field] = checked;
   }
-  if(['door','gate','button'].includes(baseline.type)&&$('edit-use-policy').value!==baseline.usePolicy)body.usePolicy=$('edit-use-policy').value;
+  if(['door','gate','button','lamp'].includes(baseline.type)&&$('edit-use-policy').value!==baseline.usePolicy)body.usePolicy=$('edit-use-policy').value;
   if(baseline.type==='button'){
     const targetId=$('edit-target-id').value||null,targetState=$('edit-target-state').value;
     if(targetId!==baseline.targetId)body.targetId=targetId;
@@ -899,7 +1028,7 @@ $('edit-form').addEventListener('submit', async event => {
       feedback(error.message, true);
     }
   }
-  finally { editing = false; const object = objectData.get(selectedId); $('edit-fields').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId)); $('edit-interaction-fields').disabled = !object || !(role === 'admin' || object.ownerId === meId); $('edit-reset').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId) || (['door','gate','button'].includes(object.type) && object.ownerId === meId)); }
+  finally { editing = false; const object = objectData.get(selectedId); $('edit-fields').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId)); $('edit-interaction-fields').disabled = !object || !(role === 'admin' || object.ownerId === meId); $('edit-reset').disabled = !object || !(role === 'admin' || (role === 'builder' && object.ownerId === meId) || (['door','gate','button','lamp'].includes(object.type) && object.ownerId === meId)); }
 });
 function setFullscreenState(value) {
   isFullscreen = value === true;
@@ -938,11 +1067,12 @@ $('find-codex').addEventListener('click', async () => {
 });
 for(const [button,kind,input] of [['browse-codex','codex','codex'],['browse-workspace','workspace','workspace']])$(button).addEventListener('click',async()=>{try{const selected=await bridge.choosePath(kind);if(selected)$(input).value=selected;}catch(error){$('settings-message').textContent=error.message;}});
 $('settings-open').addEventListener('click', () => $('settings').showModal()); $('settings-close').addEventListener('click', () => $('settings').close());
-function readSettings() { return { ...settings, workspacePath: $('workspace').value.trim(), codexPath: $('codex').value.trim(), serverUrl: $('server-url').value.trim(), token: $('token').value }; }
+function readSettings() { return { ...settings, workspacePath: $('workspace').value.trim(), codexPath: $('codex').value.trim(), serverUrl: $('server-url').value.trim(), token: $('token').value, lightingQuality:$('lighting-quality').value }; }
 async function saveSettings() {
   if (editing) throw new Error('Finish the current world update before changing connection settings.');
   const next = readSettings();
   const changed = ['workspacePath', 'codexPath', 'serverUrl', 'token'].some(key => next[key] !== settings[key]);
+  if(changed&&worldLightingPreview?.attempted)throw new Error('A shared lighting Apply is unresolved; resolve it before changing connection settings.');
   if (changed && (connected || settings.threadId)) {
     if (!settings.threadId) throw new Error('Cannot verify the current Codex conversation; reconnect before changing connection settings.');
     const state = await bridge.readAgentControls(settings.threadId);
@@ -961,6 +1091,7 @@ async function saveSettings() {
       !window.confirm('Discard unapplied world changes before changing connection settings?')) {
     throw new Error('Connection settings were not changed; local world edits are preserved.');
   }
+  if(!changed){settings=next;const {token,...persisted}=settings;await bridge.saveSettings(persisted);updateWorldLighting(worldState);return;}
   if (next.workspacePath !== settings.workspacePath) next.threadId = '';
   if (changed) {
     clearAgentBuildPreview('Connection settings changed; this preview is no longer available.');
@@ -969,10 +1100,10 @@ async function saveSettings() {
     await bridge.disconnectCodex(); connected = false; busy = false; updateChatControls();
     $('agent-status').textContent = 'Settings changed · reconnect Codex';
   }
-  settings = next; settingsGeneration++;
+  settings = next; settingsGeneration++;$('lighting-quality').value=settings.lightingQuality||'full';updateWorldLighting(worldState);
   const { token, ...persisted } = settings; await bridge.saveSettings(persisted);
-  worldRevision = -1; objectSnapshot = ''; worldState = { objects: [] }; meId = null; playerPosition = { x: 0, y: 0, z: 0 }; playerVelocityY = 0; jumpRequested = false; lastPosition = ''; latestStateRevision = -1; localMovementVersion++; moveStarts.clear();
-  if (scene) { selectObject(null); objectData.clear(); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); beaconLabels.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
+  worldRevision = -1; objectSnapshot = ''; worldState = { lighting:{version:0,ambientIntensity:2.6,sunIntensity:3.1}, objects: [] };worldLightingPreview=null;lightingInputVersion=-1;lampLights.clear(); meId = null; playerPosition = { x: 0, y: 0, z: 0 }; playerVelocityY = 0; jumpRequested = false; lastPosition = ''; latestStateRevision = -1; localMovementVersion++; moveStarts.clear();
+  if (scene) { selectObject(null); objectData.clear(); for (const mesh of meshes.values()) { sceneRoot.remove(mesh); disposeGroup(mesh); } meshes.clear(); beaconLabels.clear();lampLights.clear(); for (const mesh of otherPlayers.values()) { scene.remove(mesh); disposeGroup(mesh); } otherPlayers.clear(); }
   await poll();
 }
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('settings-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('settings-message').textContent = error.message; } });
@@ -1197,6 +1328,6 @@ function codexEvent(event) {
 try { initScene(); } catch (error) { $('scene-error').hidden = false; $('scene-error').textContent = `3D rendering unavailable: ${error.message}. Check hardware acceleration and restart.`; }
 if (!bridge) { feedback('Open this app through its desktop launcher.', true); $('settings-open').disabled = true; }
 else {
-  try { const saved = await bridge.loadSettings(); settings = { ...settings, ...saved }; $('workspace').value = settings.workspacePath || ''; $('codex').value = settings.codexPath || ''; $('server-url').value = settings.serverUrl; if (!/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(settings.serverUrl)) settings.token = ''; $('token').value = settings.token; } catch (error) { feedback(error.message, true); }
+  try { const saved = await bridge.loadSettings(); settings = { ...settings, ...saved }; $('lighting-quality').value=settings.lightingQuality||'full'; $('workspace').value = settings.workspacePath || ''; $('codex').value = settings.codexPath || ''; $('server-url').value = settings.serverUrl; if (!/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(settings.serverUrl)) settings.token = ''; $('token').value = settings.token; } catch (error) { feedback(error.message, true); }
   bridge.onCodexEvent(codexEvent); await poll(); setInterval(poll, 1000); setInterval(syncPosition, 250);
 }

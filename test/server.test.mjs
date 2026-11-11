@@ -374,3 +374,34 @@ test('closing a doorway also checks online players without a saved movement reco
  assert.equal(closed.status,409);
  assert.equal((await closed.json()).error,'occupied');
 });
+
+test('lamp state and changed world lighting are shared by clients and persist across server restart',async t=>{
+ const adminToken='test-only-admin-token';
+ const f=await fixture(t,{users:{...users,[adminToken]:{id:'root',role:'admin'}}});
+ const initial=await (await fetch(f.url+'/state',{headers:{Authorization:'Bearer '+token}})).json();
+ assert.deepEqual(initial.lighting,{version:0,ambientIntensity:2.6,sunIntensity:3.1});
+ const applied=await f.send({type:'set_lighting',ambientIntensity:.4,sunIntensity:.7,expectedVersion:0},adminToken);
+ assert.equal(applied.status,200);
+ const lighting=(await applied.json()).lighting;
+ assert.deepEqual(lighting,{version:1,ambientIntensity:.4,sunIntensity:.7});
+ const built=await f.send({type:'build',objectType:'lamp',position:{x:1,y:.5,z:0},size:{x:.5,y:.5,z:.5}});
+ assert.equal(built.status,200);
+ const lamp=(await built.json()).object;
+ const switched=await f.send({type:'set_state',id:lamp.id,state:'off',expectedVersion:0});
+ assert.equal(switched.status,200);
+ const visible=await (await fetch(f.url+'/state',{headers:{Authorization:'Bearer test-only-bob-token'}})).json();
+ assert.deepEqual(visible.lighting,lighting);
+ assert.equal(visible.objects.find(object=>object.id===lamp.id).on,false);
+ await f.app.shutdown();
+ const restarted=await createWorldServer({dataPath:f.dataPath,users:{...users,[adminToken]:{id:'root',role:'admin'}},port:0});
+ await restarted.start();
+ try {
+  const url='http://127.0.0.1:'+restarted.address().port+'/state';
+  const restored=await (await fetch(url,{headers:{Authorization:'Bearer '+token}})).json();
+  const reconnectedBob=await (await fetch(url,{headers:{Authorization:'Bearer test-only-bob-token'}})).json();
+  assert.deepEqual(restored.lighting,lighting);
+  assert.deepEqual(reconnectedBob.lighting,lighting);
+  assert.equal(restored.objects.find(object=>object.id===lamp.id).on,false);
+  assert.equal(reconnectedBob.objects.find(object=>object.id===lamp.id).on,false);
+ } finally {await restarted.shutdown();}
+});
