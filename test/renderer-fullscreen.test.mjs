@@ -104,6 +104,15 @@ function rendererResizeHarness() {
   }
   return {h,listeners,queries,ratios,sizes,aspects};
 }
+test('initial renderer sizing applies the capped display pixel ratio',()=>{
+  const {h,ratios,sizes,aspects}=rendererResizeHarness();
+  h.context.devicePixelRatio=2.5;
+  h.run('resizeRenderer()');
+  assert.deepEqual(ratios,[2]);
+  assert.deepEqual(sizes,[[900,600]]);
+  assert.deepEqual(aspects,[1.5]);
+});
+
 test('window resize updates the capped pixel ratio, camera, and canvas size',()=>{
   const {h,listeners,ratios,sizes,aspects}=rendererResizeHarness();
   h.context.innerWidth=1200;h.context.innerHeight=800;h.context.devicePixelRatio=1.5;
