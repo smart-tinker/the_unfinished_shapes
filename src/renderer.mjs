@@ -1083,7 +1083,7 @@ $('find-codex').addEventListener('click', async () => {
   }catch(error){results.textContent=error.message;}finally{button.disabled=false;}
 });
 for(const [button,kind,input] of [['browse-codex','codex','codex'],['browse-workspace','workspace','workspace']])$(button).addEventListener('click',async()=>{try{const selected=await bridge.choosePath(kind);if(selected)$(input).value=selected;}catch(error){$('settings-message').textContent=error.message;}});
-$('settings-open').addEventListener('click', () => $('settings').showModal()); $('settings-close').addEventListener('click', () => $('settings').close());
+$('updates-notice').addEventListener('click', () => $('settings').showModal()); $('settings-open').addEventListener('click', () => $('settings').showModal()); $('settings-close').addEventListener('click', () => $('settings').close());
 function readSettings() { return { ...settings, workspacePath: $('workspace').value.trim(), codexPath: $('codex').value.trim(), serverUrl: $('server-url').value.trim(), token: $('token').value, lightingQuality:$('lighting-quality').value, updateChannel:$('update-channel').value }; }
 async function saveSettings() {
   if (editing) throw new Error('Finish the current world update before changing connection settings.');
@@ -1130,6 +1130,28 @@ async function saveSettings() {
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('settings-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('settings-message').textContent = error.message; } });
 $('settings-form').addEventListener('submit', async event => { event.preventDefault(); $('connect').disabled = true; $('settings-message').textContent = 'Connecting to your Codex app-server…'; try { await saveSettings(); const result = await bridge.connectCodex({ ...settings, newGameThread: $('new-game-thread').checked }); settings.threadId = result.threadId; $('new-game-thread').checked = false; const { token, ...persisted } = settings; await bridge.saveSettings(persisted); connected = true; setAgentStatus('Ready · responds only when asked'); updateChatControls(); $('settings').close(); if ($('agent-controls').open) void refreshAgentControls(); addMessage(result.resumed ? 'Resumed your saved Codex conversation. It retains the tools registered when it was created. To use updated game commands, open Settings and explicitly select “Create a new game conversation”, then Connect. Your old conversation and its history are preserved. No request has been sent.' : 'Connected to your Codex workspace. No request has been sent.'); } catch (error) { $('settings-message').textContent = error.message; } finally { $('connect').disabled = false; } });
 const updateStatus = text => { $('updates-status').textContent = text; };
+function showStartupUpdateNotice(result) {
+  const button = $('updates-notice');
+  if (result?.status === 'unavailable') {
+    button.hidden = false; button.textContent = 'Updates unavailable';
+    button.title = 'The release check failed or timed out. Open Settings to retry.';
+    updateStatus(button.title); return;
+  }
+  const options = result?.status === 'checked' ? result.options : null;
+  if (!options) return;
+  const stable = options.stable, prerelease = options.prerelease;
+  const messages = [];
+  if (!stable) messages.push('No stable release has been published yet.');
+  else if (stable.relation === 'update') messages.push('Stable ' + stable.release.tag_name + ' is available.');
+  else if (stable.relation === 'downgrade') messages.push('Stable ' + stable.release.tag_name + ' is older than this version; installing it would be a downgrade.');
+  if (prerelease?.relation === 'update') messages.push('Prerelease ' + prerelease.release.tag_name + ' is available.');
+  const hasUpdate = stable?.relation === 'update' || prerelease?.relation === 'update';
+  if (!hasUpdate && stable && stable.relation !== 'downgrade') return;
+  button.hidden = false;
+  button.textContent = hasUpdate ? 'Update available' : stable ? 'Stable is older' : 'No stable release';
+  button.title = messages.join(' ') + ' Open Settings to choose a channel and review; nothing is installed automatically.';
+  updateStatus(button.title);
+}
 let checkedUpdate = null, updateDownloaded = false, updateExtracted = false, updateBusy = false;
 function updateButtons() {
   const available = checkedUpdate?.status === 'available';
@@ -1162,8 +1184,9 @@ $('updates-check').addEventListener('click', async () => {
     checkedUpdate = await bridge.checkUpdates($('update-distribution').value);
     if (checkedUpdate.status === 'available') updateStatus('Update ' + checkedUpdate.version + ' is available. Review and download it when ready.');
     else if (checkedUpdate.status === 'current') updateStatus('No newer release is available on this channel.');
+    else if (checkedUpdate.status === 'downgrade') updateStatus('This release is older than the installed version. It will not be downloaded or installed.');
     else if (checkedUpdate.status === 'unsupported') updateStatus('This release has no package for this device.');
-    else updateStatus('No published releases are available on this channel.');
+    else updateStatus(checkedUpdate.channel === 'stable' ? 'No stable release has been published yet.' : 'No published prerelease is available on this channel.');
   } catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
   finally { updateBusy = false; updateButtons(); }
 });
@@ -1432,5 +1455,6 @@ try { initScene(); } catch (error) { $('scene-error').hidden = false; $('scene-e
 if (!bridge) { feedback('Open this app through its desktop launcher.', true); $('settings-open').disabled = true; }
 else {
   try { const saved = await bridge.loadSettings(); settings = { ...settings, ...saved }; $('lighting-quality').value=settings.lightingQuality||'full'; $('update-channel').value=settings.updateChannel||'stable'; $('workspace').value = settings.workspacePath || ''; $('codex').value = settings.codexPath || ''; $('server-url').value = settings.serverUrl; if (!/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(settings.serverUrl)) settings.token = ''; $('token').value = settings.token; } catch (error) { feedback(error.message, true); }
+  void bridge.checkStartupUpdates().then(showStartupUpdateNotice).catch(() => showStartupUpdateNotice({ status: 'unavailable' }));
   bridge.onCodexEvent(codexEvent); await poll(); setInterval(poll, 1000); setInterval(syncPosition, 250);
 }

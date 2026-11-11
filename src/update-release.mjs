@@ -98,3 +98,18 @@ export function selectReleaseAsset(release, { platform, architecture, distributi
   }
   return asset;
 }
+
+export function startupUpdateOptions(releases, currentVersion) {
+  if (!releases || typeof releases !== 'object') throw new Error('Invalid release candidates.');
+  const option = release => release ? {
+    release: { tag_name: release.tag_name },
+    relation: releaseRelation(release.tag_name, currentVersion),
+  } : null;
+  const stableRelease = releases.stable || null;
+  const prereleaseRelease = releases.prerelease || null;
+  return {
+    stable: option(stableRelease),
+    prerelease: prereleaseRelease && (!stableRelease || compareReleaseVersions(prereleaseRelease.tag_name, stableRelease.tag_name) > 0)
+      ? option(prereleaseRelease) : null,
+  };
+}
