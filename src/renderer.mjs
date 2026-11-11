@@ -153,10 +153,23 @@ function avatar(color) {
   const head = new THREE.Mesh(new THREE.SphereGeometry(.26, 12, 10), material); head.position.y = 1.35; head.castShadow = true;
   group.add(body, head); return group;
 }
+function resizeRenderer() {
+  const pixelRatio = Math.min(devicePixelRatio, 2);
+  if (renderer.getPixelRatio() !== pixelRatio) renderer.setPixelRatio(pixelRatio);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}
+function watchPixelRatio() {
+  window.matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => {
+    resizeRenderer();
+    watchPixelRatio();
+  }, { once: true });
+}
 function initScene() {
   scene = new THREE.Scene(); scene.background = new THREE.Color('#93b1b2'); scene.fog = new THREE.Fog('#93b1b2', 70, 150);
   camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, .1, 220); camera.position.set(33, 28, 38);
-  renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setSize(innerWidth, innerHeight);
+  renderer = new THREE.WebGLRenderer({ antialias: true }); resizeRenderer();
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; renderer.outputColorSpace = THREE.SRGBColorSpace;
   $('viewport').append(renderer.domElement); controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0, 0, 0); controls.maxPolarAngle = Math.PI / 2.1; controls.minDistance = 8; controls.maxDistance = 100; controls.enableDamping = true; controls.addEventListener('end',()=>updateWorldLighting(worldState));
   ambientLight = new THREE.HemisphereLight('#fff9df', '#4e7472', 2.6); scene.add(ambientLight);
@@ -177,7 +190,7 @@ function initScene() {
     if (draft.started && draft.previewPosition) movePreview = draft;
     else { clearMovePreview(); }
   });
-  window.addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+  window.addEventListener('resize', resizeRenderer); watchPixelRatio();
   renderer.setAnimationLoop(() => {
     const dt = Math.min(clock.getDelta(), .25), typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || Boolean(document.querySelector('dialog[open]'));
     let x = typing ? 0 : Number(keys.has('d')) - Number(keys.has('a'));
