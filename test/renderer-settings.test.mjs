@@ -120,3 +120,47 @@ test('an idle conversation can disconnect after fresh state confirms no active G
   assert.equal(h.run('movePreview'), null);
   assert.equal(h.run('JSON.stringify(calls)'), '["read:game-thread","disconnect","save","poll"]');
 });
+
+
+test('a disconnected Codex path can be changed while preserving the saved conversation', async () => {
+  const h = settingsHarness(null);
+  h.run('connected = false');
+  h.element('workspace').value = '/old-workspace';
+  h.element('codex').value = '/new-codex';
+  await h.run('saveSettings()');
+  assert.deepEqual(JSON.parse(h.run('JSON.stringify(calls)')), ['disconnect', 'save', 'poll']);
+  assert.equal(h.run('settings.codexPath'), '/new-codex');
+  assert.equal(h.run('settings.workspacePath'), '/old-workspace');
+  assert.equal(h.run('settings.threadId'), 'game-thread');
+});
+
+test('a disconnected saved conversation cannot change world or workspace settings while state is unknown', async () => {
+  const h = settingsHarness(null);
+  h.run('connected = false');
+  h.element('workspace').value = '/new-workspace';
+  await assert.rejects(h.run('saveSettings()'), /Reconnect Codex before changing world or workspace settings/i);
+  assert.equal(h.run('JSON.stringify(calls)'), '[]');
+  assert.equal(h.run('settings.workspacePath'), '/old-workspace');
+  assert.equal(h.run('settings.threadId'), 'game-thread');
+});
+
+test('a disconnected saved conversation cannot combine Codex recovery with world settings changes', async () => {
+  const h = settingsHarness(null);
+  h.run('connected = false');
+  h.element('workspace').value = '/old-workspace';
+  h.element('codex').value = '/new-codex';
+  h.element('server-url').value = 'http://world-b';
+  await assert.rejects(h.run('saveSettings()'), /Reconnect Codex before changing world or workspace settings/i);
+  assert.equal(h.run('JSON.stringify(calls)'), '[]');
+  assert.equal(h.run('settings.codexPath'), '/codex');
+  assert.equal(h.run('settings.threadId'), 'game-thread');
+});
+
+test('changing Codex path while connected still requires a verified idle conversation', async () => {
+  const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'active', turnId: 'turn-1', pendingApprovals: 0, goalSupported: true, goal: null });
+  h.element('workspace').value = '/old-workspace';
+  h.element('codex').value = '/new-codex';
+  await assert.rejects(h.run('saveSettings()'), /wait for Codex to become idle/i);
+  assert.equal(h.run('settings.codexPath'), '/codex');
+  assert.equal(h.run('settings.threadId'), 'game-thread');
+});
