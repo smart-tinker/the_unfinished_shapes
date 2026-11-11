@@ -99,7 +99,6 @@ function rendererResizeHarness() {
     h.load('function resizeRenderer()','function watchPixelRatio()');
     h.load('function watchPixelRatio()','function initScene() {');
     h.load("window.addEventListener('resize', resizeRenderer);","renderer.setAnimationLoop(() => {");
-    h.run('watchPixelRatio()');
   }else{
     h.load("window.addEventListener('resize', () => {","renderer.setAnimationLoop(() => {");
   }
