@@ -58,7 +58,9 @@ async function waitForState(predicate, description, timeoutMs = 10000) {
 }
 async function connect(client) {
   const page = client.page;
+  await page.waitForFunction(() => document.querySelector('#connection')?.textContent !== 'Connecting');
   await page.locator('#settings-open').click();
+  await page.waitForFunction(() => document.querySelector('#settings').open);
   await page.locator('#server-url').fill(url);
   await page.locator('#token').fill(tokens[client.id]);
   await page.locator('#save-world').click();
