@@ -1,4 +1,4 @@
-const releaseTag = /^(?:v)?(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-rc\\.?(0|[1-9]\\d*))?$/;
+const releaseTag = /^(?:v)?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-rc\.?(0|[1-9]\d*))?$/;
 
 export function parseReleaseTag(value) {
   if (typeof value !== 'string') return null;
