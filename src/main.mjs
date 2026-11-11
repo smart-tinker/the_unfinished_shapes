@@ -9,7 +9,7 @@ import { createGameToolSession, captureSceneSnapshot } from './game-tools.mjs';
 import { createWorldServer } from './server.mjs';
 import { DATA_DIRECTORY, loadSettings, saveSettings, agentModelForThread } from './settings.mjs';
 import { findCodex } from './codex-discovery.mjs';
-import { installQuitGuard, isSmokeAutoConfirmQuit } from './quit-guard.mjs';
+import { createQuitConfirmation, installQuitGuard, isSmokeAutoConfirmQuit } from './quit-guard.mjs';
 const userData = process.env.TUS_DATA_DIR ? path.resolve(process.env.TUS_DATA_DIR) : path.join(app.getPath('appData'),DATA_DIRECTORY);
 mkdirSync(userData,{recursive:true});
 app.setPath('userData',userData);
@@ -26,9 +26,14 @@ async function readBuildIdentity() {
   } catch { /* Unidentified or older packages must not look like verified releases. */ }
   return { version, sourceSha: null };
 }
+const getMainWindow = () => win && !win.isDestroyed() ? win : null;
+const confirmQuit = createQuitConfirmation({
+  dialog, getWindow: getMainWindow,
+  isSmokeAutoConfirm: () => isSmokeAutoConfirmQuit(process.env, process.argv),
+});
 const attachQuitGuard = installQuitGuard({
   app,
-  getWindow: () => win && !win.isDestroyed() ? win : null,
+  getWindow: getMainWindow,
   readState: async () => {
     if (bridge) {
       const state = await bridge.readControlState();
@@ -37,20 +42,7 @@ const attachQuitGuard = installQuitGuard({
     const saved = await settings();
     return saved.threadId ? null : { connected: false, threadId: null };
   },
-  confirm: async state => {
-    if (isSmokeAutoConfirmQuit(process.env, process.argv)) return true;
-    const known = state?.connected === true;
-    const goalStatus = state?.goal?.status;
-    const detail = known
-      ? `${goalStatus ? `Native Goal status: ${goalStatus}. ` : ''}Quitting TUS closes its Codex connection but does not confirm that a Goal or turn stopped. Keep the game open to pause or clear the Goal, or quit anyway.`
-      : 'Codex state could not be confirmed. Keep the game open and reconnect to check the conversation, or quit anyway.';
-    const result = await dialog.showMessageBox(getWindow(), {
-      type: 'warning', title: 'Codex activity may continue',
-      message: known ? 'Codex may still be working in this conversation.' : 'The current Codex activity is unknown.',
-      detail, buttons: ['Keep the game open', 'Quit anyway'], defaultId: 0, cancelId: 0,
-    });
-    return result.response === 1;
-  },
+  confirm: confirmQuit,
   cleanup: () => { bridge?.stop(); localServer?.close(); },
 });
 function assertSender(event) { if(event.sender !== win.webContents) throw new Error('Untrusted sender'); }
