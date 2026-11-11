@@ -133,3 +133,43 @@ test('shared-world smoke launch explicitly enables CI quit auto-confirm', async 
   assert.ok(args, 'shared-world smoke launch arguments are present');
   assert.match(args[1], /--tus-smoke-confirm-quit/);
 });
+
+
+import * as quitGuard from '../src/quit-guard.mjs';
+
+test('the production quit prompt uses the current window for unknown Codex state', async () => {
+  const create = quitGuard.createQuitConfirmation;
+  assert.equal(typeof create, 'function', 'production quit confirmation can be tested directly');
+  const window = { id: 'main-window' }, calls = [];
+  const confirm = create({
+    dialog: { showMessageBox: async (parent, options) => { calls.push({ parent, options }); return { response: 0 }; } },
+    getWindow: () => window,
+    isSmokeAutoConfirm: () => false,
+  });
+  assert.equal(await confirm(null), false);
+  assert.equal(calls.length, 1);
+  assert.strictEqual(calls[0].parent, window);
+  assert.equal(calls[0].options.title, 'Codex activity may continue');
+  assert.equal(calls[0].options.message, 'The current Codex activity is unknown.');
+  assert.deepEqual(calls[0].options.buttons, ['Keep the game open', 'Quit anyway']);
+});
+
+test('the production quit prompt allows Quit anyway and retains smoke auto-confirm', async () => {
+  const create = quitGuard.createQuitConfirmation;
+  assert.equal(typeof create, 'function', 'production quit confirmation can be tested directly');
+  const window = { id: 'main-window' }, calls = [];
+  const confirm = create({
+    dialog: { showMessageBox: async (parent, options) => { calls.push({ parent, options }); return { response: 1 }; } },
+    getWindow: () => window,
+    isSmokeAutoConfirm: () => false,
+  });
+  assert.equal(await confirm({ connected: true, goal: { status: 'active' } }), true);
+  assert.strictEqual(calls[0].parent, window);
+
+  const smoke = create({
+    dialog: { showMessageBox: async () => { throw new Error('smoke must not display a dialog'); } },
+    getWindow: () => window,
+    isSmokeAutoConfirm: () => true,
+  });
+  assert.equal(await smoke(null), true);
+});
