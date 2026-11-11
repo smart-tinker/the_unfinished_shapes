@@ -76,25 +76,56 @@ test('Escape gives an open dialog priority over drag cancellation and fullscreen
   assert.deepEqual(h.context.toggleCalls, ['toggle']);
 });
 
-test('resize reapplies the capped pixel ratio when display DPI changes',()=>{
- const h=rendererHarness(), listeners={}, ratios=[], sizes=[], aspects=[];
- h.context.window={addEventListener:(name,listener)=>{listeners[name]=listener;}};
- Object.assign(h.context,{
-  innerWidth:900,innerHeight:600,devicePixelRatio:1,
-  camera:{aspect:0,updateProjectionMatrix(){aspects.push(this.aspect);}},
-  renderer:{setPixelRatio:ratio=>ratios.push(ratio),setSize:(width,height)=>sizes.push([width,height])},
- });
- h.load("window.addEventListener('resize', () => {", "renderer.setAnimationLoop(() => {");
- assert.equal(typeof listeners.resize,'function');
- h.context.innerWidth=1200;h.context.innerHeight=800;h.context.devicePixelRatio=1.5;
- listeners.resize();
- assert.deepEqual(ratios,[1.5]);
- assert.deepEqual(sizes,[[1200,800]]);
- assert.equal(h.context.camera.aspect,1.5);
- h.context.innerWidth=1600;h.context.innerHeight=900;h.context.devicePixelRatio=3;
- listeners.resize();
- assert.deepEqual(ratios,[1.5,2]);
- assert.deepEqual(sizes,[[1200,800],[1600,900]]);
- assert.ok(Math.abs(h.context.camera.aspect-1600/900)<1e-9);
- assert.deepEqual(aspects,[1.5,1600/900]);
+function rendererResizeHarness() {
+  const h=rendererHarness(), listeners={}, queries=[], ratios=[], sizes=[], aspects=[];
+  let currentRatio=1;
+  h.context.window={
+    addEventListener:(name,listener)=>{listeners[name]=listener;},
+    matchMedia:query=>{
+      const item={query,listener:null,options:null,addEventListener(name,listener,options){if(name==='change'){this.listener=listener;this.options=options;}}};
+      queries.push(item);return item;
+    },
+  };
+  Object.assign(h.context,{
+    innerWidth:900,innerHeight:600,devicePixelRatio:1,
+    camera:{aspect:0,updateProjectionMatrix(){aspects.push(this.aspect);}},
+    renderer:{
+      getPixelRatio:()=>currentRatio,
+      setPixelRatio:ratio=>{currentRatio=ratio;ratios.push(ratio);},
+      setSize:(width,height)=>sizes.push([width,height]),
+    },
+  });
+  h.load('function resizeRenderer()', 'function initScene() {');
+  h.load("window.addEventListener('resize', resizeRenderer);", "renderer.setAnimationLoop(() => {");
+  return {h,listeners,queries,ratios,sizes,aspects};
+}
+
+test('window resize updates the capped pixel ratio, camera, and canvas size',()=>{
+  const {h,listeners,ratios,sizes,aspects}=rendererResizeHarness();
+  h.context.innerWidth=1200;h.context.innerHeight=800;h.context.devicePixelRatio=1.5;
+  listeners.resize();
+  assert.deepEqual(ratios,[1.5]);
+  assert.deepEqual(sizes,[[1200,800]]);
+  assert.equal(h.context.camera.aspect,1.5);
+  h.context.innerWidth=1600;h.context.innerHeight=900;h.context.devicePixelRatio=3;
+  listeners.resize();
+  assert.deepEqual(ratios,[1.5,2]);
+  assert.deepEqual(sizes,[[1200,800],[1600,900]]);
+  assert.ok(Math.abs(h.context.camera.aspect-1600/900)<1e-9);
+  assert.deepEqual(aspects,[1.5,1600/900]);
+});
+
+test('monitor DPI change updates rendering without a window resize and rearms the query',()=>{
+  const {h,queries,ratios,sizes}=rendererResizeHarness();
+  assert.equal(queries[0].query,'(resolution: 1dppx)');
+  assert.deepEqual(queries[0].options,{once:true});
+  h.context.devicePixelRatio=1.5;
+  queries[0].listener();
+  assert.deepEqual(ratios,[1.5]);
+  assert.deepEqual(sizes,[[900,600]]);
+  assert.equal(queries[1].query,'(resolution: 1.5dppx)');
+  h.context.devicePixelRatio=2.5;
+  queries[1].listener();
+  assert.deepEqual(ratios,[1.5,2]);
+  assert.equal(queries[2].query,'(resolution: 2.5dppx)');
 });
