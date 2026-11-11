@@ -6,7 +6,7 @@ import { placementPosition, positionUpdateCommand } from './placement.mjs';
 const $ = id => document.getElementById(id);
 const bridge = window.tus;
 let isFullscreen = false;
-let settings = { serverUrl: 'http://127.0.0.1:4317', token: '' };
+let settings = { serverUrl: 'http://127.0.0.1:4317', token: '', updateChannel: 'stable' };
 let selectedKind = 'block', selectedPreset = 'block', buildPreview = null, agentBuildPreview = null, selectedId = null, worldRevision = -1, connected = false, busy = false;
 let settingsGeneration = 0, ordinaryTurn = false;
 let agentControlState = null, agentControlRead = 0, agentControlLoading = false, agentControlBusy = false, goalMessageContextId = null;
@@ -1084,7 +1084,7 @@ $('find-codex').addEventListener('click', async () => {
 });
 for(const [button,kind,input] of [['browse-codex','codex','codex'],['browse-workspace','workspace','workspace']])$(button).addEventListener('click',async()=>{try{const selected=await bridge.choosePath(kind);if(selected)$(input).value=selected;}catch(error){$('settings-message').textContent=error.message;}});
 $('settings-open').addEventListener('click', () => $('settings').showModal()); $('settings-close').addEventListener('click', () => $('settings').close());
-function readSettings() { return { ...settings, workspacePath: $('workspace').value.trim(), codexPath: $('codex').value.trim(), serverUrl: $('server-url').value.trim(), token: $('token').value, lightingQuality:$('lighting-quality').value }; }
+function readSettings() { return { ...settings, workspacePath: $('workspace').value.trim(), codexPath: $('codex').value.trim(), serverUrl: $('server-url').value.trim(), token: $('token').value, lightingQuality:$('lighting-quality').value, updateChannel:$('update-channel').value }; }
 async function saveSettings() {
   if (editing) throw new Error('Finish the current world update before changing connection settings.');
   const next = readSettings();
@@ -1129,6 +1129,88 @@ async function saveSettings() {
 }
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('settings-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('settings-message').textContent = error.message; } });
 $('settings-form').addEventListener('submit', async event => { event.preventDefault(); $('connect').disabled = true; $('settings-message').textContent = 'Connecting to your Codex app-server…'; try { await saveSettings(); const result = await bridge.connectCodex({ ...settings, newGameThread: $('new-game-thread').checked }); settings.threadId = result.threadId; $('new-game-thread').checked = false; const { token, ...persisted } = settings; await bridge.saveSettings(persisted); connected = true; setAgentStatus('Ready · responds only when asked'); updateChatControls(); $('settings').close(); if ($('agent-controls').open) void refreshAgentControls(); addMessage(result.resumed ? 'Resumed your saved Codex conversation. It retains the tools registered when it was created. To use updated game commands, open Settings and explicitly select “Create a new game conversation”, then Connect. Your old conversation and its history are preserved. No request has been sent.' : 'Connected to your Codex workspace. No request has been sent.'); } catch (error) { $('settings-message').textContent = error.message; } finally { $('connect').disabled = false; } });
+const updateStatus = text => { $('updates-status').textContent = text; };
+let checkedUpdate = null, updateDownloaded = false, updateExtracted = false, updateBusy = false;
+function updateButtons() {
+  const available = checkedUpdate?.status === 'available';
+  $('updates-save').disabled = updateBusy;
+  $('updates-check').disabled = updateBusy;
+  $('updates-download').disabled = updateBusy || !available || updateDownloaded;
+  $('updates-cancel').disabled = !updateBusy;
+  $('updates-extract').disabled = updateBusy || !updateDownloaded || checkedUpdate?.distribution === 'installer' || updateExtracted;
+  $('updates-launch').disabled = updateBusy || !updateDownloaded || (checkedUpdate?.distribution !== 'installer' && !updateExtracted);
+  $('update-channel').disabled = updateBusy;
+  $('update-distribution').disabled = updateBusy;
+}
+async function saveUpdatePreference() {
+  const updateChannel = $('update-channel').value;
+  if (!['stable', 'prerelease'].includes(updateChannel)) throw new Error('Choose a valid update channel.');
+  const next = { ...settings, updateChannel };
+  const { token, ...persisted } = next;
+  await bridge.saveSettings(persisted);
+  settings = next;
+}
+$('updates-save').addEventListener('click', async () => {
+  try { await saveUpdatePreference(); updateStatus('Update preference saved.'); }
+  catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
+});
+$('updates-check').addEventListener('click', async () => {
+  updateBusy = true; checkedUpdate = null; updateDownloaded = false; updateExtracted = false; updateButtons();
+  updateStatus('Checking GitHub releases…');
+  try {
+    await saveUpdatePreference();
+    checkedUpdate = await bridge.checkUpdates($('update-distribution').value);
+    if (checkedUpdate.status === 'available') updateStatus('Update ' + checkedUpdate.version + ' is available. Review and download it when ready.');
+    else if (checkedUpdate.status === 'current') updateStatus('No newer release is available on this channel.');
+    else if (checkedUpdate.status === 'unsupported') updateStatus('This release has no package for this device.');
+    else updateStatus('No published releases are available on this channel.');
+  } catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
+  finally { updateBusy = false; updateButtons(); }
+});
+$('update-channel').addEventListener('change', () => { checkedUpdate = null; updateDownloaded = false; updateExtracted = false; updateStatus('Save the channel preference, then check for updates.'); updateButtons(); });
+$('update-distribution').addEventListener('change', () => { checkedUpdate = null; updateDownloaded = false; updateExtracted = false; updateStatus('Check again for the selected Windows package.'); updateButtons(); });
+$('updates-download').addEventListener('click', async () => {
+  updateBusy = true; updateButtons(); updateStatus('Downloading release package…');
+  try {
+    const result = await bridge.downloadUpdate();
+    updateDownloaded = true;
+    updateStatus('Verified ' + result.assetName + ' (SHA-256 ' + result.sha256.slice(0, 12) + '…).');
+  } catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
+  finally { updateBusy = false; updateButtons(); }
+});
+$('updates-cancel').addEventListener('click', async () => {
+  try { if (await bridge.cancelUpdate()) updateStatus('Cancelling download…'); }
+  catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
+});
+$('updates-extract').addEventListener('click', async () => {
+  updateBusy = true; updateButtons(); updateStatus('Choose a destination folder…');
+  try {
+    const result = await bridge.extractUpdate();
+    if (result.canceled) updateStatus('Folder selection cancelled.');
+    else { updateExtracted = true; updateStatus('Verified archive extracted. You can now launch the new copy.'); }
+  } catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
+  finally { updateBusy = false; updateButtons(); }
+});
+$('updates-launch').addEventListener('click', async () => {
+  try {
+    const result = await bridge.launchUpdate();
+    updateStatus(result.started ? 'Waiting for the quit confirmation…' : 'Update launch cancelled.');
+  } catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
+});
+bridge?.onUpdateProgress(progress => {
+  if (progress?.state === 'downloading') {
+    const received = (progress.received / 1048576).toFixed(1);
+    const total = (progress.total / 1048576).toFixed(1);
+    updateStatus('Downloading release package: ' + received + ' / ' + total + ' MB.');
+  } else if (progress?.state === 'verified') {
+    updateStatus('Verified ' + progress.assetName + ' (SHA-256 ' + progress.sha256.slice(0, 12) + '…).');
+  } else if (progress?.state === 'extracted') {
+    updateExtracted = true; updateStatus('Verified archive extracted. You can now launch the new copy.'); updateButtons();
+  } else if (progress?.state === 'launch-cancelled') {
+    updateStatus('Quit was cancelled. TUS is still open; the update remains available.');
+  }
+});
+updateButtons();
 const toolRows = new Map(), itemRows = new Map(), moveStarts = new Map();
 let stopRequested = false, acceptedThreadId = null, currentTurnId = null;
 const retiredTurns = new Set();
@@ -1349,6 +1431,6 @@ function codexEvent(event) {
 try { initScene(); } catch (error) { $('scene-error').hidden = false; $('scene-error').textContent = `3D rendering unavailable: ${error.message}. Check hardware acceleration and restart.`; }
 if (!bridge) { feedback('Open this app through its desktop launcher.', true); $('settings-open').disabled = true; }
 else {
-  try { const saved = await bridge.loadSettings(); settings = { ...settings, ...saved }; $('lighting-quality').value=settings.lightingQuality||'full'; $('workspace').value = settings.workspacePath || ''; $('codex').value = settings.codexPath || ''; $('server-url').value = settings.serverUrl; if (!/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(settings.serverUrl)) settings.token = ''; $('token').value = settings.token; } catch (error) { feedback(error.message, true); }
+  try { const saved = await bridge.loadSettings(); settings = { ...settings, ...saved }; $('lighting-quality').value=settings.lightingQuality||'full'; $('update-channel').value=settings.updateChannel||'stable'; $('workspace').value = settings.workspacePath || ''; $('codex').value = settings.codexPath || ''; $('server-url').value = settings.serverUrl; if (!/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(settings.serverUrl)) settings.token = ''; $('token').value = settings.token; } catch (error) { feedback(error.message, true); }
   bridge.onCodexEvent(codexEvent); await poll(); setInterval(poll, 1000); setInterval(syncPosition, 250);
 }

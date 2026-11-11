@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { downloadVerifiedAsset, extractVerifiedArchive, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, verifyReleaseAttestation } from '../src/update-package.mjs';
 
 const tag = 'v0.1.0-rc11';
 const asset = {
@@ -62,11 +62,11 @@ test('verifies the exact GitHub release workflow identity and matching asset pro
   });
 
   assert.equal(args[0].mediaType, 'application/vnd.dev.sigstore.bundle.v0.3+json');
-  assert.equal(args[1], undefined);
-  assert.deepEqual(args[2], {
-    certificateIdentity: 'https://github.com/smart-tinker/the_unfinished_shapes/.github/workflows/stage-release.yml@refs/heads/release/0.1.0-rc11',
+  assert.deepEqual(args[1], {
+    certificateIdentityURI: '^https://github\\.com/smart-tinker/the_unfinished_shapes/\\.github/workflows/stage-release\\.yml@refs/heads/release/0\\.1\\.0-rc11$',
     certificateIssuer: 'https://token.actions.githubusercontent.com',
   });
+  assert.equal(args.length, 2);
   assert.equal(result.sourceSha, sourceSha);
   assert.equal(result.assetName, asset.name);
 });
@@ -210,11 +210,47 @@ test('archive extraction refuses to replace an existing version folder', async (
     const marker = path.join(target, 'keep.txt');
     await (await import('node:fs/promises')).writeFile(marker, 'user file');
     await assert.rejects(
-      extractVerifiedArchive({ filePath: path.join(parent, 'missing.zip'), directory: parent, tag }),
+      extractVerifiedArchive({ filePath: path.join(parent, 'missing.zip'), directory: parent, tag, assetName: 'TheUnfinishedShapes-0.1.0-rc.11-linux-x64.tar.gz', sha256: 'a'.repeat(64), platform: 'linux' }),
       /exists|already|destination/i,
     );
     assert.equal(await readFile(marker, 'utf8'), 'user file');
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
+});
+
+
+test('archive extraction keeps the macOS app bundle destination', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-macos-'));
+  const target = path.join(parent, 'TheUnfinishedShapes-0.1.0-rc.11.app');
+  try {
+    await (await import('node:fs/promises')).mkdir(target);
+    await assert.rejects(
+      extractVerifiedArchive({
+        filePath: path.join(parent, 'missing.zip'),
+        directory: parent,
+        tag,
+        assetName: 'TheUnfinishedShapes-0.1.0-rc.11-darwin-arm64.zip',
+        sha256: 'a'.repeat(64),
+        platform: 'darwin',
+      }),
+      /exists|already|destination/i,
+    );
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test('archive entry paths stay under the exact package root', () => {
+  assert.equal(
+    safeArchiveEntryPath('TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe', 'TheUnfinishedShapes-win32-x64'),
+    'TheUnfinishedShapes.exe',
+  );
+  for (const name of [
+    '../outside.txt',
+    'TheUnfinishedShapes-win32-x64/../../outside.txt',
+    'TheUnfinishedShapes-win32-x64/C:/outside.txt',
+    '/TheUnfinishedShapes-win32-x64/app.exe',
+    'TheUnfinishedShapes-win32-x64\\..\\outside.txt',
+  ]) assert.throws(() => safeArchiveEntryPath(name, 'TheUnfinishedShapes-win32-x64'), /archive|unsafe/i);
 });
