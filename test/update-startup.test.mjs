@@ -46,3 +46,10 @@ test('startup update discovery is non-blocking and has an accessible entry point
  assert.match(renderer,/void bridge\.checkStartupUpdates\(\)/);
  assert.match(html,/id="updates-notice"[^>]*hidden/);
 });
+
+test('selected-channel update status includes bounded release notes',()=>{
+ const renderer=readFileSync(new URL('../src/renderer.mjs',import.meta.url),'utf8');
+ const check=renderer.slice(renderer.indexOf("$('updates-check')"),renderer.indexOf("$('update-channel')"));
+ assert.match(check,/checkedUpdate\.notes/);
+ assert.match(check,/Release notes/);
+});
