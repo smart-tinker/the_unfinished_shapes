@@ -33,3 +33,17 @@
 
 #selection-rectangle{position:fixed;z-index:4;border:1px solid var(--amber);background:#f2c56d33;pointer-events:none}#box-select-toggle[aria-pressed=true]{border-color:var(--amber);background:#514731;color:var(--amber)}#group-controls .edit-actions{margin:0}
 .world-lighting{border-top:1px solid #47534f;margin:14px 0;padding-top:10px}.world-lighting summary{cursor:pointer;color:#d7dfd3;font:9px monospace;letter-spacing:.12em}.world-lighting label{margin-top:8px}.world-lighting input,#settings select{width:100%;margin-top:5px;background:#111b1f;border:1px solid #465052;color:var(--paper);border-radius:4px;padding:8px}
+
+#settings{width:min(640px,96vw);padding:22px;max-height:90vh;overflow:auto}
+#settings-form{display:grid;gap:12px}
+.settings-section{display:grid;gap:8px;min-width:0;border-top:1px solid #45524f;padding-top:11px}
+.settings-section h3{font-size:13px;font-weight:500;margin:0}
+.settings-section>p{margin:0}
+.settings-section label{margin:0}
+.settings-section .path-actions{margin:0}
+.settings-section details{font-size:11px;color:var(--muted)}
+.settings-section details summary{cursor:pointer;color:#d7dfd3}
+.settings-section details p{margin:6px 0 0}
+.settings-actions{display:flex;gap:8px;flex-wrap:wrap}
+#settings .codex-results{max-height:110px;margin:0;overflow:auto}
+#settings .feedback,#settings .dialog-actions{margin:0}
