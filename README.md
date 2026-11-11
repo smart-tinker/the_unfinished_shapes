@@ -55,7 +55,7 @@ node scripts/package-macos.mjs
 
 Packaged folders appear under `dist/`. Windows binaries are unsigned; macOS arm64 uses an ad-hoc signature without notarization. Windows packaging does not prove Windows runtime behavior; verify on Windows before wider release. GitHub CI validates source and tests with read-only repository access. Manual staging builds each candidate once, tests its final installer and extracted archives, and preserves those same files and SHA-256 hashes in a new draft. A separate manual publish verifies that candidate and promotes the draft without rebuilding. Ordinary CI does not publish releases or deploy the world server.
 
-Release candidates use [issue-scoped PRs and an RC branch](CONTRIBUTING.md). Publication is explicit, after native platform checks, [real CPU-model acceptance](docs/LOCAL-MODEL-E2E.md) within the same staging workflow and interactive testing of the exact candidate files. Acceptance uses current-candidate fixtures, not previous releases or historical passing runs. See [rc8 notes](docs/RELEASE-0.1-rc8.md).
+Release candidates use [issue-scoped PRs and an RC branch](CONTRIBUTING.md). Publication is explicit, after native platform checks, [real CPU-model acceptance](docs/LOCAL-MODEL-E2E.md) within the same staging workflow and interactive testing of the exact candidate files. Acceptance uses current-candidate fixtures, not previous releases or historical passing runs. See [RC11 candidate notes](docs/RELEASE-0.1-rc11.md) and the source-bound [graphics measurements](docs/GRAPHICS.md).
 
 ## A new mechanic
 
