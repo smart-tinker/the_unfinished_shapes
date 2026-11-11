@@ -14,6 +14,7 @@ let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 0, z: 
 let worldState = { lighting:{version:0,ambientIntensity:2.6,sunIntensity:3.1}, objects: [] };
 let scene, renderer, camera, controls, player, companion, ambientLight, sunLight, worldLightingPreview=null, lightingInputVersion=-1;
 const lampLights = new Map();
+const previewLampLights = new Map();
 let dragCandidate = null, movePreview = null, boxCandidate = null, boxSelectMode = false;
 const selectedIds = new Set(), selectionBoxes = new Map(), beaconLabels = new Map(), MAX_GROUP_SELECTION = 32;
 const BEACON_LABEL_RANGE = 40, MAX_VISIBLE_BEACON_LABELS = 8;
@@ -204,12 +205,13 @@ function updateWorldLighting(state=worldState) {
   ambientLight.intensity=lighting.ambientIntensity;
   sunLight.intensity=lighting.sunIntensity;
   const limit=settings.lightingQuality==='reduced'?4:8,target=controls?.target??{x:0,y:0,z:0};
-  const active=[...lampLights.values()].filter(item=>item.object.on).sort((a,b)=>{
+  const lamps=[...lampLights.values(),...previewLampLights.values()];
+  const active=lamps.filter(item=>item.object.on).sort((a,b)=>{
     const distance=item=>{const p=item.object.position;return (p.x-target.x)**2+(p.y-target.y)**2+(p.z-target.z)**2;};
     return distance(a)-distance(b)||a.object.id.localeCompare(b.object.id);
   }).slice(0,limit);
-  const visible=new Set(active.map(item=>item.object.id));
-  for(const [id,item] of lampLights){item.light.visible=visible.has(id);item.light.intensity=item.object.on?item.object.intensity:0;item.light.distance=item.object.range;if(item.light.color?.set)item.light.color.set(item.object.color);}
+  const visible=new Set(active);
+  for(const item of lamps){item.light.visible=visible.has(item);item.light.intensity=item.object.on?item.object.intensity:0;item.light.distance=item.object.range;if(item.light.color?.set)item.light.color.set(item.object.color);}
   const shadows=settings.lightingQuality!=='reduced';
   sunLight.castShadow=shadows;renderer.shadowMap.enabled=shadows;
 }
@@ -261,6 +263,7 @@ async function applyWorldLightingPreview() {
     const expectedVersion=preview.version+(preview.ambientIntensity===baseline.ambientIntensity&&preview.sunIntensity===baseline.sunIntensity?0:1);
     if(!Number.isSafeInteger(result?.revision)||!result.lighting||result.lighting.version!==expectedVersion||
        result.lighting.ambientIntensity!==preview.ambientIntensity||result.lighting.sunIntensity!==preview.sunIntensity)throw new Error('The server response did not confirm the requested lighting.');
+    if(result.revision<latestStateRevision)throw new Error('A newer world revision arrived while Apply was pending.');
     worldState={...worldState,revision:result.revision,lighting:result.lighting};worldRevision=result.revision;latestStateRevision=Math.max(latestStateRevision,result.revision);
     worldLightingPreview=null;updateWorldLighting(worldState);updateLightingControls(true);
     $('world-light-message').textContent='Shared world lighting saved.';
@@ -369,6 +372,7 @@ function updateBeaconLabels() {
 }
 function clearBuildPreview() {
   if (buildPreview?.mesh) { scene?.remove(buildPreview.mesh); disposeGroup(buildPreview.mesh); }
+  if(buildPreview?.lampId){previewLampLights.delete(buildPreview.lampId);updateWorldLighting(worldState);}
   buildPreview = null;
   $('build-preview-actions').hidden = true; $('build-preview-status').hidden = true;
   $('build-preview-status').textContent = ''; $('build-apply').disabled = false; $('build-cancel').disabled = false;
@@ -376,8 +380,20 @@ function clearBuildPreview() {
 function clearAgentBuildPreview(message = 'Preview cleared. The shared world was not changed.') {
   const preview=agentBuildPreview;if(!preview)return;
   for(const mesh of preview.meshes){scene?.remove(mesh);disposeGroup(mesh);}
+  clearPreviewLampLights(preview.lampIds);
   preview.applyButton.disabled=true;preview.cancelButton.disabled=true;
   preview.status.textContent=message;agentBuildPreview=null;
+}
+function clearPreviewLampLights(ids=[]) {
+  if(!ids.length)return;
+  for(const id of ids)previewLampLights.delete(id);
+  updateWorldLighting(worldState);
+}
+function registerPreviewLampLight(id,object,mesh) {
+  if(!mesh.userData.lampLight)return false;
+  const lamp={...object,id,type:'lamp',on:true,intensity:object.intensity??2,range:object.range??8};
+  previewLampLights.set(id,{object:lamp,light:mesh.userData.lampLight,emitter:mesh.userData.lampEmitter});
+  return true;
 }
 function updateAgentBuildPreviewControls() {
   if(!agentBuildPreview)return;
@@ -387,21 +403,24 @@ function updateAgentBuildPreviewControls() {
 function showAgentBuildPreview(value, threadId = settings.threadId) {
   if(!value||typeof value.previewId!=='string'||!Array.isArray(value.objects)||value.objects.length<1||value.objects.length>32||typeof threadId!=='string'||!scene) { addMessage('The agent preview could not be displayed, so it cannot be approved.','error');return; }
   clearAgentBuildPreview('Replaced by a newer proposal. No shared-world changes were made.');
-  const meshes=[];
+  const meshes=[],lampIds=[];
   try {
-    for(const design of value.objects){
+    for(const [index,design] of value.objects.entries()){
       if(!design||!['block','bridge','port','stairs','ramp','sign','beacon','door','gate','button','lamp'].includes(design.objectType)||!design.position||!design.size)throw new Error('Invalid preview object.');
-      const mesh=objectMesh({type:design.objectType,direction:design.direction,position:design.position,size:design.size,color:design.color,text:design.text,name:design.name,...(design.objectType==='lamp'?{on:true,intensity:2,range:8}:{})});
+      const object={id:'agent-preview:'+value.previewId+':'+index,type:design.objectType,direction:design.direction,position:design.position,size:design.size,color:design.color,text:design.text,name:design.name,...(design.objectType==='lamp'?{on:true,intensity:2,range:8}:{})};
+      const mesh=objectMesh(object);
       mesh.traverse(child=>{if(!child.material)return;child.material=child.material.clone();child.material.color.set('#efbd61');child.material.transparent=true;child.material.opacity=.48;child.material.depthWrite=false;});
       meshes.push(mesh);scene.add(mesh);
+      if(object.type==='lamp'){if(!registerPreviewLampLight(object.id,object,mesh))throw new Error('Lamp preview light is unavailable.');lampIds.push(object.id);}
     }
-  } catch(error){for(const mesh of meshes){scene.remove(mesh);disposeGroup(mesh);}addMessage('The agent preview could not be displayed: '+error.message,'error');return;}
+  } catch(error){clearPreviewLampLights(lampIds);for(const mesh of meshes){scene.remove(mesh);disposeGroup(mesh);}addMessage('The agent preview could not be displayed: '+error.message,'error');return;}
   const card=addMessage('The agent proposes '+value.objects.length+' shapes. Does the complete set look right?','system');
   const status=document.createElement('p');status.textContent='Amber shapes are local previews only; nothing has changed on the server.';
   const applyButton=document.createElement('button');applyButton.type='button';applyButton.textContent='Approve and Apply';
   const cancelButton=document.createElement('button');cancelButton.type='button';cancelButton.textContent='Cancel';
   card.append(status);card.append(applyButton);card.append(cancelButton);
-  const preview={previewId:value.previewId,threadId,meshes,card,status,applyButton,cancelButton,attempted:false};agentBuildPreview=preview;
+  const preview={previewId:value.previewId,threadId,meshes,lampIds,card,status,applyButton,cancelButton,attempted:false};agentBuildPreview=preview;
+  updateWorldLighting(worldState);
   cancelButton.addEventListener('click',async()=>{
     if(agentBuildPreview!==preview||preview.attempted)return;
     cancelButton.disabled=true;applyButton.disabled=true;
@@ -447,13 +466,16 @@ function previewSelectedBuild() {
   if (editing) return;
   clearBuildPreview();
   if (!scene) { feedback('The 3D scene is not ready; the shared world was not changed.', true); return; }
-  const design = buildDesign(), object = { id: 'build-preview', type: design.objectType, position: design.position, size: design.size, color: design.color, direction: design.direction, text: design.text, name: design.name };
+  const design = buildDesign(), object = { id: 'build-preview', type: design.objectType, position: design.position, size: design.size, color: design.color, direction: design.direction, text: design.text, name: design.name, ...(design.objectType==='lamp'?{on:true,intensity:2,range:8}:{}) };
   const mesh = objectMesh(object);
   mesh.traverse(child => {
     if (!child.material) return;
     child.material = child.material.clone(); child.material.color.set('#f3c969'); child.material.transparent = true; child.material.opacity = .42; child.material.depthWrite = false;
   });
-  scene.add(mesh); buildPreview = { command: design, mesh, attempted: false };
+  scene.add(mesh);
+  const lampId=object.type==='lamp'&&registerPreviewLampLight(object.id,object,mesh)?object.id:null;
+  buildPreview = { command: design, mesh, lampId, attempted: false };
+  updateWorldLighting(worldState);
   $('build-preview-actions').hidden = false; $('build-preview-status').hidden = false;
   $('build-preview-status').textContent = 'Local preview only. Apply to add this shape to the shared world.';
   $('build-apply').disabled = false; feedback('Preview only — the shared world has not changed.');
