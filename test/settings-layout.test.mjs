@@ -39,3 +39,9 @@ test('long Codex instructions are available in a native keyboard-accessible disc
   assert.match(codex, /<details>[\s\S]*?<summary>Codex details<\/summary>[\s\S]*?Search checks PATH[\s\S]*?<\/details>/);
   assert.match(codex, /<details>[\s\S]*?<summary>Conversation history<\/summary>[\s\S]*?preserves the old conversation[\s\S]*?<\/details>/);
 });
+
+test('Codex status and the safe reconnect instruction are visible in Settings', () => {
+  const codex = section('settings-codex');
+  assert.match(codex, /id="settings-codex-status"[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(codex, /Disconnected\? Check the Codex executable path, then select Connect\. The saved conversation stays intact\./);
+});

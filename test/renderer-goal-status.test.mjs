@@ -14,6 +14,15 @@ function harness() {
   return h;
 }
 
+test('Settings mirrors the live Codex status from the companion panel', () => {
+  const h = rendererHarness();
+  h.run("let connected = true, busy = false, agentControlState = { threadStatus: 'idle', pendingApprovals: 0, goal: null }, goalMessageContextId = null; refreshAgentStatus()");
+  assert.equal(h.element('agent-status').textContent, 'Connected · idle');
+  assert.equal(h.element('settings-codex-status').textContent, 'Connected · idle');
+  h.run("connected = false; refreshAgentStatus()");
+  assert.equal(h.element('settings-codex-status').textContent, 'Codex disconnected');
+});
+
 test('a new Codex connection reports unknown activity until state is confirmed', () => {
   const h = harness();
   h.run("codexEvent({ type: 'connected', threadId: 'thread-1' })");
@@ -51,6 +60,7 @@ test('disconnect never presents the agent as idle or the Goal as stopped', () =>
   const h = harness();
   h.run("codexEvent({ type: 'connected', threadId: 'thread-1' }); agentControlState = { threadStatus: 'idle', pendingApprovals: 0, goal: { id: 'goal-1', status: 'active' } }; codexEvent({ type: 'disconnected' })");
   assert.equal(h.element('agent-status').textContent, 'Codex disconnected · activity unknown');
+  assert.equal(h.element('settings-codex-status').textContent, 'Codex disconnected · activity unknown');
 });
 
 function goalTurnHarness() {
