@@ -122,6 +122,7 @@ test('window resize updates the capped pixel ratio, camera, and canvas size',()=
 
 test('monitor DPI change updates rendering without a window resize and rearms the query',()=>{
   const {h,queries,ratios,sizes}=rendererResizeHarness();
+  assert.ok(h.has('function watchPixelRatio()'),'DPI-only changes need a resolution media-query watcher');
   assert.equal(queries[0].query,'(resolution: 1dppx)');
   assert.deepEqual(queries[0].options,{once:true});
   h.context.devicePixelRatio=1.5;
