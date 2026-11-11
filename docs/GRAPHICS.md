@@ -49,7 +49,7 @@ Environment: Windows 11 Pro `10.0.26300`, AMD Ryzen 7 7700 8-Core Processor, 8 l
 
 The installed application ran in isolated temporary data profiles; no local application build was used. Each scene had one connected client, eight enabled lamps, a 1424×875 canvas and DPR 1. The user's original client remained open behind the test client in a separate world. Full selects up to eight nearby lamps and sun shadows; Reduced selects four and removes sun shadows. Lamps themselves do not cast shadows.
 
-Each sample used two seconds of warmup, three seconds idle, eight version-guarded block-color updates spaced by 1.2 seconds, then twenty bounded moves spaced by 100 ms plus a one-second settle. Every update's revision was observed by the renderer; every measured phase remained visible and focused. The table reports requestAnimationFrame intervals in milliseconds, with idle / update / movement order. Raw intervals were independently checked. Every median was 16.7 ms.
+Each sample used two seconds of warmup, three seconds idle, eight version-guarded block-color updates spaced by 1.2 seconds, then twenty bounded moves spaced by 100 ms plus a one-second settle. Every update's revision was observed by the renderer. Each phase had focus at its start and was visible and focused at its end. The table reports requestAnimationFrame intervals in milliseconds, with idle / update / movement order. Raw intervals were independently checked. Every median was 16.7 ms.
 
 | Objects | Quality | Samples idle / update / move | p95 idle / update / move (ms) | Update p99 / max (ms) | Update intervals >30 ms |
 |---:|---|---|---|---|---|
