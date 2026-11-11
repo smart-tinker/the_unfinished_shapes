@@ -95,11 +95,16 @@ function rendererResizeHarness() {
       setSize:(width,height)=>sizes.push([width,height]),
     },
   });
-  h.load('function resizeRenderer()', 'function initScene() {');
-  h.load("window.addEventListener('resize', resizeRenderer);", "renderer.setAnimationLoop(() => {");
+  if(h.has('function resizeRenderer()')){
+    h.load('function resizeRenderer()','function watchPixelRatio()');
+    h.load('function watchPixelRatio()','function initScene() {');
+    h.load("window.addEventListener('resize', resizeRenderer);","renderer.setAnimationLoop(() => {");
+    h.run('watchPixelRatio()');
+  }else{
+    h.load("window.addEventListener('resize', () => {","renderer.setAnimationLoop(() => {");
+  }
   return {h,listeners,queries,ratios,sizes,aspects};
 }
-
 test('window resize updates the capped pixel ratio, camera, and canvas size',()=>{
   const {h,listeners,ratios,sizes,aspects}=rendererResizeHarness();
   h.context.innerWidth=1200;h.context.innerHeight=800;h.context.devicePixelRatio=1.5;
