@@ -15,6 +15,7 @@ function sceneHarness(selectedId = 'object-1') {
     camera={position:{x:1,y:2,z:3},fov:42,aspect:1.5,near:0.1,far:220},
     controls={target:{x:0,y:0,z:0}},
     renderer={domElement:{clientWidth:900,clientHeight:600}};`);
+  h.context.selectedIds = selectedId ? new Set([selectedId]) : new Set();
   return h;
 }
 

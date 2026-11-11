@@ -23,8 +23,9 @@ export async function manualEditing(page) {
   await page.locator('[data-kind="block"]').click();
   await page.locator('#build-x').fill('3');
   await page.locator('#build-z').fill('4');
-  await page.locator('#build-form button').click();
-  await page.waitForFunction(() => document.querySelector('#world-message').textContent.includes('Block placed'));
+  await page.locator('#build-preview').click();
+  await page.locator('#build-apply').click();
+  await page.waitForFunction(() => document.querySelector('#world-message').textContent.includes('Shape added to the shared world.'));
   const built = await state();
   assert.equal(built.objects.length, before.objects.length + 1);
   const object = built.objects.find(o => !before.objects.some(old => old.id === o.id));

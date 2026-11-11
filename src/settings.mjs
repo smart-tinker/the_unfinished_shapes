@@ -12,6 +12,8 @@ export function cleanSettings(value = {}) {
   if(!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Settings must be an object.');
   if(value.schemaVersion !== undefined && value.schemaVersion !== 1) throw new Error('These settings were created by a newer, incompatible version. They were not changed.');
   const output={schemaVersion:1};
+  if(value.lightingQuality!==undefined&&!['full','reduced'].includes(value.lightingQuality))throw new Error('Invalid saved lighting quality.');
+  output.lightingQuality=value.lightingQuality??'full';
   for(const key of ['workspacePath','codexPath','serverUrl','threadId','agentModelId','agentEffort','agentControlThreadId']) output[key]=string(value[key],key);
   if(output.agentModelId && !output.agentControlThreadId) throw new Error('Agent model preferences must be bound to a Codex conversation.');
   if(output.agentEffort && !output.agentModelId) throw new Error('Agent reasoning effort requires a selected model.');

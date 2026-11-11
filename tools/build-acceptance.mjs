@@ -1,28 +1,30 @@
 import assert from 'node:assert/strict';
 
-// Product acceptance: every genuine valid construction is executed, including
-// repeated identical requests. This does not measure model instruction fidelity.
 export function assertBuildAcceptance({events, state, design, ownerId}) {
   assert.ok(Array.isArray(events), 'Missing real tool-call records.');
-  const commands = events.filter(event => event.name !== 'world_state');
-  assert.ok(commands.length >= 1, 'Expected at least one genuine model-issued construction.');
-  for (const command of commands) {
-    assert.equal(command.name, 'world_build', 'Unexpected non-construction tool call.');
-    assert.equal(command.success, true, 'Real-model construction did not succeed.');
-    assert.deepEqual(command.arguments, design, 'Model changed or omitted supplied build parameters.');
-  }
+  const actions = events.filter(event => event.name !== 'world_state');
+  assert.equal(actions.length, 2, 'Expected one preview and one approved Apply.');
+  const [preview, apply] = actions;
+  assert.equal(preview.name, 'world_preview');
+  assert.equal(preview.success, true, 'Real-model preview did not succeed.');
+  assert.deepEqual(preview.arguments, {objects:[design]}, 'Model changed or omitted supplied design fields.');
+  assert.equal(typeof preview.value?.previewId, 'string');
+  assert.deepEqual(preview.value.objects, [design]);
+  assert.equal(apply.name, 'world_apply');
+  assert.equal(apply.success, true, 'The approved construction did not succeed.');
+  assert.deepEqual(apply.arguments, {previewId:preview.value.previewId});
+  assert.ok(Number.isSafeInteger(apply.value?.revision), 'Missing server revision for Apply.');
+  assert.ok(Array.isArray(apply.value?.objects));
+  assert.equal(apply.value.objects.length, 1);
   assert.ok(Array.isArray(state?.objects), 'Missing persisted objects.');
-  assert.equal(state.objects.length, commands.length, 'Persisted object count must equal successful valid construction calls.');
-  const ids = new Set();
-  for (const object of state.objects) {
-    assert.ok(typeof object.id === 'string' && object.id.length > 0, 'Persisted object must have an ID.');
-    assert.ok(!ids.has(object.id), 'Persisted object IDs must be unique.');
-    ids.add(object.id);
-    assert.equal(object.type, design.objectType);
-    assert.equal(object.ownerId, ownerId);
-    assert.deepEqual(object.position, design.position);
-    assert.deepEqual(object.size, design.size);
-    assert.equal(object.color, design.color);
-  }
-  return { constructionCalls: commands.length, persistedObjects: state.objects.length };
+  assert.equal(state.objects.length, 1, 'The approved set must persist exactly once.');
+  assert.deepEqual(state.objects, apply.value.objects, 'Persisted state must match the server-confirmed Apply result.');
+  const object = state.objects[0];
+  assert.ok(typeof object.id === 'string' && object.id.length > 0, 'Persisted object must have an ID.');
+  assert.equal(object.type, design.objectType);
+  assert.equal(object.ownerId, ownerId);
+  assert.deepEqual(object.position, design.position);
+  assert.deepEqual(object.size, design.size);
+  assert.equal(object.color, design.color);
+  return {constructionCalls:1,persistedObjects:1};
 }

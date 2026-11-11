@@ -1,12 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyWorld,applyCommand,validateWorld} from '../src/world.mjs';
+import {emptyWorld,applyCommand,validateWorld,mechanics} from '../src/world.mjs';
 const builder={id:'alice',role:'builder'};
 const build={type:'build',objectType:'block',position:{x:0,y:1,z:0}};
 test('build is immutable and ownership is server-derived',()=>{
  const original=emptyWorld(); const {state,result}=applyCommand(original,builder,{...build,ownerId:'bob'});
  assert.equal(original.objects.length,0); assert.equal(state.objects[0].ownerId,'alice'); assert.equal(result.revision,1); validateWorld(state);
 });
+test('build_group applies a complete approved set in one revision and rejects invalid sets atomically',()=>{
+ const objects=[
+  {objectType:'block',position:{x:0,y:1,z:0},size:{x:2,y:2,z:2},color:'#123456'},
+  {objectType:'stairs',direction:'east',position:{x:8,y:1,z:0},size:{x:8,y:2,z:4},color:'#654321'},
+ ];
+ const original=emptyWorld();
+ const {state,result}=applyCommand(original,builder,{type:'build_group',objects});
+ assert.equal(result.revision,1);assert.equal(result.objects.length,2);assert.equal(state.revision,1);
+ assert.deepEqual(state.objects.map(object=>object.ownerId),['alice','alice']);
+ assert.deepEqual(state.objects.map(object=>object.type),['block','stairs']);
+ assert.equal(original.objects.length,0);validateWorld(state);
+ const before=structuredClone(state);
+ assert.throws(()=>applyCommand(state,builder,{type:'build_group',objects:[objects[0],{...objects[1],direction:'up'}]}),{code:'invalid_direction'});
+ assert.deepEqual(state,before);
+ assert.throws(()=>applyCommand(state,{id:'viewer',role:'viewer'},{type:'build_group',objects}),{code:'forbidden'});
+ assert.deepEqual(state,before);
+});
+
 test('permissions and unknown mechanics fail closed',()=>{
  assert.throws(()=>applyCommand(emptyWorld(),{id:'x',role:'viewer'},build),{code:'forbidden'});
  assert.throws(()=>applyCommand(emptyWorld(),builder,{...build,objectType:'nuclear-port'}),{code:'new_mechanic_required'});
@@ -196,4 +214,277 @@ test('movement rejects non-numeric, non-finite, and out-of-range coordinates',()
  for(const x of [NaN,Infinity,-Infinity,1001,-1001,'1',null]){
   assert.throws(()=>applyCommand(emptyWorld(),builder,{type:'move',position:{x,y:0,z:0}}));
  }
+});
+
+
+function groupMoveWorld() {
+ let state=emptyWorld();
+ for(const position of [{x:0,y:1,z:0},{x:4,y:1,z:0},{x:4,y:1,z:3}]) {
+  state=applyCommand(state,builder,{type:'build',objectType:'block',position}).state;
+ }
+ return state;
+}
+function groupMove(objects,delta={x:2,y:0,z:-1}) {
+ return {type:'move_group',changes:objects.map(object=>({
+  id:object.id,
+  position:{x:object.position.x+delta.x,y:object.position.y+delta.y,z:object.position.z+delta.z},
+  expectedPosition:object.position,
+ }))};
+}
+test('group move applies one shared delta in one revision without mutating the input',()=>{
+ const state=groupMoveWorld(), before=structuredClone(state), objects=state.objects;
+ const moved=applyCommand(state,builder,groupMove(objects));
+ assert.equal(moved.result.revision,state.revision+1);
+ assert.deepEqual(moved.result.objects.map(object=>object.id),objects.map(object=>object.id));
+ assert.deepEqual(moved.result.objects.map(object=>object.position),[
+  {x:2,y:1,z:-1},{x:6,y:1,z:-1},{x:6,y:1,z:2},
+ ]);
+ assert.deepEqual(state,before);
+ assert.deepEqual(moved.state.objects.map(object=>object.ownerId),['alice','alice','alice']);
+});
+test('group move rejects mixed ownership, missing IDs, stale positions, duplicates and oversized groups atomically',()=>{
+ const base=groupMoveWorld(), carol={id:'carol',role:'builder'};
+ const state=applyCommand(base,carol,{type:'build',objectType:'block',position:{x:8,y:1,z:0}}).state;
+ const original=structuredClone(state), foreign=state.objects.at(-1);
+ const aliceObjects=base.objects;
+ const cases=[
+  [groupMove([...aliceObjects.slice(0,1),foreign]),builder,'forbidden'],
+  [{type:'move_group',changes:[...groupMove(aliceObjects.slice(0,2)).changes,{...groupMove([aliceObjects[2]]).changes[0],id:'missing'}]},builder,'not_found'],
+  [{type:'move_group',changes:[{...groupMove(aliceObjects.slice(0,2)).changes[0],expectedPosition:{x:99,y:1,z:0}},groupMove(aliceObjects.slice(0,2)).changes[1]]},builder,'conflict'],
+  [{type:'move_group',changes:[groupMove(aliceObjects.slice(0,2)).changes[0],groupMove(aliceObjects.slice(0,2)).changes[0]]},builder,'invalid_command'],
+  [{type:'move_group',changes:[]},builder,'invalid_command'],
+  [{type:'move_group',changes:Array.from({length:33},(_,index)=>({id:'shape-'+index,position:{x:0,y:1,z:0},expectedPosition:{x:0,y:1,z:0}}))},builder,'invalid_command'],
+  [{...groupMove(aliceObjects.slice(0,2)),unexpected:true},builder,'invalid_command'],
+ ];
+ for(const [command,actor,code] of cases) {
+  const snapshot=structuredClone(original);
+  assert.throws(()=>applyCommand(snapshot,actor,command),{code});
+  assert.deepEqual(snapshot,original,code);
+ }
+});
+
+
+test('stairs and ramps are explicit world mechanics with a saved uphill direction',()=>{
+ for(const [objectType,direction] of [['stairs','north'],['ramp','east']]){
+  const {state,result}=applyCommand(emptyWorld(),builder,{type:'build',objectType,direction,position:{x:0,y:1,z:0},size:{x:4,y:2,z:8}});
+  assert.ok(mechanics.includes(objectType));
+  assert.equal(result.object.direction,direction);
+  assert.deepEqual({blocksMovement:result.object.blocksMovement,supportsPlayer:result.object.supportsPlayer},{blocksMovement:true,supportsPlayer:true});
+  assert.equal(validateWorld(state).objects[0].direction,direction);
+ }
+});
+
+test('stairs and ramps reject invalid or missing directions and corrupt saved directions',()=>{
+ for(const objectType of ['stairs','ramp']){
+  for(const direction of [undefined,'up','north-east',null,1]){
+   const command={type:'build',objectType,position:{x:0,y:1,z:0},size:{x:4,y:2,z:8}};
+   if(direction!==undefined)command.direction=direction;
+   assert.throws(()=>applyCommand(emptyWorld(),builder,command),{code:'invalid_direction'});
+  }
+  const corrupt={version:1,revision:1,objects:[{id:objectType,type:objectType,direction:'up',position:{x:0,y:1,z:0},size:{x:4,y:2,z:8},color:'#c8a570',ownerId:'alice',blocksMovement:true,supportsPlayer:true}],players:[]};
+  assert.throws(()=>validateWorld(corrupt),{code:'invalid_state'});
+ }
+});
+
+test('stairs and ramps reject geometry too steep for shared walking physics',()=>{
+ const base={type:'build',position:{x:0,y:1,z:0}};
+ assert.throws(()=>applyCommand(emptyWorld(),builder,{...base,objectType:'stairs',direction:'north',size:{x:8,y:2.01,z:4}}),{code:'invalid_shape_dimensions'});
+ assert.throws(()=>applyCommand(emptyWorld(),builder,{...base,objectType:'ramp',direction:'north',size:{x:4,y:8.01,z:8}}),{code:'invalid_shape_dimensions'});
+});
+
+test('a north-facing ramp carries manual and agent movement up its continuous slope',()=>{
+ const ramp={type:'build',objectType:'ramp',direction:'north',position:{x:0,y:1,z:10},size:{x:4,y:2,z:8}};
+ const base=applyCommand(emptyWorld(),builder,ramp).state;
+ base.players.push({id:'alice',position:{x:0,y:0,z:15},velocityY:0},{id:'bob',position:{x:0,y:0,z:15},velocityY:0});
+ let manual=structuredClone(base), agent=structuredClone(base);
+ for(let z=13.75;z>=6.25;z-=1.25){
+  manual=move(manual,{x:0,y:0,z});
+  agent=applyCommand(agent,{id:'bob',role:'builder'},{type:'move',position:{x:0,y:0,z}}).state;
+ }
+ const manualPlayer=player(manual), agentPlayer=agent.players.find(item=>item.id==='bob');
+ assert.ok(manualPlayer.position.y>1.5,JSON.stringify(manualPlayer.position));
+ assert.ok(manualPlayer.position.y<=2+1e-6,JSON.stringify(manualPlayer.position));
+ assert.deepEqual(agentPlayer.position,manualPlayer.position);
+});
+test('stairs provide four equal walkable rises toward their saved cardinal direction',()=>{
+ const stair={type:'build',objectType:'stairs',direction:'east',position:{x:10,y:1,z:0},size:{x:8,y:2,z:4}};
+ let world=applyCommand(emptyWorld(),builder,stair).state;
+ world.players.push({id:'alice',position:{x:5,y:0,z:0},velocityY:0});
+ const heights=[];
+ for(const x of [6.25,7.5,8.5,9.5,10.5,11.5,12.5,13.5]){
+  world=move(world,{x,y:0,z:0});
+  if([7.5,9.5,11.5,13.5].includes(x))heights.push(player(world).position.y);
+ }
+ assert.deepEqual(heights,[.5,1,1.5,2]);
+});
+
+test('stairs and ramps are walkable in every cardinal direction and ignore client Y',()=>{
+ for(const objectType of ['stairs','ramp'])for(const direction of ['north','east','south','west']){
+  let world=applyCommand(emptyWorld(),builder,{type:'build',objectType,direction,position:{x:0,y:1,z:0},size:{x:8,y:2,z:8}}).state;
+  const start={north:{x:0,z:5},east:{x:-5,z:0},south:{x:0,z:-5},west:{x:5,z:0}}[direction];
+  const target={north:{x:0,z:-3.5},east:{x:3.5,z:0},south:{x:0,z:3.5},west:{x:-3.5,z:0}}[direction];
+  world.players.push({id:'alice',position:{...start,y:0},velocityY:0});
+  for(let i=0;i<10;i++)world=move(world,{...target,y:500});
+  assert.ok(player(world).position.y>1.5,objectType+' '+direction+' '+JSON.stringify(player(world).position));
+  assert.ok(player(world).position.y<=2+1e-6,objectType+' '+direction+' '+JSON.stringify(player(world).position));
+ }
+});
+
+test('stairs keep the player below a low ceiling until it is cleared',()=>{
+ let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'stairs',direction:'east',position:{x:10,y:1,z:0},size:{x:8,y:2,z:4}}).state;
+ world.objects.push({id:'low-ceiling',type:'block',position:{x:11,y:3.9,z:0},size:{x:2,y:1,z:4},color:'#c8a570',ownerId:'alice',blocksMovement:true,supportsPlayer:true});
+ world.players.push({id:'alice',position:{x:5,y:0,z:0},velocityY:0});
+ for(const x of [6.25,7.5,8.5,9.5,10.5,11.5,12.01])world=move(world,{x,y:500,z:0});
+ const underCeiling=player(world);
+ assert.ok(underCeiling.position.x<12,JSON.stringify(underCeiling));
+ assert.equal(underCeiling.position.y,1.5,JSON.stringify(underCeiling));
+ assert.ok(underCeiling.position.y+1.62<=3.4+1e-6,JSON.stringify(underCeiling));
+ world=move(world,{x:12.5,y:500,z:0});
+ const beyondCeiling=player(world);
+ assert.ok(beyondCeiling.position.x>=12.32,JSON.stringify(beyondCeiling));
+ assert.equal(beyondCeiling.position.y,2,JSON.stringify(beyondCeiling));
+});
+
+test('stairs require enough run for each tread to be sampled by movement steps',()=>{
+ for(const direction of ['north','east','south','west']){
+  const size=direction==='east'||direction==='west'?{x:.25,y:2,z:4}:{x:4,y:2,z:.25};
+  assert.throws(()=>applyCommand(emptyWorld(),builder,{type:'build',objectType:'stairs',direction,position:{x:0,y:1,z:0},size}),{code:'invalid_shape_dimensions'});
+ }
+});
+
+test('stair and ramp size edits cannot persist geometry beyond their traversal limits',()=>{
+ const cases=[
+  {objectType:'stairs',direction:'east',size:{x:8,y:2,z:4},invalidSize:{x:8,y:2.5,z:4}},
+  {objectType:'ramp',direction:'north',size:{x:4,y:2,z:8},invalidSize:{x:4,y:2,z:1.5}},
+ ];
+ for(const item of cases){
+  const built=applyCommand(emptyWorld(),builder,{type:'build',objectType:item.objectType,direction:item.direction,position:{x:0,y:1,z:0},size:item.size});
+  const before=structuredClone(built.state);
+  assert.throws(()=>applyCommand(built.state,builder,{type:'update',id:built.result.object.id,size:item.invalidSize,expected:{size:item.size}}),{code:'invalid_shape_dimensions'});
+  assert.deepEqual(built.state,before);
+ }
+});
+
+test('doors and gates persist an explicit, versioned open state without toggling on retry',()=>{
+ const world=emptyWorld();
+ const door=applyCommand(world,builder,{type:'build',objectType:'door',position:{x:0,y:1.5,z:0},size:{x:1.5,y:3,z:.25}});
+ const gate=applyCommand(door.state,builder,{type:'build',objectType:'gate',position:{x:8,y:1,z:0},size:{x:4,y:2,z:.5}});
+ assert.ok(mechanics.includes('door'));assert.ok(mechanics.includes('gate'));
+ for(const object of gate.state.objects){
+  assert.equal(object.state,'closed');
+  assert.equal(object.usePolicy,'owner_admin');
+  assert.equal(object.version,0);
+  assert.equal(object.blocksMovement,true);
+  assert.equal(object.supportsPlayer,false);
+ }
+ const opened=applyCommand(gate.state,builder,{type:'set_state',id:door.result.object.id,state:'open',expectedVersion:0});
+ assert.equal(opened.result.object.state,'open');
+ assert.equal(opened.result.object.blocksMovement,false);
+ assert.equal(opened.result.object.version,1);
+ const retry=applyCommand(opened.state,builder,{type:'set_state',id:door.result.object.id,state:'open',expectedVersion:0});
+ assert.equal(retry.result.revision,opened.result.revision);
+ assert.equal(retry.result.object.version,1);
+ assert.throws(()=>applyCommand(retry.state,builder,{type:'set_state',id:door.result.object.id,state:'closed',expectedVersion:0}),{code:'conflict',status:409});
+ const closed=applyCommand(retry.state,builder,{type:'set_state',id:door.result.object.id,state:'closed',expectedVersion:1});
+ assert.equal(closed.result.object.blocksMovement,true);
+ assert.equal(closed.result.object.version,2);
+ validateWorld(closed.state);
+});
+
+test('button links one stable target and access settings are owner/admin-controlled',()=>{
+ let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'door',position:{x:2,y:1.5,z:0},size:{x:1.5,y:3,z:.25}}).state;
+ const door=world.objects[0];
+ world=applyCommand(world,builder,{type:'build',objectType:'button',position:{x:1,y:.25,z:0},size:{x:.5,y:.5,z:.25}}).state;
+ const button=world.objects[1];
+ assert.deepEqual({targetId:button.targetId,targetState:button.targetState,usePolicy:button.usePolicy,version:button.version},
+  {targetId:null,targetState:'open',usePolicy:'owner_admin',version:0});
+ world=applyCommand(world,builder,{type:'update',id:door.id,usePolicy:'all_players',expected:{usePolicy:'owner_admin'}}).state;
+ const linked=applyCommand(world,builder,{type:'update',id:button.id,targetId:door.id,targetState:'closed',usePolicy:'all_players',
+  expected:{targetId:null,targetState:'open',usePolicy:'owner_admin'}});
+ assert.equal(linked.result.object.targetId,door.id);
+ assert.equal(linked.result.object.targetState,'closed');
+ assert.equal(linked.result.object.usePolicy,'all_players');
+ assert.equal(linked.result.object.version,1);
+ const opened=applyCommand(linked.state,{id:'bob',role:'viewer'},{type:'set_state',id:door.id,state:'open',expectedVersion:1});
+ assert.equal(opened.result.object.state,'open');
+ assert.equal(opened.result.object.blocksMovement,false);
+ assert.throws(()=>applyCommand(linked.state,{id:'bob',role:'viewer'},{type:'update',id:button.id,targetId:'another-door',expected:{targetId:door.id}}),{code:'forbidden'});
+ assert.throws(()=>applyCommand(linked.state,builder,{type:'update',id:button.id,targetId:'missing',expected:{targetId:door.id}}),{code:'invalid_target'});
+ validateWorld(linked.state);
+});
+
+test('closed doors block player movement and the open state makes the same passage traversable',()=>{
+ let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'door',position:{x:2,y:1.5,z:0},size:{x:.5,y:3,z:.5}}).state;
+ world=move(world,{x:0,y:0,z:0});
+ for(let i=0;i<3;i++)world=move(world,{x:10,y:0,z:0});
+ assert.ok(player(world).position.x<=1.43+1e-6,JSON.stringify(player(world).position));
+ const opened=applyCommand(world,builder,{type:'set_state',id:world.objects[0].id,state:'open',expectedVersion:0});
+ world=move(opened.state,{x:10,y:0,z:0});
+ assert.ok(player(world).position.x>2,JSON.stringify(player(world).position));
+});
+
+test('legacy worlds receive the previous daylight values without changing saved objects',()=>{
+ const saved={id:'legacy-block',type:'block',position:{x:2,y:1,z:3},size:{x:2,y:2,z:2},color:'#c8a570',ownerId:'alice'};
+ const legacy=validateWorld({version:1,revision:7,objects:[saved],players:[]});
+ assert.deepEqual(legacy.lighting,{version:0,ambientIntensity:2.6,sunIntensity:3.1});
+ assert.deepEqual(emptyWorld().lighting,legacy.lighting);
+ assert.deepEqual({id:legacy.objects[0].id,color:legacy.objects[0].color,position:legacy.objects[0].position},
+  {id:saved.id,color:saved.color,position:saved.position});
+ assert.equal(legacy.objects.length,1);
+});
+
+test('lamps are bounded, persistent world objects with explicit versioned access-controlled state',()=>{
+ let state=emptyWorld();
+ const built=applyCommand(state,builder,{type:'build',objectType:'lamp',position:{x:1,y:.5,z:0},size:{x:.5,y:.5,z:.5}});
+ state=built.state;
+ const lamp=built.result.object;
+ assert.ok(mechanics.includes('lamp'));
+ assert.deepEqual({on:lamp.on,intensity:lamp.intensity,range:lamp.range,usePolicy:lamp.usePolicy,version:lamp.version,blocksMovement:lamp.blocksMovement,supportsPlayer:lamp.supportsPlayer},
+  {on:true,intensity:2,range:8,usePolicy:'owner_admin',version:0,blocksMovement:false,supportsPlayer:false});
+ const configured=applyCommand(state,builder,{type:'update',id:lamp.id,intensity:3,range:12,usePolicy:'all_players',expected:{intensity:2,range:8,usePolicy:'owner_admin'}});
+ assert.deepEqual({intensity:configured.result.object.intensity,range:configured.result.object.range,usePolicy:configured.result.object.usePolicy,version:configured.result.object.version},
+  {intensity:3,range:12,usePolicy:'all_players',version:1});
+ const switched=applyCommand(configured.state,{id:'bob',role:'viewer'},{type:'set_state',id:lamp.id,state:'off',expectedVersion:1});
+ assert.equal(switched.result.object.on,false);
+ assert.equal(switched.result.object.version,2);
+ assert.throws(()=>applyCommand(switched.state,{id:'bob',role:'viewer'},{type:'set_state',id:lamp.id,state:'on',expectedVersion:1}),{code:'conflict',status:409});
+ const sharedUse=applyCommand(switched.state,{id:'carol',role:'builder'},{type:'set_state',id:lamp.id,state:'on',expectedVersion:2});
+ assert.equal(sharedUse.result.object.on,true);
+ assert.equal(sharedUse.result.object.version,3);
+ for(const changes of [{intensity:0},{intensity:4.01},{range:1},{range:17},{color:'transparent'}]){
+  assert.throws(()=>applyCommand(state,builder,{type:'update',id:lamp.id,...changes,expected:Object.fromEntries(Object.keys(changes).map(key=>[key,lamp[key]]))}));
+ }
+ validateWorld(switched.state);
+});
+
+test('lamp position and size edits require exact expected values',()=>{
+ const built=applyCommand(emptyWorld(),builder,{type:'build',objectType:'lamp',position:{x:1,y:1,z:1},size:{x:.5,y:2,z:.5}});
+ const lamp=built.result.object;
+ assert.throws(()=>applyCommand(built.state,builder,{type:'update',id:lamp.id,position:{x:2,y:1,z:1}}),{code:'invalid_command'});
+ assert.throws(()=>applyCommand(built.state,builder,{type:'update',id:lamp.id,size:{x:.75,y:2,z:.5}}),{code:'invalid_command'});
+ const moved=applyCommand(built.state,builder,{type:'update',id:lamp.id,position:{x:2,y:1,z:1},expected:{position:lamp.position}});
+ assert.equal(moved.result.object.position.x,2);
+ const resized=applyCommand(moved.state,builder,{type:'update',id:lamp.id,size:{x:.75,y:2,z:.5},expected:{size:lamp.size}});
+ assert.equal(resized.result.object.size.x,.75);
+ assert.throws(()=>applyCommand(resized.state,builder,{type:'update',id:lamp.id,size:{x:1,y:2,z:.5},expected:{size:lamp.size}}),{code:'conflict',status:409});
+});
+
+test('only an admin can set versioned world lighting within the documented ranges',()=>{
+ const state=emptyWorld();
+ assert.throws(()=>applyCommand(state,builder,{type:'set_lighting',ambientIntensity:1.2,sunIntensity:2,expectedVersion:0}),{code:'forbidden',status:403});
+ const admin={id:'root',role:'admin'};
+ const changed=applyCommand(state,admin,{type:'set_lighting',ambientIntensity:1.2,sunIntensity:2,expectedVersion:0});
+ assert.deepEqual(changed.state.lighting,{version:1,ambientIntensity:1.2,sunIntensity:2});
+ assert.throws(()=>applyCommand(changed.state,admin,{type:'set_lighting',ambientIntensity:2,sunIntensity:1.2,expectedVersion:0}),{code:'conflict',status:409});
+ for(const [ambientIntensity,sunIntensity] of [[-1,1],[4.1,1],[1,-1],[1,5.1],[NaN,1],[1,Infinity]]){
+  assert.throws(()=>applyCommand(state,admin,{type:'set_lighting',ambientIntensity,sunIntensity,expectedVersion:0}));
+ }
+});
+
+
+test('lamp interaction also checks the server-owned use range',()=>{
+ const built=applyCommand(emptyWorld(),builder,{type:'build',objectType:'lamp',position:{x:0,y:.5,z:0},size:{x:.5,y:1,z:.5}});
+ const configured=applyCommand(built.state,builder,{type:'update',id:built.result.object.id,usePolicy:'all_players',expected:{usePolicy:'owner_admin'}});
+ const far={...configured.state,players:[{id:'bob',position:{x:10,y:0,z:0},velocityY:0}]};
+ assert.throws(()=>applyCommand(far,{id:'bob',role:'builder'},{type:'set_state',id:built.result.object.id,state:'off',expectedVersion:1}),{code:'out_of_range',status:403});
 });

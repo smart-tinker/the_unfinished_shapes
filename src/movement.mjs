@@ -1,11 +1,31 @@
 export const WORLD_SIZE = 48;
 export const WALK_SPEED = 5;
+export const SHAPE_TYPES = ['stairs','ramp'];
+export const SHAPE_DIRECTIONS = ['north','east','south','west'];
+export const SHAPE_DEFAULT_SIZES = {stairs:{x:8,y:2,z:4},ramp:{x:4,y:2,z:8}};
 const PLAYER_RADIUS = 0.32;
 const PLAYER_HEIGHT = 1.62;
+
+export function playerOccupiesObject(player, object) {
+  const p = player?.position, o = object?.position, s = object?.size;
+  return Boolean(p && o && s && p.x + PLAYER_RADIUS > o.x - s.x / 2 + EPSILON && p.x - PLAYER_RADIUS < o.x + s.x / 2 - EPSILON &&
+    p.z + PLAYER_RADIUS > o.z - s.z / 2 + EPSILON && p.z - PLAYER_RADIUS < o.z + s.z / 2 - EPSILON &&
+    p.y < o.y + s.y / 2 - EPSILON && p.y + PLAYER_HEIGHT > o.y - s.y / 2 + EPSILON);
+}
 const JUMP_SPEED = 9.5;
 const GRAVITY = 18;
+const MAX_STEP_HEIGHT = 0.5;
 const EPSILON = 1e-7;
 
+export function shapeDimensionsValid(type, direction, size) {
+  if (type === 'stairs') {
+    // Four 0.125-unit treads stay wider than the maximum 0.083-unit movement step.
+    const run = direction === 'east' || direction === 'west' ? size.x : size.z;
+    return size.y <= 2 && run >= 0.5;
+  }
+  if (type === 'ramp') return size.y <= (direction === 'east' || direction === 'west' ? size.x : size.z);
+  return true;
+}
 
 function islandPosition(start, requested) {
   const limit = WORLD_SIZE / 2 - PLAYER_RADIUS;
@@ -19,24 +39,51 @@ function movementDestination(start, requested, duration) {
   const scale = distance > WALK_SPEED * duration && distance > 0 ? WALK_SPEED * duration / distance : 1;
   return { x: start.x + dx * scale, z: start.z + dz * scale };
 }
-
 function overlapsTop(object, x, z) {
   return Math.abs(x - object.position.x) < object.size.x / 2 + PLAYER_RADIUS &&
     Math.abs(z - object.position.z) < object.size.z / 2 + PLAYER_RADIUS;
 }
+function shapeHeightAt(object, x, z) {
+  if (!SHAPE_DIRECTIONS.includes(object.direction) ||
+      Math.abs(x - object.position.x) > object.size.x / 2 + PLAYER_RADIUS ||
+      Math.abs(z - object.position.z) > object.size.z / 2 + PLAYER_RADIUS) return null;
+  const runAxis = object.direction === 'east' || object.direction === 'west' ? 'x' : 'z';
+  const run = object.size[runAxis], center = object.position[runAxis], coordinate = runAxis === 'x' ? x : z;
+  const progress = (object.direction === 'east' || object.direction === 'south')
+    ? (coordinate - (center - run / 2)) / run
+    : ((center + run / 2) - coordinate) / run;
+  const t = Math.max(0, Math.min(1, progress)), bottom = object.position.y - object.size.y / 2;
+  if (object.type === 'ramp') return bottom + object.size.y * t;
+  return bottom + object.size.y * Math.min(4, Math.floor(t * 4) + 1) / 4;
+}
+function surfaceAt(object, x, z) {
+  if (!object.supportsPlayer) return null;
+  if (SHAPE_TYPES.includes(object.type)) return shapeHeightAt(object, x, z);
+  return overlapsTop(object, x, z) ? object.position.y + object.size.y / 2 : null;
+}
 function supportAt(objects, x, z, y) {
   let support = Math.abs(y) < EPSILON ? 0 : null;
   for (const object of objects) {
-    const top = object.position.y + object.size.y / 2;
-    if (object.supportsPlayer && overlapsTop(object, x, z) && Math.abs(y - top) < EPSILON) support = Math.max(support ?? 0, top);
+    const surface = surfaceAt(object, x, z);
+    if (surface !== null && Math.abs(y - surface) < EPSILON) support = Math.max(support ?? 0, surface);
+  }
+  return support;
+}
+function reachableSurfaceAt(objects, x, z, y) {
+  let support = y >= -MAX_STEP_HEIGHT - EPSILON && y <= MAX_STEP_HEIGHT + EPSILON ? 0 : null;
+  for (const object of objects) {
+    const surface = surfaceAt(object, x, z);
+    if (surface !== null && surface >= y - MAX_STEP_HEIGHT - EPSILON && surface <= y + MAX_STEP_HEIGHT + EPSILON) {
+      support = Math.max(support ?? -Infinity, surface);
+    }
   }
   return support;
 }
 function landingAt(objects, x, z, fromY, toY) {
   let landing = fromY >= 0 && toY <= 0 ? 0 : null;
   for (const object of objects) {
-    const top = object.position.y + object.size.y / 2;
-    if (object.supportsPlayer && overlapsTop(object, x, z) && top <= fromY + EPSILON && top >= toY - EPSILON) landing = Math.max(landing ?? -Infinity, top);
+    const surface = surfaceAt(object, x, z);
+    if (surface !== null && surface <= fromY + EPSILON && surface >= toY - EPSILON) landing = Math.max(landing ?? -Infinity, surface);
   }
   return landing;
 }
@@ -61,7 +108,17 @@ function sweepAxis(objects, position, axis, destination) {
   if (!direction) return position[axis];
   let resolved = destination;
   for (const object of objects) {
-    if (!object.blocksMovement || !intersectsVertically(object, position.y)) continue;
+    if (!object.blocksMovement) continue;
+    if (SHAPE_TYPES.includes(object.type)) {
+      const surface = shapeHeightAt(object, axis === 'x' ? resolved : position.x, axis === 'z' ? resolved : position.z);
+      if (surface === null || surface <= position.y + MAX_STEP_HEIGHT + EPSILON) continue;
+      const half = object.size[axis] / 2 + PLAYER_RADIUS;
+      const low = object.position[axis] - half, high = object.position[axis] + half, start = position[axis];
+      if (direction > 0 && start <= low && resolved > low) resolved = Math.min(resolved, low);
+      else if (direction < 0 && start >= high && resolved < high) resolved = Math.max(resolved, high);
+      continue;
+    }
+    if (!intersectsVertically(object, position.y)) continue;
     const otherHalf = object.size[other] / 2 + PLAYER_RADIUS;
     if (Math.abs(position[other] - object.position[other]) >= otherHalf - EPSILON) continue;
     const half = object.size[axis] / 2 + PLAYER_RADIUS;
@@ -90,10 +147,23 @@ export function movePlayer(world, current, command, deltaSeconds = 0.25) {
   const step = duration / steps;
   for (let i = 1; i <= steps; i++) {
     const progress = i / steps;
+    const grounded = velocityY === 0 && supportAt(objects, position.x, position.z, position.y) !== null;
+    const previousX = position.x, previousZ = position.z;
     position.x = sweepAxis(objects, position, 'x', start.x + (destination.x - start.x) * progress);
     position.z = sweepAxis(objects, position, 'z', start.z + (destination.z - start.z) * progress);
     if (!step) continue;
 
+    if (grounded && velocityY === 0) {
+      const surface = reachableSurfaceAt(objects, position.x, position.z, position.y);
+      if (surface !== null) {
+        if (surface > position.y + EPSILON && objects.some(object =>
+          object.blocksMovement && surfaceAt(object, position.x, position.z) !== surface &&
+          overlapsTop(object, position.x, position.z) && intersectsVertically(object, surface))) {
+          position.x = previousX; position.z = previousZ; continue;
+        }
+        position.y = surface; continue;
+      }
+    }
     const support = supportAt(objects, position.x, position.z, position.y);
     if (velocityY === 0 && support !== null) { position.y = support; continue; }
     const fromY = position.y;
