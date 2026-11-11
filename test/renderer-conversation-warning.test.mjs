@@ -23,8 +23,10 @@ test('settings explains creation-time tool schemas and history preservation besi
   assert.ok(checkbox); assert.doesNotMatch(checkbox, /\bchecked\b/);
   assert.match(checkbox, /aria-describedby="conversation-tools-note"/);
   const note = html.match(/<p id="conversation-tools-note"[^>]*>(.*?)<\/p>/)?.[1];
-  assert.match(note, /retain the tools registered when they were created/);
-  assert.match(note, /explicitly select/); assert.match(note, /preserves the old conversation and its history/);
+  assert.match(note, /current game tools/);
+  const history = html.match(/<details><summary>Conversation history<\/summary>(.*?)<\/details>/)?.[1];
+  assert.match(history, /retain the tools registered when they were created/);
+  assert.match(history, /explicitly select/); assert.match(history, /preserves the old conversation and its history/);
 });
 
 test('successful resume warns once without changing thread or opting into a new conversation', async () => {
