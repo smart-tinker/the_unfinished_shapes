@@ -45,3 +45,21 @@ test('Codex status and the safe reconnect instruction are visible in Settings', 
   assert.match(codex, /id="settings-codex-status"[^>]*role="status"[^>]*aria-live="polite"/);
   assert.match(codex, /Disconnected\? Check the Codex executable path, then select Connect\. The saved conversation stays intact\./);
 });
+
+
+test('Settings exposes update channel, package choice, and explicit update actions', () => {
+  const updates = section('settings-updates');
+  assert.match(updates, /aria-labelledby="settings-updates-heading"/);
+  assert.match(updates, /id="update-channel"/);
+  assert.match(updates, /option value="stable"[^>]*selected/);
+  assert.match(updates, /option value="prerelease"/);
+  assert.match(updates, /id="update-distribution"/);
+  assert.match(updates, /option value="installer"/);
+  assert.match(updates, /option value="portable"/);
+  assert.match(updates, /id="updates-check"/);
+  assert.match(updates, /id="updates-download"/);
+  assert.match(updates, /id="updates-cancel"/);
+  assert.match(updates, /id="updates-extract"/);
+  assert.match(updates, /id="updates-launch"/);
+  assert.match(updates, /id="updates-status"[^>]*role="status"[^>]*aria-live="polite"/);
+});

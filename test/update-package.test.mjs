@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { downloadVerifiedAsset, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { downloadVerifiedAsset, extractVerifiedArchive, verifyReleaseAttestation } from '../src/update-package.mjs';
 
 const tag = 'v0.1.0-rc11';
 const asset = {
@@ -198,5 +198,23 @@ test('rejects a byte digest mismatch before asking GitHub for provenance', async
     assert.deepEqual(await readdir(dir), []);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('archive extraction refuses to replace an existing version folder', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-target-'));
+  const target = path.join(parent, 'TheUnfinishedShapes-0.1.0-rc.11');
+  try {
+    await (await import('node:fs/promises')).mkdir(target);
+    const marker = path.join(target, 'keep.txt');
+    await (await import('node:fs/promises')).writeFile(marker, 'user file');
+    await assert.rejects(
+      extractVerifiedArchive({ filePath: path.join(parent, 'missing.zip'), directory: parent, tag }),
+      /exists|already|destination/i,
+    );
+    assert.equal(await readFile(marker, 'utf8'), 'user file');
+  } finally {
+    await rm(parent, { recursive: true, force: true });
   }
 });
