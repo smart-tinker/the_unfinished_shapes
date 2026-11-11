@@ -16,7 +16,7 @@ jobs:
         with:
           node-version: '24'
       - name: Resolve Sigstore lock entries without running package scripts
-        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund sigstore@4.1.1
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund sigstore@4.1.1 tar@7.5.22
       - name: Emit lock delta for review
         run: |
           node --input-type=module <<'NODE'
