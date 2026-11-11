@@ -6,6 +6,7 @@ import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, ve
 const tag = 'v0.1.0-rc11';
 const asset = {
   name: 'TheUnfinishedShapes-0.1.0-rc.11-linux-x64.tar.gz',
+  size: 1,
   digest: 'sha256:' + 'a'.repeat(64),
 };
 const sourceSha = '89d517f9dd3d015afe9bf54a2edd96641ec96ebe';
