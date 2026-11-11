@@ -6,6 +6,7 @@ import { rendererHarness } from './support/renderer-harness.mjs';
 function connectionHarness({ resumed = true, failure = null } = {}) {
   const h = rendererHarness(), calls = [], messages = [], saved = [];
   h.context.bridge = {
+    onUpdateProgress: () => {},
     connectCodex: async options => { calls.push(options); if (failure) throw new Error(failure); return { threadId: resumed ? 'saved-thread' : 'new-explicit-thread', resumed }; },
     saveSettings: async value => { saved.push(value); },
   };

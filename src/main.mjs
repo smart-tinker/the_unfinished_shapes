@@ -10,11 +10,13 @@ import { createWorldServer } from './server.mjs';
 import { DATA_DIRECTORY, loadSettings, saveSettings, agentModelForThread } from './settings.mjs';
 import { findCodex } from './codex-discovery.mjs';
 import { createQuitConfirmation, installQuitGuard, isSmokeAutoConfirmQuit } from './quit-guard.mjs';
+import { listPublishedReleases, releaseRelation, selectReleaseAsset, startupUpdateOptions } from './update-release.mjs';
 const userData = process.env.TUS_DATA_DIR ? path.resolve(process.env.TUS_DATA_DIR) : path.join(app.getPath('appData'),DATA_DIRECTORY);
 mkdirSync(userData,{recursive:true});
 app.setPath('userData',userData);
 const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld, gameToolSession, fullscreenRestoreBounds;
+let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, extractedUpdate = null, updateDownloadController = null;
 if (!app.requestSingleInstanceLock()) app.quit();
 const settings = () => loadSettings(app.getPath('userData'));
 async function readBuildIdentity() {
@@ -43,6 +45,8 @@ const attachQuitGuard = installQuitGuard({
     return saved.threadId ? null : { connected: false, threadId: null };
   },
   confirm: confirmQuit,
+  onQuitApproved: () => { if (pendingRelaunch) app.relaunch({ execPath: pendingRelaunch, args: [] }); pendingRelaunch = null; },
+  onQuitCancelled: () => { pendingRelaunch = null; win?.webContents.send('updates:progress', { state: 'launch-cancelled' }); },
   cleanup: () => { bridge?.stop(); localServer?.close(); },
 });
 function assertSender(event) { if(event.sender !== win.webContents) throw new Error('Untrusted sender'); }
@@ -79,6 +83,89 @@ app.whenReady().then(async()=>{
   const localUrl = `http://127.0.0.1:${localServer.address().port}`;
   handle('settings:load', async()=>{const current=await settings();return {...current,serverUrl:current.serverUrl||localUrl,token:current.serverUrl?'':localToken};});
   handle('settings:save', async(s)=>{ const clean={...s,serverUrl:serverUrl(s.serverUrl||localUrl) === localUrl ? '' : serverUrl(s.serverUrl)}; await saveSettings(app.getPath('userData'),clean); });
+  handle('updates:startup-check', async () => {
+    try { return { status: 'checked', options: startupUpdateOptions(await listPublishedReleases(), app.getVersion()) }; }
+    catch { return { status: 'unavailable' }; }
+  });
+  handle('updates:check', async distribution => {
+    if (updateDownloadController) throw new Error('Wait for the current update download to finish or cancel it.');
+    if (typeof distribution !== 'string' || !['installer', 'portable'].includes(distribution)) throw new Error('Invalid update package choice.');
+    const channel = (await settings()).updateChannel || 'stable';
+    const releases = await listPublishedReleases();
+    const release = releases[channel];
+    availableUpdate = null; downloadedUpdate = null; extractedUpdate = null;
+    if (!release) return { status: 'none', channel, currentVersion: app.getVersion() };
+    const relation = releaseRelation(release.tag_name, app.getVersion());
+    if (relation !== 'update') return { status: relation, channel, currentVersion: app.getVersion(), version: release.tag_name };
+    const selectedDistribution = process.platform === 'win32' ? distribution : 'archive';
+    const asset = selectReleaseAsset(release, { platform: process.platform, architecture: process.arch, distribution: selectedDistribution });
+    if (!asset) return { status: 'unsupported', channel, currentVersion: app.getVersion(), version: release.tag_name };
+    availableUpdate = { release, asset, distribution: selectedDistribution };
+    return {
+      status: 'available', channel, currentVersion: app.getVersion(), version: release.tag_name, distribution: selectedDistribution,
+      name: typeof release.name === 'string' ? release.name.slice(0, 256) : release.tag_name,
+      notes: typeof release.body === 'string' ? release.body.slice(0, 5000) : '',
+      publishedAt: typeof release.published_at === 'string' ? release.published_at : '',
+    };
+  });
+  handle('updates:download', async () => {
+    if (!availableUpdate) throw new Error('Check for an update before downloading.');
+    if (updateDownloadController) throw new Error('An update download is already running.');
+    const controller = new AbortController();
+    updateDownloadController = controller;
+    try {
+      const directory = path.join(app.getPath('downloads'), 'TheUnfinishedShapes-Updates');
+      const { downloadVerifiedAsset } = await import('./update-package.mjs');
+      const result = await downloadVerifiedAsset({
+        ...availableUpdate, directory, signal: controller.signal,
+        onProgress: progress => win?.webContents.send('updates:progress', { state: 'downloading', ...progress }),
+      });
+      downloadedUpdate = { ...availableUpdate, ...result };
+      win?.webContents.send('updates:progress', { state: 'verified', assetName: result.assetName, sha256: result.sha256 });
+      return { assetName: result.assetName, sha256: result.sha256, distribution: availableUpdate.distribution };
+    } finally {
+      if (updateDownloadController === controller) updateDownloadController = null;
+    }
+  });
+  handle('updates:cancel', () => {
+    if (!updateDownloadController) return false;
+    updateDownloadController.abort();
+    return true;
+  });
+  handle('updates:extract', async () => {
+    if (!downloadedUpdate || downloadedUpdate.distribution === 'installer') throw new Error('Download a portable update archive first.');
+    const choice = await dialog.showOpenDialog(win, { title: 'Choose a folder for the verified TUS update', properties: ['openDirectory'] });
+    if (choice.canceled || !choice.filePaths[0]) return { canceled: true };
+    const { extractVerifiedArchive } = await import('./update-package.mjs');
+    extractedUpdate = await extractVerifiedArchive({
+      filePath: downloadedUpdate.filePath, directory: choice.filePaths[0], tag: downloadedUpdate.release.tag_name,
+      assetName: downloadedUpdate.assetName, sha256: downloadedUpdate.sha256,
+    });
+    win?.webContents.send('updates:progress', { state: 'extracted' });
+    return { extracted: true };
+  });
+  handle('updates:launch', async () => {
+    if (!downloadedUpdate) throw new Error('Download and verify the update first.');
+    let executable;
+    if (downloadedUpdate.distribution === 'installer') {
+      const { verifyDownloadedFile } = await import('./update-package.mjs');
+      await verifyDownloadedFile({ filePath: downloadedUpdate.filePath, sha256: downloadedUpdate.sha256 });
+      executable = downloadedUpdate.filePath;
+    } else {
+      if (!extractedUpdate) throw new Error('Extract the verified archive first.');
+      executable = extractedUpdate.executablePath;
+    }
+    const choice = await dialog.showMessageBox(win, {
+      type: 'info', title: 'Start verified update',
+      message: 'TUS will close and start the verified update package.',
+      detail: 'The Codex connection closes with this app. The saved world and settings remain in place.',
+      buttons: ['Cancel', 'Quit and launch'], defaultId: 0, cancelId: 0,
+    });
+    if (choice.response !== 1) return { started: false };
+    pendingRelaunch = executable;
+    app.quit();
+    return { started: true };
+  });
   handle('codex:find',()=>findCodex());
   handle('path:choose',async(kind)=>{if(!['workspace','codex'].includes(kind)) throw new Error('Unsupported path choice');const result=await dialog.showOpenDialog(win,{title:kind==='workspace'?'Choose game repository':'Choose Codex executable',properties:[kind==='workspace'?'openDirectory':'openFile']});return result.canceled?null:result.filePaths[0];});
   handle('world:request', async({serverUrl:url,token,method='GET',path:route,body})=>{

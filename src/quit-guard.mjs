@@ -30,7 +30,7 @@ export async function confirmQuitIfUnsafe(state, confirm) {
   return safe || confirm(state);
 }
 
-export function installQuitGuard({ app, getWindow, readState, confirm, cleanup }) {
+export function installQuitGuard({ app, getWindow, readState, confirm, cleanup, onQuitApproved = () => {}, onQuitCancelled = () => {} }) {
   let approved = false, prompting = false, cleaned = false;
   const requestQuit = event => {
     if (approved) return;
@@ -42,10 +42,12 @@ export function installQuitGuard({ app, getWindow, readState, confirm, cleanup }
         let state = null;
         try { state = await readState(); } catch {}
         if (await confirmQuitIfUnsafe(state, confirm)) {
+          onQuitApproved();
           approved = true;
           app.quit();
-        }
+        } else onQuitCancelled();
       } catch {
+        onQuitCancelled();
         console.error('Quit confirmation failed; keeping TUS open.');
       } finally { prompting = false; }
     })();

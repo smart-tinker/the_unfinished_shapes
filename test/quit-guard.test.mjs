@@ -12,7 +12,7 @@ const idle = () => ({
   goal: null,
 });
 
-function harness({ state, readState, answer = false }) {
+function harness({ state, readState, answer = false, onQuitApproved, onQuitCancelled }) {
   const app = new EventEmitter(), window = new EventEmitter();
   let quitCalls = 0, cleanupCalls = 0;
   const confirmations = [];
@@ -23,6 +23,8 @@ function harness({ state, readState, answer = false }) {
     readState: readState || (async () => state),
     confirm: async current => { confirmations.push(current); return answer; },
     cleanup: () => { cleanupCalls++; },
+    onQuitApproved,
+    onQuitCancelled,
   });
   attach(window);
   return {
@@ -172,4 +174,29 @@ test('the production quit prompt allows Quit anyway and retains smoke auto-confi
     isSmokeAutoConfirm: () => true,
   });
   assert.equal(await smoke(null), true);
+});
+
+
+test('update relaunch runs only after quit approval and is discarded when quit is canceled', async () => {
+  let approved = 0, canceled = 0;
+  const unsafe = { ...idle(), thread: { status: { type: 'active' } }, turnId: 'turn-1' };
+  const stay = harness({
+    state: unsafe, answer: false,
+    onQuitApproved: () => { approved++; },
+    onQuitCancelled: () => { canceled++; },
+  });
+  await stay.closeWindow();
+  assert.equal(approved, 0);
+  assert.equal(canceled, 1);
+  assert.equal(stay.counts().quitCalls, 0);
+
+  const quit = harness({
+    state: unsafe, answer: true,
+    onQuitApproved: () => { approved++; },
+    onQuitCancelled: () => { canceled++; },
+  });
+  await quit.closeWindow();
+  assert.equal(approved, 1);
+  assert.equal(canceled, 1);
+  assert.equal(quit.counts().quitCalls, 1);
 });

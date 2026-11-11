@@ -25,7 +25,10 @@
   "homepage": "https://github.com/smart-tinker/the_unfinished_shapes#readme",
   "private": true,
   "dependencies": {
-    "three": "^0.180.0"
+    "sigstore": "^4.1.1",
+    "tar": "^7.5.22",
+    "three": "^0.180.0",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",

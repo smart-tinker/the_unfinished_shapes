@@ -12,6 +12,8 @@ export function cleanSettings(value = {}) {
   if(!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Settings must be an object.');
   if(value.schemaVersion !== undefined && value.schemaVersion !== 1) throw new Error('These settings were created by a newer, incompatible version. They were not changed.');
   const output={schemaVersion:1};
+  if(value.updateChannel!==undefined&&!['stable','prerelease'].includes(value.updateChannel))throw new Error('Invalid saved update channel.');
+  output.updateChannel=value.updateChannel??'stable';
   if(value.lightingQuality!==undefined&&!['full','reduced'].includes(value.lightingQuality))throw new Error('Invalid saved lighting quality.');
   output.lightingQuality=value.lightingQuality??'full';
   for(const key of ['workspacePath','codexPath','serverUrl','threadId','agentModelId','agentEffort','agentControlThreadId']) output[key]=string(value[key],key);
