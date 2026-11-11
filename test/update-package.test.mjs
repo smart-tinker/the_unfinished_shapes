@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { create as createTar } from 'tar';
 import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, verifyReleaseAttestation } from '../src/update-package.mjs';
 
 const tag = 'v0.1.0-rc11';
@@ -117,12 +122,6 @@ test('does not accept malformed provenance or a failed cryptographic verifier', 
     /attestation|payload|provenance/i,
   );
 });
-
-import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import tar from 'tar';
 
 test('downloads only the exact official asset and requires its matching signed attestation', async () => {
   const bytes = Buffer.from('verified update package');
@@ -265,7 +264,7 @@ test('extracts the verified Linux archive into a new version folder', async () =
   try {
     await mkdir(root);
     await writeFile(binary, 'linux executable fixture', { mode: 0o755 });
-    await tar.create({ file: archive, gzip: true, cwd: parent, portable: true }, ['TheUnfinishedShapes-linux-x64']);
+    await createTar({ file: archive, gzip: true, cwd: parent, portable: true }, ['TheUnfinishedShapes-linux-x64']);
     const digest = createHash('sha256').update(await readFile(archive)).digest('hex');
     const result = await extractVerifiedArchive({
       filePath: archive, directory: parent, tag,
@@ -279,12 +278,48 @@ test('extracts the verified Linux archive into a new version folder', async () =
   }
 });
 
+function zipFixture(name, contents) {
+  const filename = Buffer.from(name);
+  let crc = 0xffffffff;
+  for (const byte of contents) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+  }
+  crc = (crc ^ 0xffffffff) >>> 0;
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(0x800, 6);
+  local.writeUInt32LE(crc, 14);
+  local.writeUInt32LE(contents.length, 18);
+  local.writeUInt32LE(contents.length, 22);
+  local.writeUInt16LE(filename.length, 26);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(0x0314, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt16LE(0x800, 8);
+  central.writeUInt32LE(crc, 16);
+  central.writeUInt32LE(contents.length, 20);
+  central.writeUInt32LE(contents.length, 24);
+  central.writeUInt16LE(filename.length, 28);
+  central.writeUInt32LE(0o100755 * 0x10000, 38);
+  const localSize = local.length + filename.length + contents.length;
+  const directorySize = central.length + filename.length;
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(directorySize, 12);
+  end.writeUInt32LE(localSize, 16);
+  return Buffer.concat([local, filename, contents, central, filename, end]);
+}
+
 test('extracts Windows portable and macOS app archives under the selected folder', async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-zip-'));
   const cases = [
     {
       platform: 'win32',
-      root: 'TheUnfinishedShapes-win32-x64',
       assetName: 'TheUnfinishedShapes-0.1.0-rc.11-win32-x64.zip',
       entry: 'TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe',
       targetName: 'TheUnfinishedShapes-0.1.0-rc.11',
@@ -292,7 +327,6 @@ test('extracts Windows portable and macOS app archives under the selected folder
     },
     {
       platform: 'darwin',
-      root: 'TheUnfinishedShapes.app',
       assetName: 'TheUnfinishedShapes-0.1.0-rc.11-darwin-arm64.zip',
       entry: 'TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes',
       targetName: 'TheUnfinishedShapes-0.1.0-rc.11.app',
