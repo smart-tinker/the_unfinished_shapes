@@ -49,7 +49,11 @@ test('startup update discovery is non-blocking and has an accessible entry point
 
 test('selected-channel update status includes bounded release notes',()=>{
  const renderer=readFileSync(new URL('../src/renderer.mjs',import.meta.url),'utf8');
- const check=renderer.slice(renderer.indexOf("$('updates-check')"),renderer.indexOf("$('update-channel')"));
+ const start=renderer.indexOf("$('updates-check').addEventListener('click'");
+ const end=renderer.indexOf("$('update-channel').addEventListener('change'",start);
+ assert.ok(start>=0 && end>start,'update check handler boundaries are present');
+ const check=renderer.slice(start,end);
  assert.match(check,/checkedUpdate\.notes/);
  assert.match(check,/Release notes/);
+ assert.match(check,/slice\(0, 1200\)/);
 });
