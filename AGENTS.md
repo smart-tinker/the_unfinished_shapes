@@ -12,3 +12,5 @@ Read README.md and docs/server.md before changing mechanics. This is a desktop E
 - Do not edit user Codex session files. Conversation lifecycle goes through app-server.
 - Do not change CI permissions or bypass tests to make a feature appear successful.
 - Before release, distinguish unit/protocol tests, Electron smoke, Windows runtime and real model integration. Do not claim unrun checks passed.
+
+- Follow [docs/RELEASING.md](docs/RELEASING.md) for the canonical version, tag, RC and stable-release lifecycle; never treat source CI as native package acceptance.
