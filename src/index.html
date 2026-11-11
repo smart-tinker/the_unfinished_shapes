@@ -22,6 +22,38 @@
 <section class="agent-control-section"><h3>Native Goal</h3><p id="goal-support-status" class="muted small">Connect Codex to check native Goal support.</p><div id="active-goal" class="active-goal" hidden><strong id="goal-status"></strong><p id="goal-objective"></p></div><label>Objective<textarea id="goal-objective-input" maxlength="10000" rows="2" required></textarea></label><label>Completion criterion<textarea id="goal-criteria-input" maxlength="10000" rows="2" required></textarea></label><label class="check-label"><input id="goal-confirm-start" type="checkbox"> I understand that starting a Goal may begin work immediately in this conversation.</label><button id="goal-create" class="primary" type="button" disabled>Start Goal</button><div class="goal-actions"><button id="goal-pause" type="button" disabled>Pause Goal</button><button id="goal-resume" type="button" disabled>Resume Goal</button><button id="goal-clear" type="button" class="danger" disabled>Clear Goal</button></div><p class="muted small">Pausing or clearing a Goal may not interrupt a turn already running. Use “Stop current turn” separately.</p></section>
 <section class="agent-control-section"><h3>Model for future requests</h3><label>Model<select id="agent-model" disabled><option value="">Connect Codex to load models</option></select></label><label>Reasoning effort<select id="agent-effort" disabled><option value="">Codex default</option></select></label><button id="agent-model-save" type="button" disabled>Save preference</button><p class="muted small">Applies to future explicit chat requests only. It does not restart an active Goal. Catalog listing does not guarantee provider access.</p></section>
 <p id="agent-controls-message" class="feedback" role="status" aria-live="polite"></p></dialog>
-<dialog id="settings"><form id="settings-form"><div class="eyebrow">YOUR TOOLS, YOUR WORLD</div><h2>Connect the workshop</h2><p class="muted">Use an installed, signed-in Codex. No model credentials are sent to the world server.</p><label>Repository / workspace path<input id="workspace" placeholder="C:\Projects\the_unfinished_shapes" autocomplete="off"></label><button id="browse-workspace" type="button" class="quiet">Choose folder…</button><label>Codex executable path<input id="codex" placeholder="C:\…\codex.exe" autocomplete="off"></label><div class="path-actions"><button id="find-codex" type="button" class="quiet">Find installed Codex</button><button id="browse-codex" type="button" class="quiet">Choose file…</button></div><div id="codex-results" class="codex-results" role="status" aria-live="polite"></div><p class="muted small">Search checks PATH and common Codex, npm and editor installation folders. It does not run any discovered file. Select a candidate, then Connect to check compatibility.</p><label class="check-label"><input id="new-game-thread" type="checkbox" aria-describedby="conversation-tools-note"> Create a new game conversation</label><p id="conversation-tools-note" class="muted small">Codex conversations retain the tools registered when they were created. After game commands are updated, explicitly select “Create a new game conversation” to use them. Otherwise your saved conversation resumes by ID. Creating a new conversation preserves the old conversation and its history.</p><label>World server<input id="server-url" type="url" value="http://127.0.0.1:4317" required></label><label>World access token<input id="token" type="password" value="" autocomplete="off"></label><label>Local lighting quality<select id="lighting-quality"><option value="full">Full · 8 nearby lamps and sun shadows</option><option value="reduced">Reduced · 4 nearby lamps, no sun shadows</option></select></label><p class="muted small">Your repository, Codex path and game conversation are restored after updates. The access token stays in this session. Local development is loopback-only. For shared worlds, use the address and access token from the server operator.</p><div id="settings-message" class="feedback" role="status"></div><div class="dialog-actions"><button id="settings-close" type="button" class="quiet">Cancel</button><button id="save-world" type="button" class="quiet">Save world settings</button><button id="connect" type="submit" class="primary">Connect Codex</button></div></form></dialog>
+<dialog id="settings">
+<form id="settings-form">
+<div class="eyebrow">WORKSHOP SETTINGS</div>
+<h2>Settings</h2>
+<p class="muted">Codex runs on this computer and sends gameplay actions to the world server.</p>
+<section id="settings-codex" class="settings-section" aria-labelledby="settings-codex-heading">
+<h3 id="settings-codex-heading">Codex</h3>
+<label>Game repository / workspace<input id="workspace" placeholder="C:\Projects\the_unfinished_shapes" autocomplete="off"></label>
+<button id="browse-workspace" type="button" class="quiet">Choose folder…</button>
+<label>Codex executable<input id="codex" placeholder="C:\…\codex.exe" autocomplete="off"></label>
+<div class="path-actions"><button id="find-codex" type="button" class="quiet">Find installed Codex</button><button id="browse-codex" type="button" class="quiet">Choose file…</button></div>
+<div id="codex-results" class="codex-results" role="status" aria-live="polite"></div>
+<details><summary>Codex details</summary><p class="muted small">Search checks PATH and common Codex, npm and editor installation folders. It does not run discovered files. Select a candidate, then Connect to check compatibility.</p></details>
+<label class="check-label"><input id="new-game-thread" type="checkbox" aria-describedby="conversation-tools-note"> Create a new game conversation</label>
+<p id="conversation-tools-note" class="muted small">Use this only to start a separate conversation with current game tools.</p>
+<details><summary>Conversation history</summary><p class="muted small">Existing conversations resume by ID and keep the tools registered when they were created. A new conversation uses current game tools and preserves the old conversation and its history.</p></details>
+<div class="settings-actions"><button id="connect" type="submit" class="primary">Connect Codex</button></div>
+</section>
+<section id="settings-world" class="settings-section" aria-labelledby="settings-world-heading">
+<h3 id="settings-world-heading">World</h3>
+<label>World server<input id="server-url" type="url" value="http://127.0.0.1:4317" required></label>
+<label>World access token (session only)<input id="token" type="password" value="" autocomplete="off"></label>
+<p class="muted small">For shared worlds, use the address and access token from the server operator.</p>
+<div class="settings-actions"><button id="save-world" type="button" class="quiet">Save world settings</button></div>
+</section>
+<section id="settings-graphics" class="settings-section" aria-labelledby="settings-graphics-heading">
+<h3 id="settings-graphics-heading">Graphics</h3>
+<label>Local lighting quality<select id="lighting-quality"><option value="full">Full · 8 nearby lamps and sun shadows</option><option value="reduced">Reduced · 4 nearby lamps, no sun shadows</option></select></label>
+</section>
+<div id="settings-message" class="feedback" role="status" aria-live="polite"></div>
+<div class="dialog-actions"><button id="settings-close" type="button" class="quiet">Cancel</button></div>
+</form>
+</dialog>
 <script type="module" src="./renderer.mjs"></script>
 </body></html>
