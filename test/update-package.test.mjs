@@ -119,9 +119,10 @@ test('does not accept malformed provenance or a failed cryptographic verifier', 
 });
 
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import tar from 'tar';
 
 test('downloads only the exact official asset and requires its matching signed attestation', async () => {
   const bytes = Buffer.from('verified update package');
@@ -254,4 +255,64 @@ test('archive entry paths stay under the exact package root', () => {
     '/TheUnfinishedShapes-win32-x64/app.exe',
     'TheUnfinishedShapes-win32-x64\\..\\outside.txt',
   ]) assert.throws(() => safeArchiveEntryPath(name, 'TheUnfinishedShapes-win32-x64'), /archive|unsafe/i);
+});
+
+test('extracts the verified Linux archive into a new version folder', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-linux-'));
+  const root = path.join(parent, 'TheUnfinishedShapes-linux-x64');
+  const binary = path.join(root, 'TheUnfinishedShapes');
+  const archive = path.join(parent, 'linux.tar.gz');
+  try {
+    await mkdir(root);
+    await writeFile(binary, 'linux executable fixture', { mode: 0o755 });
+    await tar.create({ file: archive, gzip: true, cwd: parent, portable: true }, ['TheUnfinishedShapes-linux-x64']);
+    const digest = createHash('sha256').update(await readFile(archive)).digest('hex');
+    const result = await extractVerifiedArchive({
+      filePath: archive, directory: parent, tag,
+      assetName: 'TheUnfinishedShapes-0.1.0-rc.11-linux-x64.tar.gz',
+      sha256: digest, platform: 'linux',
+    });
+    assert.equal(result.target, path.join(parent, 'TheUnfinishedShapes-0.1.0-rc.11'));
+    assert.deepEqual(await readFile(result.executablePath), Buffer.from('linux executable fixture'));
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test('extracts Windows portable and macOS app archives under the selected folder', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-zip-'));
+  const cases = [
+    {
+      platform: 'win32',
+      root: 'TheUnfinishedShapes-win32-x64',
+      assetName: 'TheUnfinishedShapes-0.1.0-rc.11-win32-x64.zip',
+      entry: 'TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe',
+      targetName: 'TheUnfinishedShapes-0.1.0-rc.11',
+      executable: 'TheUnfinishedShapes.exe',
+    },
+    {
+      platform: 'darwin',
+      root: 'TheUnfinishedShapes.app',
+      assetName: 'TheUnfinishedShapes-0.1.0-rc.11-darwin-arm64.zip',
+      entry: 'TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes',
+      targetName: 'TheUnfinishedShapes-0.1.0-rc.11.app',
+      executable: 'Contents/MacOS/TheUnfinishedShapes',
+    },
+  ];
+  try {
+    for (const item of cases) {
+      const archive = path.join(parent, item.platform + '.zip');
+      const payload = Buffer.from(item.platform + ' executable fixture');
+      await writeFile(archive, zipFixture(item.entry, payload));
+      const digest = createHash('sha256').update(await readFile(archive)).digest('hex');
+      const result = await extractVerifiedArchive({
+        filePath: archive, directory: parent, tag, assetName: item.assetName, sha256: digest, platform: item.platform,
+      });
+      assert.equal(result.target, path.join(parent, item.targetName));
+      assert.equal(result.executablePath, path.join(parent, item.targetName, item.executable));
+      assert.deepEqual(await readFile(result.executablePath), payload);
+    }
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
 });
