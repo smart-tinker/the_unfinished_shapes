@@ -11,7 +11,7 @@ test('release discovery paginates the official API and returns independent chann
   const parsed=new URL(url),page=Number(parsed.searchParams.get('page'));
   calls.push({url,options});
   if(parsed.origin!=='https://api.github.com'||parsed.pathname!=='/repos/smart-tinker/the_unfinished_shapes/releases')throw new Error('unexpected release endpoint');
-  if(page===1)return response(200,Array.from({length:100},(_,i)=>release('v9.0.'+i)));
+  if(page===1)return response(200,Array.from({length:100},(_,i)=>({...release('v9.0.'+i),draft:true})));
   return response(200,[release('v0.1.0'),release('v0.1.0-rc11')]);
  });
  assert.equal(calls.length,2);
