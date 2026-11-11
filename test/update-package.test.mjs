@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { create as createTar } from 'tar';
@@ -271,7 +271,7 @@ test('extracts the verified Linux archive into a new version folder', async () =
       assetName: 'TheUnfinishedShapes-0.1.0-rc.11-linux-x64.tar.gz',
       sha256: digest, platform: 'linux',
     });
-    assert.equal(result.target, path.join(parent, 'TheUnfinishedShapes-0.1.0-rc.11'));
+    assert.equal(result.target, path.join(await realpath(parent), 'TheUnfinishedShapes-0.1.0-rc.11'));
     assert.deepEqual(await readFile(result.executablePath), Buffer.from('linux executable fixture'));
   } finally {
     await rm(parent, { recursive: true, force: true });
@@ -342,8 +342,8 @@ test('extracts Windows portable and macOS app archives under the selected folder
       const result = await extractVerifiedArchive({
         filePath: archive, directory: parent, tag, assetName: item.assetName, sha256: digest, platform: item.platform,
       });
-      assert.equal(result.target, path.join(parent, item.targetName));
-      assert.equal(result.executablePath, path.join(parent, item.targetName, item.executable));
+      assert.equal(result.target, path.join(await realpath(parent), item.targetName));
+      assert.equal(result.executablePath, path.join(await realpath(parent), item.targetName, item.executable));
       assert.deepEqual(await readFile(result.executablePath), payload);
     }
   } finally {
