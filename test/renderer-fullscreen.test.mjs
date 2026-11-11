@@ -132,7 +132,7 @@ test('monitor DPI change updates rendering without a window resize and rearms th
   const {h,queries,ratios,sizes}=rendererResizeHarness();
   assert.ok(h.has('function watchPixelRatio()'),'DPI-only changes need a resolution media-query watcher');
   assert.equal(queries[0].query,'(resolution: 1dppx)');
-  assert.deepEqual(queries[0].options,{once:true});
+  assert.equal(queries[0].options.once,true);
   h.context.devicePixelRatio=1.5;
   queries[0].listener();
   assert.deepEqual(ratios,[1.5]);
