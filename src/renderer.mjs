@@ -61,7 +61,11 @@ function refreshAgentStatus() {
     : agentControlState?.threadStatus === 'idle' ? 'Connected · idle'
     : agentControlState?.threadStatus === 'systemError' ? 'Codex reported an error'
     : 'Connected · activity unknown';
+  setAgentStatus(status);
+}
+function setAgentStatus(status) {
   $('agent-status').textContent = status;
+  $('settings-codex-status').textContent = status;
 }
 function updateAgentControlButtons() {
   const state = agentControlState, live = connected && state?.connected === true && state.threadId === settings.threadId;
@@ -1115,7 +1119,7 @@ async function saveSettings() {
     if (movePreview || dragCandidate) cancelMovePreview();
     inspectorDirty = false;
     await bridge.disconnectCodex(); connected = false; busy = false; updateChatControls();
-    $('agent-status').textContent = 'Settings changed · reconnect Codex';
+    setAgentStatus('Settings changed · reconnect Codex');
   }
   settings = next; settingsGeneration++;$('lighting-quality').value=settings.lightingQuality||'full';updateWorldLighting(worldState);
   const { token, ...persisted } = settings; await bridge.saveSettings(persisted);
@@ -1124,7 +1128,7 @@ async function saveSettings() {
   await poll();
 }
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('settings-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('settings-message').textContent = error.message; } });
-$('settings-form').addEventListener('submit', async event => { event.preventDefault(); $('connect').disabled = true; $('settings-message').textContent = 'Connecting to your Codex app-server…'; try { await saveSettings(); const result = await bridge.connectCodex({ ...settings, newGameThread: $('new-game-thread').checked }); settings.threadId = result.threadId; $('new-game-thread').checked = false; const { token, ...persisted } = settings; await bridge.saveSettings(persisted); connected = true; $('agent-status').textContent = 'Ready · responds only when asked'; updateChatControls(); $('settings').close(); if ($('agent-controls').open) void refreshAgentControls(); addMessage(result.resumed ? 'Resumed your saved Codex conversation. It retains the tools registered when it was created. To use updated game commands, open Settings and explicitly select “Create a new game conversation”, then Connect. Your old conversation and its history are preserved. No request has been sent.' : 'Connected to your Codex workspace. No request has been sent.'); } catch (error) { $('settings-message').textContent = error.message; } finally { $('connect').disabled = false; } });
+$('settings-form').addEventListener('submit', async event => { event.preventDefault(); $('connect').disabled = true; $('settings-message').textContent = 'Connecting to your Codex app-server…'; try { await saveSettings(); const result = await bridge.connectCodex({ ...settings, newGameThread: $('new-game-thread').checked }); settings.threadId = result.threadId; $('new-game-thread').checked = false; const { token, ...persisted } = settings; await bridge.saveSettings(persisted); connected = true; setAgentStatus('Ready · responds only when asked'); updateChatControls(); $('settings').close(); if ($('agent-controls').open) void refreshAgentControls(); addMessage(result.resumed ? 'Resumed your saved Codex conversation. It retains the tools registered when it was created. To use updated game commands, open Settings and explicitly select “Create a new game conversation”, then Connect. Your old conversation and its history are preserved. No request has been sent.' : 'Connected to your Codex workspace. No request has been sent.'); } catch (error) { $('settings-message').textContent = error.message; } finally { $('connect').disabled = false; } });
 const toolRows = new Map(), itemRows = new Map(), moveStarts = new Map();
 let stopRequested = false, acceptedThreadId = null, currentTurnId = null;
 const retiredTurns = new Set();
@@ -1306,7 +1310,7 @@ function codexEvent(event) {
   if (event.type === 'tool-start' || event.type === 'tool-result') toolActivity(event);
   if (event.type === 'connected') { clearAgentBuildPreview('Codex conversation changed; this preview is no longer available.'); activityThread(event.threadId); connected = true; settings.threadId = event.threadId; agentControlState = null; goalMessageContextId = null; refreshAgentStatus(); void refreshAgentControls(); }
   if (event.type === 'error') addMessage(event.message || 'Codex reported an error.', 'error');
-  if (event.type === 'disconnected') { clearAgentBuildPreview('Codex disconnected; this preview is no longer available.'); const activityUnknown = busy || Boolean(agentControlState?.goal) || Boolean(goalMessageContextId); agentControlRead++; agentControlState = null; $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; ordinaryTurn = false; busy = false; $('agent-status').textContent = activityUnknown ? 'Codex disconnected · activity unknown' : 'Codex disconnected'; $('agent-goal-summary').hidden = true; addMessage(event.message || 'Codex disconnected.', 'error'); if ($('agent-controls').open) void refreshAgentControls(); }
+  if (event.type === 'disconnected') { clearAgentBuildPreview('Codex disconnected; this preview is no longer available.'); const activityUnknown = busy || Boolean(agentControlState?.goal) || Boolean(goalMessageContextId); agentControlRead++; agentControlState = null; $('activity-state').textContent = 'Disconnected'; $('agent-stop-reason').textContent = busy ? 'Connection ended before turn completion was confirmed. Check the world before retrying.' : 'Codex connection ended.'; connected = false; ordinaryTurn = false; busy = false; setAgentStatus(activityUnknown ? 'Codex disconnected · activity unknown' : 'Codex disconnected'); $('agent-goal-summary').hidden = true; addMessage(event.message || 'Codex disconnected.', 'error'); if ($('agent-controls').open) void refreshAgentControls(); }
   if (event.type === 'approval') {
     if ($('agent-controls').open) void refreshAgentControls();
     $('activity-state').textContent = 'Needs decision'; $('agent-stop-reason').textContent = 'Waiting for your response to an approval request; no approval has been granted.';
