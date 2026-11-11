@@ -11,7 +11,6 @@ import { DATA_DIRECTORY, loadSettings, saveSettings, agentModelForThread } from 
 import { findCodex } from './codex-discovery.mjs';
 import { createQuitConfirmation, installQuitGuard, isSmokeAutoConfirmQuit } from './quit-guard.mjs';
 import { listPublishedReleases, releaseRelation, selectReleaseAsset } from './update-release.mjs';
-import { downloadVerifiedAsset, extractVerifiedArchive, verifyDownloadedFile } from './update-package.mjs';
 const userData = process.env.TUS_DATA_DIR ? path.resolve(process.env.TUS_DATA_DIR) : path.join(app.getPath('appData'),DATA_DIRECTORY);
 mkdirSync(userData,{recursive:true});
 app.setPath('userData',userData);
@@ -112,6 +111,7 @@ app.whenReady().then(async()=>{
     updateDownloadController = controller;
     try {
       const directory = path.join(app.getPath('downloads'), 'TheUnfinishedShapes-Updates');
+      const { downloadVerifiedAsset } = await import('./update-package.mjs');
       const result = await downloadVerifiedAsset({
         ...availableUpdate, directory, signal: controller.signal,
         onProgress: progress => win?.webContents.send('updates:progress', { state: 'downloading', ...progress }),
@@ -132,6 +132,7 @@ app.whenReady().then(async()=>{
     if (!downloadedUpdate || downloadedUpdate.distribution === 'installer') throw new Error('Download a portable update archive first.');
     const choice = await dialog.showOpenDialog(win, { title: 'Choose a folder for the verified TUS update', properties: ['openDirectory'] });
     if (choice.canceled || !choice.filePaths[0]) return { canceled: true };
+    const { extractVerifiedArchive } = await import('./update-package.mjs');
     extractedUpdate = await extractVerifiedArchive({
       filePath: downloadedUpdate.filePath, directory: choice.filePaths[0], tag: downloadedUpdate.release.tag_name,
       assetName: downloadedUpdate.assetName, sha256: downloadedUpdate.sha256,
@@ -143,6 +144,7 @@ app.whenReady().then(async()=>{
     if (!downloadedUpdate) throw new Error('Download and verify the update first.');
     let executable;
     if (downloadedUpdate.distribution === 'installer') {
+      const { verifyDownloadedFile } = await import('./update-package.mjs');
       await verifyDownloadedFile({ filePath: downloadedUpdate.filePath, sha256: downloadedUpdate.sha256 });
       executable = downloadedUpdate.filePath;
     } else {
