@@ -15,10 +15,10 @@ jobs:
     outputs:
       version: ${{ steps.candidate.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - run: npm ci --ignore-scripts
@@ -44,10 +44,10 @@ jobs:
       release_id: ${{ steps.draft.outputs.release_id }}
       run_attempt: ${{ steps.draft.outputs.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - name: Create a new empty draft without creating or moving a tag
@@ -69,10 +69,10 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
       CANDIDATE_RUN_ATTEMPT: ${{ needs.create-draft.outputs.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - name: Reject stale draft from an earlier attempt
@@ -100,7 +100,7 @@ jobs:
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
         run: node scripts/release-candidate.mjs stage windows dist/candidate $env:RELEASE_ID
       - name: Attest the tested candidate files
-        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: dist/candidate/*
   macos:
@@ -115,10 +115,10 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
       CANDIDATE_RUN_ATTEMPT: ${{ needs.create-draft.outputs.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           architecture: arm64
@@ -148,7 +148,7 @@ jobs:
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
         run: node scripts/release-candidate.mjs stage macos dist/candidate "$RELEASE_ID"
       - name: Attest the tested candidate files
-        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: dist/candidate/*
   linux:
@@ -163,10 +163,10 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
       CANDIDATE_RUN_ATTEMPT: ${{ needs.create-draft.outputs.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - name: Reject stale draft from an earlier attempt
@@ -192,6 +192,6 @@ jobs:
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
         run: node scripts/release-candidate.mjs stage linux dist/candidate "$RELEASE_ID"
       - name: Attest the tested candidate files
-        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: dist/candidate/*
