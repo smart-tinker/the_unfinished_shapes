@@ -74,7 +74,6 @@ public static class TusWindowLookup {
       var className = new StringBuilder(64);
       if (GetClassName(child, className, className.Capacity) == 0) return true;
       var name = className.ToString();
-      if (name != "Static" && name != "Button") return true;
       nativeControlCount++;
       var text = new StringBuilder(512);
       IntPtr ignored;
@@ -89,11 +88,10 @@ public static class TusWindowLookup {
     bool hasExpectedMessage = false, hasKeepOpen = false, hasQuitAnyway = false;
     IntPtr requested = IntPtr.Zero;
     foreach (var control in controls) {
-      if (control.ClassName == "Static") {
+      if (control.ClassName != "Button") {
         var normalizedText = NormalizePromptText(control.Text);
         foreach (var message in expectedMessages) {
-          if (normalizedText.Equals(message, StringComparison.Ordinal)
-            || normalizedText.StartsWith(message + " ", StringComparison.Ordinal)) hasExpectedMessage = true;
+          if (normalizedText.IndexOf(message, StringComparison.Ordinal) >= 0) hasExpectedMessage = true;
         }
       } else if (control.ClassName == "Button") {
         buttons.Add(control);
@@ -104,7 +102,7 @@ public static class TusWindowLookup {
     }
     if (!hasExpectedMessage) {
       if (nativeControlCount == 0) LastPromptStatus = "native-controls-not-found";
-      else if (unreadableControlCount > 0) LastPromptStatus = "control-text-unreadable";
+      else if (unreadableControlCount == nativeControlCount) LastPromptStatus = "control-text-unreadable";
       else LastPromptStatus = "message-text-not-found";
       return IntPtr.Zero;
     }
