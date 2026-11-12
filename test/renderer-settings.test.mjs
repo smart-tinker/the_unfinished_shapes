@@ -170,9 +170,11 @@ test('Codex recovery guidance follows the live connection state', () => {
   const recovery = h.element('settings-codex-recovery');
   h.context.connected = true;
   h.run("setAgentStatus('Connected · idle')");
+  assert.equal(h.element('settings-codex-status').textContent, 'Connected · idle');
   assert.equal(recovery.hidden, true);
   h.context.connected = false;
   h.run("setAgentStatus('Codex disconnected')");
+  assert.equal(h.element('settings-codex-status').textContent, 'Codex disconnected');
   assert.equal(recovery.hidden, false);
 });
 
