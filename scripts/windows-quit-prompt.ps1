@@ -18,27 +18,28 @@ $processCondition = [System.Windows.Automation.PropertyCondition]::new(
 switch ($Action) {
   { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {
     $buttonName = if ($Action -eq 'keep-open') { 'Keep the game open' } else { 'Quit anyway' }
+    $titleCondition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty, 'Codex activity may continue'
+    )
+    $dialogCondition = [System.Windows.Automation.AndCondition]::new(
+      [System.Windows.Automation.Condition[]]@($processCondition, $titleCondition)
+    )
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     $dialog = $null
     while ([DateTime]::UtcNow -lt $deadline) {
-      $topWindows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $trueCondition)
-      foreach ($candidate in $topWindows) {
-        try {
-          if ($candidate.Current.ProcessId -ne $ProcessId) { continue }
-          $elements = $candidate.FindAll([System.Windows.Automation.TreeScope]::Descendants, $trueCondition)
-          $names = @($candidate.Current.Name)
-          foreach ($element in $elements) { try { $names += $element.Current.Name } catch {} }
-          if ($names -contains 'The current Codex activity is unknown.' -and
-              $names -contains 'Keep the game open' -and $names -contains 'Quit anyway') {
-            $dialog = $candidate
-            break
-          }
-        } catch {}
-      }
+      $dialog = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $dialogCondition)
       if ($dialog) { break }
       Start-Sleep -Milliseconds 100
     }
     if (-not $dialog) { Write-Output 'TUS_UIA: quit-dialog-not-found'; throw 'The expected unknown-Codex native quit confirmation was not found.' }
+    $unknownMessage = $dialog.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        'The current Codex activity is unknown.'
+      )
+    )
+    if (-not $unknownMessage) { Write-Output 'TUS_UIA: quit-dialog-content-not-found'; throw 'The native quit dialog did not contain the expected unknown-activity message.' }
     $buttons = $dialog.FindAll(
       [System.Windows.Automation.TreeScope]::Descendants,
       [System.Windows.Automation.PropertyCondition]::new(
