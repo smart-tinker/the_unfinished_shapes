@@ -164,3 +164,34 @@ test('changing Codex path while connected still requires a verified idle convers
   assert.equal(h.run('settings.codexPath'), '/codex');
   assert.equal(h.run('settings.threadId'), 'game-thread');
 });
+
+test('Codex recovery guidance follows the live connection state', () => {
+  const h = rendererHarness();
+  const recovery = h.element('settings-codex-recovery');
+  h.context.connected = true;
+  h.run("setAgentStatus('Connected · idle')");
+  assert.equal(recovery.hidden, true);
+  h.context.connected = false;
+  h.run("setAgentStatus('Codex disconnected')");
+  assert.equal(recovery.hidden, false);
+});
+
+test('opening Settings clears stale connection feedback and syncs recovery guidance', () => {
+  const h = rendererHarness();
+  let opens = 0;
+  h.context.connected = true;
+  h.element('settings').showModal = () => { opens++; };
+  h.element('settings-codex-recovery').hidden = false;
+  h.element('settings-message').textContent = 'Connecting to your Codex app-server…';
+  h.load("$('updates-notice').addEventListener('click'", 'function readSettings() {');
+  h.element('settings-open').listeners.click();
+  assert.equal(h.element('settings-message').textContent, '');
+  assert.equal(h.element('settings-codex-recovery').hidden, true);
+  assert.equal(opens, 1);
+  h.element('settings-message').textContent = 'Old connection error';
+  h.element('settings-codex-recovery').hidden = false;
+  h.element('updates-notice').listeners.click();
+  assert.equal(h.element('settings-message').textContent, '');
+  assert.equal(h.element('settings-codex-recovery').hidden, true);
+  assert.equal(opens, 2);
+});
