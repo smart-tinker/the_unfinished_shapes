@@ -19,6 +19,10 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 public static class TusWindowLookup {
+  private const uint WM_GETTEXT = 0x000D;
+  private const uint BM_CLICK = 0x00F5;
+  private const uint SMTO_ABORTIFHUNG = 0x0002;
+  private const uint SMTO_BLOCK = 0x0001;
   private delegate bool EnumWindowsCallback(IntPtr window, IntPtr extraData);
   private sealed class PromptControl {
     public IntPtr Handle;
@@ -61,7 +65,7 @@ public static class TusWindowLookup {
       if (name != "Static" && name != "Button") return true;
       var text = new StringBuilder(512);
       IntPtr ignored;
-      if (SendMessageTimeoutText(child, 0x000D, new IntPtr(text.Capacity), text, 0x0003, 1000, out ignored) == IntPtr.Zero) return true;
+      if (SendMessageTimeoutText(child, WM_GETTEXT, new IntPtr(text.Capacity), text, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out ignored) == IntPtr.Zero) return true;
       controls.Add(new PromptControl(child, name, text.ToString()));
       return true;
     }, IntPtr.Zero);
@@ -84,7 +88,7 @@ public static class TusWindowLookup {
   public static bool ClickNativePromptButton(IntPtr button) {
     if (button == IntPtr.Zero) return false;
     IntPtr ignored;
-    return SendMessageTimeoutCommand(button, 0x00F5, IntPtr.Zero, IntPtr.Zero, 0x0003, 1000, out ignored) != IntPtr.Zero;
+    return SendMessageTimeoutCommand(button, BM_CLICK, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out ignored) != IntPtr.Zero;
   }
   public static IntPtr[] GetProcessWindows(uint targetProcessId) {
     var windows = new List<IntPtr>();
