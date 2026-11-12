@@ -15,7 +15,7 @@ async function ui(action, pid) {
   });
   if (error) {
     const output = [stdout, stderr].map(value => String(value ?? '')).join('\n');
-    const marker = output.split(/\r?\n/).map(line => line.trim()).find(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line));
+    const marker = output.split(/\r?\n/).map(line => line.trim()).filter(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line)).at(-1);
     const stderrLine = String(stderr ?? '').split(/\r?\n/).map(line => line.trim()).find(line => line && !/^(?:At\s|CategoryInfo|FullyQualifiedErrorId|[+~])/.test(line));
     const processFailure = error.killed
       ? 'timeout-' + String(error.signal ?? 'unknown').toLowerCase().replace(/[^a-z0-9-]/g, '')
