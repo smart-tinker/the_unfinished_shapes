@@ -67,14 +67,16 @@ test('Windows quit UI reports its latest safe phase when native automation times
   const timeout = Number(automation.match(/timeout:\s*(\d+)/)?.[1]);
   assert.ok(timeout >= 25000, 'PowerShell timeout includes startup plus the full 15-second dialog wait');
   for (const marker of [
-    'script-start', 'window-api-ready', 'locating-foreground-dialog', 'checking-foreground-window',
-    'foreground-title-matched', 'checking-exact-dialog-text', 'checking-exact-dialog-buttons',
-    'exact-foreground-prompt-matched', 'dialog-accessible', 'quit-dialog-not-found',
+    'script-start', 'window-api-ready', 'locating-foreground-dialog',
+    'foreground-title-matched', 'exact-foreground-prompt-matched', 'dialog-accessible', 'quit-dialog-not-found',
   ]) {
     assert.ok(windowsUI.includes('TUS_UIA: ' + marker), 'PowerShell reports ' + marker);
   }
   assert.match(windowsUI, /automation-error-\$errorType-at-\$script:uiPhase/);
+  assert.match(windowsUI, /\$script:uiPhase = 'checking-foreground-window'/);
+  assert.match(windowsUI, /\$script:uiPhase = 'reading-foreground-title'/);
   assert.match(windowsUI, /\$script:uiPhase = 'checking-exact-dialog-text'/);
+  assert.match(windowsUI, /\$script:uiPhase = 'checking-exact-dialog-buttons'/);
   assert.match(windowsUI, /TUS_UIA: prompt-\$promptStatus/);
   assert.doesNotMatch(windowsUI, /GetProcessWindows|reading-owned-window/);
   assert.ok(
