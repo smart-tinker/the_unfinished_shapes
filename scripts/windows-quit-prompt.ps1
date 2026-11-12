@@ -26,23 +26,7 @@ public static class TusWindowLookup {
   [DllImport("user32.dll")]
   private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
   [DllImport("user32.dll")]
-  private static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll", EntryPoint = "GetWindow")]
-  private static extern IntPtr GetWindowOwner(IntPtr window, uint command);
-  public static IntPtr GetForegroundOwnedWindow(uint targetProcessId) {
-    var foreground = GetForegroundWindow();
-    if (foreground == IntPtr.Zero) return IntPtr.Zero;
-    uint processId;
-    GetWindowThreadProcessId(foreground, out processId);
-    if (processId == targetProcessId) return foreground;
-    var owner = GetWindowOwner(foreground, 4);
-    if (owner == IntPtr.Zero) return IntPtr.Zero;
-    GetWindowThreadProcessId(owner, out processId);
-    return processId == targetProcessId ? foreground : IntPtr.Zero;
-  }
-  public static bool HasForegroundWindow() {
-    return GetForegroundWindow() != IntPtr.Zero;
-  }
+  public static extern IntPtr GetForegroundWindow();
   public static IntPtr[] GetProcessWindows(uint targetProcessId) {
     var windows = new List<IntPtr>();
     EnumWindows((window, extraData) => {
@@ -56,6 +40,44 @@ public static class TusWindowLookup {
 }
 '@
 Write-Output 'TUS_UIA: window-api-ready'
+function FindExpectedQuitPrompt($Window, [string]$ButtonName) {
+  $script:uiPhase = 'reading-prompt-title'
+  if ($Window.Current.Name -ne 'Codex activity may continue') { return $null }
+  $message = $null
+  foreach ($expectedMessage in @(
+    'Codex may still be working in this conversation.',
+    'The current Codex activity is unknown.'
+  )) {
+    $script:uiPhase = 'reading-prompt-message'
+    $message = $Window.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        $expectedMessage
+      )
+    )
+    if ($message) { break }
+  }
+  if (-not $message) { return $null }
+  $script:uiPhase = 'reading-dialog-buttons'
+  $buttons = $Window.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Button
+    )
+  )
+  $buttonNames = @($buttons | ForEach-Object { $_.Current.Name })
+  if ($buttons.Count -ne 2 -or
+      $buttonNames -notcontains 'Keep the game open' -or
+      $buttonNames -notcontains 'Quit anyway') { return $null }
+  $button = $null
+  foreach ($candidate in $buttons) {
+    if ($candidate.Current.Name -eq $ButtonName) { $button = $candidate; break }
+  }
+  if (-not $button) { return $null }
+  return [pscustomobject]@{ Message = $message; Button = $button }
+}
 switch ($Action) {
   { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {
     $buttonName = if ($Action -eq 'keep-open') { 'Keep the game open' } else { 'Quit anyway' }
@@ -65,11 +87,8 @@ switch ($Action) {
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     $dialog = $null
     $dialogMessage = $null
+    $quitButton = $null
     $ownedWindowCount = 0
-    $messageCondition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::NameProperty,
-      'The current Codex activity is unknown.'
-    )
     Write-Output 'TUS_UIA: locating-dialog'
     while ([DateTime]::UtcNow -lt $deadline -and -not $dialog) {
       $script:uiPhase = 'enumerating-process-windows'
@@ -81,15 +100,12 @@ switch ($Action) {
         $script:uiPhase = 'opening-owned-window'
         $candidate = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
         $script:uiPhase = 'reading-owned-window'
-        $candidateTitle = $candidate.Current.Name
-        $candidateMessage = $candidate.FindFirst(
-          [System.Windows.Automation.TreeScope]::Descendants,
-          $messageCondition
-        )
-        if ($candidateTitle -eq 'Codex activity may continue' -or $candidateMessage) {
+        $prompt = FindExpectedQuitPrompt $candidate $buttonName
+        if ($prompt) {
           Write-Output 'TUS_UIA: target-dialog-found'
           $dialog = $candidate
-          $dialogMessage = $candidateMessage
+          $dialogMessage = $prompt.Message
+          $quitButton = $prompt.Button
           Write-Output 'TUS_UIA: dialog-accessible'
           break
         }
@@ -99,51 +115,32 @@ switch ($Action) {
     if (-not $dialog) {
       $script:uiPhase = 'checking-foreground-window'
       Write-Output 'TUS_UIA: checking-foreground-window'
-      $foregroundHandle = [TusWindowLookup]::GetForegroundOwnedWindow([uint32]$ProcessId)
+      $foregroundHandle = [TusWindowLookup]::GetForegroundWindow()
       if ($foregroundHandle -ne [IntPtr]::Zero) {
-        $foregroundStatus = 'foreground-window-content-not-found'
         $script:uiPhase = 'opening-foreground-window'
         $foreground = [System.Windows.Automation.AutomationElement]::FromHandle($foregroundHandle)
-        $script:uiPhase = 'reading-foreground-window'
-        $foregroundTitle = $foreground.Current.Name
-        $foregroundMessage = $foreground.FindFirst(
-          [System.Windows.Automation.TreeScope]::Descendants,
-          $messageCondition
-        )
-        if ($foregroundTitle -eq 'Codex activity may continue' -or $foregroundMessage) {
+        $prompt = FindExpectedQuitPrompt $foreground $buttonName
+        if ($prompt) {
           Write-Output 'TUS_UIA: target-dialog-found'
           $dialog = $foreground
-          $dialogMessage = $foregroundMessage
-          $foregroundStatus = $null
+          $dialogMessage = $prompt.Message
+          $quitButton = $prompt.Button
           Write-Output 'TUS_UIA: dialog-accessible'
+        } else {
+          Write-Output 'TUS_UIA: foreground-window-content-not-found'
         }
-      } elseif ([TusWindowLookup]::HasForegroundWindow()) {
-        $foregroundStatus = 'foreground-window-not-owned'
       } else {
-        $foregroundStatus = 'foreground-window-unavailable'
+        Write-Output 'TUS_UIA: foreground-window-unavailable'
       }
     }
     if (-not $dialog) {
       Write-Output 'TUS_UIA: quit-dialog-not-found'
       if ($ownedWindowCount -eq 0) { Write-Output 'TUS_UIA: no-owned-dialog-window' }
       else { Write-Output 'TUS_UIA: owned-window-content-not-found' }
-      if ($foregroundStatus) { Write-Output "TUS_UIA: $foregroundStatus" }
       exit 2
     }
-    if (-not $dialogMessage) { Write-Output 'TUS_UIA: quit-dialog-content-not-found'; exit 2 }
-    Write-Output 'TUS_UIA: reading-dialog-buttons'
-    $script:uiPhase = 'reading-dialog-buttons'
-    $buttons = $dialog.FindAll(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-        [System.Windows.Automation.ControlType]::Button
-      )
-    )
-    $button = $null
-    foreach ($candidate in $buttons) { if ($candidate.Current.Name -eq $buttonName) { $button = $candidate; break } }
-    if (-not $button) { Write-Output 'TUS_UIA: quit-button-not-found'; exit 2 }
-    $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    if (-not $dialogMessage -or -not $quitButton) { Write-Output 'TUS_UIA: quit-dialog-content-not-found'; exit 2 }
+    $quitButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Write-Output "Clicked native '$buttonName' button."
     break
   }
