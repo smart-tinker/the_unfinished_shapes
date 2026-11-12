@@ -118,3 +118,35 @@ test('native prompt inspection matches exact message or detail text in child con
   assert.match(automation, /markers\.slice\(-3\)\.join\(' after '\)/);
   assert.doesNotMatch(windowsUI, /Write-Output.*(?:control|foreground).*(?:Text|Title)/);
 });
+
+
+test('production native quit dialog carries the exact known and unknown message text', async () => {
+  const { createQuitConfirmation } = await import('../src/quit-guard.mjs');
+  const window = { id: 'main-window' }, calls = [];
+  const confirm = createQuitConfirmation({
+    dialog: { showMessageBox: async (parent, options) => { calls.push({ parent, options }); return { response: 0 }; } },
+    getWindow: () => window,
+    isSmokeAutoConfirm: () => false,
+  });
+  await confirm({ connected: true, goal: { status: 'active' } });
+  await confirm(null);
+  assert.equal(calls[0].options.title, 'Codex activity may continue');
+  assert.equal(calls[0].options.message, 'Codex may still be working in this conversation.');
+  assert.equal(calls[0].options.detail, 'Native Goal status: active. Quitting TUS closes its Codex connection but does not confirm that a Goal or turn stopped. Keep the game open to pause or clear the Goal, or quit anyway.');
+  assert.equal(calls[1].options.message, 'The current Codex activity is unknown.');
+  assert.equal(calls[1].options.detail, 'Codex state could not be confirmed. Keep the game open and reconnect to check the conversation, or quit anyway.');
+  assert.deepEqual(calls[0].options.buttons, ['Keep the game open', 'Quit anyway']);
+  assert.deepEqual(calls[1].options.buttons, ['Keep the game open', 'Quit anyway']);
+});
+
+test('native prompt fallback requires exact title and both exact buttons before clicking', async () => {
+  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
+  assert.ok(windowsUI.includes('LastPromptStatus = "title-buttons-text-unavailable"'));
+  assert.ok(windowsUI.includes("Write-Output 'TUS_UIA: prompt-title-buttons-text-unavailable'"));
+  const buttons = windowsUI.indexOf('if (buttons.Count != 2)');
+  const labels = windowsUI.indexOf('if (!hasKeepOpen || !hasQuitAnyway)');
+  const requested = windowsUI.indexOf('if (requested == IntPtr.Zero)');
+  const text = windowsUI.indexOf('if (!hasExpectedMessage)');
+  assert.ok(buttons >= 0 && labels > buttons && requested > labels && text > requested,
+    'body-text fallback occurs only after both exact button names and the requested button match');
+});
