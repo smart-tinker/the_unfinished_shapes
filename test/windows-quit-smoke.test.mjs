@@ -99,7 +99,7 @@ test('Windows quit UI reports its latest safe phase when native automation times
 });
 
 
-test('native prompt inspection searches exact text in child controls and reports safe status', async () => {
+test('native prompt inspection matches exact message or detail text in child controls', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
   assert.match(windowsUI, /public static string LastPromptStatus/);
