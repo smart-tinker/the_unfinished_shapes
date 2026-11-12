@@ -13,8 +13,9 @@ async function ui(action, pid) {
       '-Action', action, '-ProcessId', String(pid),
     ], { timeout: 20000, windowsHide: true });
     if (stdout.trim()) console.log(stdout.trim());
-  } catch {
-    throw new Error(`Windows native quit UI action failed: ${action}`);
+  } catch (error) {
+    const detail = String(error.stdout ?? '').split(/\r?\n/).map(line => line.trim()).find(line => /^TUS_UIA: [a-z0-9-]+$/.test(line));
+    throw new Error(`Windows native quit UI action failed: ${action}${detail ? ` (${detail.slice(8)})` : ''}`);
   }
 }
 

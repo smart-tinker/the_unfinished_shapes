@@ -34,7 +34,7 @@ switch ($Action) {
       if ($dialog) { break }
       Start-Sleep -Milliseconds 100
     }
-    if (-not $dialog) { throw 'The expected unknown-Codex native quit confirmation was not found.' }
+    if (-not $dialog) { Write-Output 'TUS_UIA: quit-dialog-not-found'; throw 'The expected unknown-Codex native quit confirmation was not found.' }
     $buttons = $dialog.FindAll(
       [System.Windows.Automation.TreeScope]::Descendants,
       [System.Windows.Automation.PropertyCondition]::new(
@@ -44,7 +44,7 @@ switch ($Action) {
     )
     $button = $null
     foreach ($candidate in $buttons) { if ($candidate.Current.Name -eq $buttonName) { $button = $candidate; break } }
-    if (-not $button) { throw "Expected native quit button '$buttonName' was not found." }
+    if (-not $button) { Write-Output 'TUS_UIA: quit-button-not-found'; throw "Expected native quit button '$buttonName' was not found." }
     $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Write-Output "Clicked native '$buttonName' button."
     break
@@ -61,7 +61,7 @@ switch ($Action) {
       [System.Windows.Automation.Condition[]]@($processCondition, $fileName, $menuType)
     )
     $file = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $fileCondition)
-    if (-not $file) { throw 'The packaged TUS File menu was not found.' }
+    if (-not $file) { Write-Output 'TUS_UIA: file-menu-not-found'; throw 'The packaged TUS File menu was not found.' }
     try { $file.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand() }
     catch { $file.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
     $exitName = $null
@@ -84,7 +84,7 @@ switch ($Action) {
       }
       if (-not $exitName) { Start-Sleep -Milliseconds 100 }
     }
-    if (-not $exitName) { throw "File menu did not expose Exit or Quit; menu items: $($visibleNames -join ', ')" }
+    if (-not $exitName) { Write-Output 'TUS_UIA: file-exit-not-found'; throw "File menu did not expose Exit or Quit; menu items: $($visibleNames -join ', ')" }
     $exitItem.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Write-Output "Invoked File -> $exitName."
     break
