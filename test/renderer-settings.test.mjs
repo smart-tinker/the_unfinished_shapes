@@ -183,7 +183,7 @@ test('opening Settings clears stale connection progress, preserves errors, and s
   h.element('settings').showModal = () => { opens++; };
   h.element('settings-codex-recovery').hidden = false;
   h.element('settings-message').textContent = 'Connecting to your Codex app-server…';
-  h.load("$('updates-notice').addEventListener('click'", 'function readSettings() {');
+  h.load('function openSettings()', 'function readSettings() {');
   h.element('settings-open').listeners.click();
   assert.equal(h.element('settings-message').textContent, '');
   assert.equal(h.element('settings-codex-recovery').hidden, true);
