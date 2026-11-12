@@ -18,13 +18,33 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(automation, /const output = \[stdout, stderr\]/);
   assert.match(windowsUI, /TUS_UIA: quit-dialog-not-found/);
   assert.match(windowsUI, /TUS_UIA: automation-error-/);
-  assert.match(windowsUI, /Codex activity may continue/);
-  assert.match(windowsUI, /GetForegroundOwnedWindow/);
-  for (const marker of ['foreground-window-unavailable', 'foreground-window-not-owned', 'foreground-window-content-not-found']) {
-    assert.ok(windowsUI.includes("$foregroundStatus = '" + marker + "'"), 'PowerShell classifies ' + marker);
+  assert.match(windowsUI, /GetForegroundWindow/);
+  assert.doesNotMatch(windowsUI, /GetForegroundOwnedWindow|foreground-window-not-owned/);
+
+  const promptLookup = windowsUI.slice(
+    windowsUI.indexOf('function FindExpectedQuitPrompt'),
+    windowsUI.indexOf('switch ($Action)'),
+  );
+  assert.ok(promptLookup.includes('function FindExpectedQuitPrompt'), 'exact prompt matcher exists');
+  const titleCheck = promptLookup.indexOf("$Window.Current.Name -ne 'Codex activity may continue'");
+  const textCheck = promptLookup.indexOf('$Window.FindFirst');
+  const buttonsCheck = promptLookup.indexOf('$Window.FindAll');
+  assert.ok(titleCheck >= 0 && titleCheck < textCheck && textCheck < buttonsCheck,
+    'foreground descendants are read only after the exact TUS dialog title matches');
+  for (const text of [
+    'Codex may still be working in this conversation.',
+    'The current Codex activity is unknown.',
+    'Keep the game open',
+    'Quit anyway',
+  ]) {
+    assert.ok(promptLookup.includes(text), 'exact TUS prompt text includes ' + text);
   }
-  assert.match(windowsUI, /HasForegroundWindow/);
-  assert.ok(windowsUI.includes('Write-Output "TUS_UIA: $foregroundStatus"'));
+  assert.match(promptLookup, /\$buttons\.Count -ne 2/);
+  assert.match(promptLookup, /\$buttonNames -notcontains 'Keep the game open'/);
+  assert.match(promptLookup, /\$buttonNames -notcontains 'Quit anyway'/);
+  assert.match(windowsUI, /\$foregroundHandle = \[TusWindowLookup\]::GetForegroundWindow\(\)/);
+  assert.match(windowsUI, /TUS_UIA: foreground-window-content-not-found/);
+
   assert.match(windowsUI, /GetProcessWindows/);
   assert.match(windowsUI, /EnumWindows/);
   assert.match(windowsUI, /IsWindowVisible/);
@@ -56,7 +76,11 @@ test('Windows quit UI reports its latest safe phase when native automation times
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
   const timeout = Number(automation.match(/timeout:\s*(\d+)/)?.[1]);
   assert.ok(timeout >= 25000, 'PowerShell timeout includes startup plus the full 15-second dialog wait');
-  for (const marker of ['script-start', 'window-api-ready', 'locating-dialog', 'target-dialog-found', 'dialog-accessible', 'no-owned-dialog-window', 'owned-window-content-not-found', 'checking-foreground-window']) {
+  for (const marker of [
+    'script-start', 'window-api-ready', 'locating-dialog', 'target-dialog-found',
+    'dialog-accessible', 'no-owned-dialog-window', 'owned-window-content-not-found',
+    'checking-foreground-window', 'foreground-window-unavailable', 'foreground-window-content-not-found',
+  ]) {
     assert.ok(windowsUI.includes('TUS_UIA: ' + marker), 'PowerShell reports ' + marker);
   }
   assert.match(windowsUI, /automation-error-\$errorType-at-\$script:uiPhase/);
