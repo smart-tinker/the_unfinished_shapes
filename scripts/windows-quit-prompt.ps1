@@ -56,6 +56,10 @@ public static class TusWindowLookup {
     GetWindowText(window, text, text.Capacity);
     return text.ToString();
   }
+  private static string NormalizePromptText(string text) {
+    if (String.IsNullOrWhiteSpace(text)) return "";
+    return String.Join(" ", text.Split((char[])null, StringSplitOptions.RemoveEmptyEntries));
+  }
   public static IntPtr FindExpectedQuitButton(IntPtr dialog, string[] expectedMessages, string requestedButton) {
     LastPromptStatus = "invalid-window";
     if (dialog == IntPtr.Zero) return IntPtr.Zero;
@@ -86,7 +90,11 @@ public static class TusWindowLookup {
     IntPtr requested = IntPtr.Zero;
     foreach (var control in controls) {
       if (control.ClassName == "Static") {
-        foreach (var message in expectedMessages) if (control.Text == message) hasExpectedMessage = true;
+        var normalizedText = NormalizePromptText(control.Text);
+        foreach (var message in expectedMessages) {
+          if (normalizedText.Equals(message, StringComparison.Ordinal)
+            || normalizedText.StartsWith(message + " ", StringComparison.Ordinal)) hasExpectedMessage = true;
+        }
       } else if (control.ClassName == "Button") {
         buttons.Add(control);
         if (control.Text == "Keep the game open") hasKeepOpen = true;
