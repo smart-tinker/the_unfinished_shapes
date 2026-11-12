@@ -10,9 +10,6 @@ trap {
   exit 2
 }
 Write-Output 'TUS_UIA: script-start'
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Write-Output 'TUS_UIA: automation-ready'
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -24,7 +21,21 @@ public static class TusWindowLookup {
   private const uint BM_CLICK = 0x00F5;
   private const uint SMTO_ABORTIFHUNG = 0x0002;
   private const uint SMTO_BLOCK = 0x0001;
+  private const uint MF_BYPOSITION = 0x0400;
+  private const uint WM_COMMAND = 0x0111;
   private delegate bool EnumWindowsCallback(IntPtr window, IntPtr extraData);
+  [DllImport("user32.dll")]
+  private static extern IntPtr GetMenu(IntPtr window);
+  [DllImport("user32.dll")]
+  private static extern IntPtr GetSubMenu(IntPtr menu, int position);
+  [DllImport("user32.dll")]
+  private static extern int GetMenuItemCount(IntPtr menu);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetMenuStringW")]
+  private static extern int GetMenuString(IntPtr menu, uint item, StringBuilder text, int maximumLength, uint flags);
+  [DllImport("user32.dll")]
+  private static extern uint GetMenuItemID(IntPtr menu, int position);
+  [DllImport("user32.dll", EntryPoint = "PostMessageW")]
+  private static extern bool PostWindowMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
   private sealed class PromptControl {
     public IntPtr Handle;
     public string ClassName;
@@ -118,6 +129,40 @@ public static class TusWindowLookup {
     if (button == IntPtr.Zero) return false;
     IntPtr ignored;
     return SendMessageTimeoutCommand(button, BM_CLICK, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out ignored) != IntPtr.Zero;
+  }
+  private static string ReadMenuLabel(IntPtr menu, int position) {
+    var text = new StringBuilder(256);
+    if (GetMenuString(menu, (uint)position, text, text.Capacity, MF_BYPOSITION) <= 0) return String.Empty;
+    var label = text.ToString();
+    var accelerator = label.IndexOf('\t');
+    if (accelerator >= 0) label = label.Substring(0, accelerator);
+    return label.Replace("&", "").Trim();
+  }
+  public static uint FindMenuCommand(IntPtr window, string menuLabel, string[] commandLabels) {
+    if (window == IntPtr.Zero || String.IsNullOrEmpty(menuLabel) || commandLabels == null) return UInt32.MaxValue;
+    var menu = GetMenu(window);
+    if (menu == IntPtr.Zero) return UInt32.MaxValue;
+    var topCount = GetMenuItemCount(menu);
+    for (int i = 0; i < topCount; i++) {
+      if (!String.Equals(ReadMenuLabel(menu, i), menuLabel, StringComparison.Ordinal)) continue;
+      var submenu = GetSubMenu(menu, i);
+      if (submenu == IntPtr.Zero) return UInt32.MaxValue;
+      var submenuCount = GetMenuItemCount(submenu);
+      for (int j = 0; j < submenuCount; j++) {
+        var label = ReadMenuLabel(submenu, j);
+        for (int k = 0; k < commandLabels.Length; k++) {
+          if (!String.Equals(label, commandLabels[k], StringComparison.Ordinal)) continue;
+          var commandId = GetMenuItemID(submenu, j);
+          if (commandId != 0 && commandId != UInt32.MaxValue) return commandId;
+        }
+      }
+      return UInt32.MaxValue;
+    }
+    return UInt32.MaxValue;
+  }
+  public static bool PostMenuCommand(IntPtr window, uint commandId) {
+    if (window == IntPtr.Zero || commandId == 0 || commandId == UInt32.MaxValue || commandId > UInt16.MaxValue) return false;
+    return PostWindowMessage(window, WM_COMMAND, new IntPtr((int)commandId), IntPtr.Zero);
   }
   public static IntPtr[] GetProcessWindows(uint targetProcessId) {
     var windows = new List<IntPtr>();
@@ -218,40 +263,13 @@ switch ($Action) {
     if ($windowHandle -eq [IntPtr]::Zero) { Write-Output 'TUS_UIA: app-window-not-found'; throw 'The packaged TUS main window was not found.' }
     if ([TusWindowLookup]::GetWindowTitle($windowHandle) -ne 'The Unfinished Shapes') { Write-Output 'TUS_UIA: main-window-title-mismatch'; throw 'The packaged TUS main window was not found.' }
     Write-Output 'TUS_UIA: main-window-found'
-    $window = [System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)
-    $menuType = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-      [System.Windows.Automation.ControlType]::MenuItem
-    )
-    $fileCondition = [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@(
-      [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::NameProperty, 'File'
-      ),
-      $menuType
-    ))
-    $script:uiPhase = 'opening-file-menu'
-    Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.SendKeys]::SendWait('%f')
-    Write-Output 'TUS_UIA: file-menu-shortcut-sent'
-    $script:uiPhase = 'locating-file-menu'
-    $file = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $fileCondition)
-    if (-not $file) { Write-Output 'TUS_UIA: file-menu-not-found'; throw 'The packaged TUS File menu was not found.' }
-    Write-Output 'TUS_UIA: file-menu-found'
-    $exitItem = $null
-    $visibleNames = @()
-    $deadline = [DateTime]::UtcNow.AddSeconds(10)
-    while ([DateTime]::UtcNow -lt $deadline -and -not $exitItem) {
-      $items = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $menuType)
-      foreach ($item in $items) {
-        $visibleNames += $item.Current.Name
-        if ($item.Current.Name -match '^(Exit|Quit)$') { $exitItem = $item; break }
-      }
-      if (-not $exitItem) { Start-Sleep -Milliseconds 100 }
-    }
-    if (-not $exitItem) { Write-Output 'TUS_UIA: file-exit-not-found'; throw "File menu did not expose Exit or Quit; menu items: $($visibleNames -join ', ')" }
-    $exitName = $exitItem.Current.Name
-    $exitItem.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Write-Output "Invoked File -> $exitName."
+    $script:uiPhase = 'locating-native-file-exit'
+    $commandId = [TusWindowLookup]::FindMenuCommand($windowHandle, 'File', [string[]]@('Exit', 'Quit'))
+    if ($commandId -eq [uint32]::MaxValue) { Write-Output 'TUS_UIA: file-exit-command-not-found'; throw 'The packaged TUS File -> Exit command was not found.' }
+    $script:uiPhase = 'posting-native-file-exit'
+    if (-not [TusWindowLookup]::PostMenuCommand($windowHandle, $commandId)) { Write-Output 'TUS_UIA: file-exit-command-post-failed'; throw 'The packaged TUS File -> Exit command could not be posted.' }
+    Write-Output 'TUS_UIA: native-file-exit-command-posted'
+    Write-Output 'Invoked File -> Exit.'
     break
   }
 }
