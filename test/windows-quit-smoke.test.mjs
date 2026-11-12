@@ -19,6 +19,9 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(windowsUI, /TUS_UIA: quit-dialog-not-found/);
   assert.match(windowsUI, /TUS_UIA: automation-error-/);
   assert.match(windowsUI, /Codex activity may continue/);
+  assert.match(windowsUI, /FindWindow\(\$null,\s*'Codex activity may continue'\)/);
+  assert.match(windowsUI, /GetWindowThreadProcessId/);
+  assert.doesNotMatch(windowsUI, /\$root\.FindFirst\(/);
   assert.doesNotMatch(windowsUI, /\$candidate\.FindAll\(\[System\.Windows\.Automation\.TreeScope\]::Descendants/);
 });
 
