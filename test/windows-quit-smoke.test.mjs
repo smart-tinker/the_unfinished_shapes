@@ -15,5 +15,7 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(acceptance, /promptProcess\.exitCode/);
   assert.doesNotMatch(acceptance, /promptGraphics\.assertNoErrors\(\)/);
   assert.match(automation, /error\.stdout/);
+  assert.match(automation, /error\.stderr/);
   assert.match(windowsUI, /TUS_UIA: quit-dialog-not-found/);
+  assert.match(windowsUI, /TUS_UIA: automation-error-/);
 });

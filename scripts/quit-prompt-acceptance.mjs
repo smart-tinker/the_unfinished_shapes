@@ -14,7 +14,9 @@ async function ui(action, pid) {
     ], { timeout: 20000, windowsHide: true });
     if (stdout.trim()) console.log(stdout.trim());
   } catch (error) {
-    const detail = String(error.stdout ?? '').split(/\r?\n/).map(line => line.trim()).find(line => /^TUS_UIA: [a-z0-9-]+$/.test(line));
+    const output = [error.stdout, error.stderr].map(value => String(value ?? '')).join('\n');
+    const markers = output.split(/\r?\n/).map(line => line.trim()).filter(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line));
+    const detail = markers.find(line => !/automation-error|started/i.test(line)) || markers[0];
     throw new Error(`Windows native quit UI action failed: ${action}${detail ? ` (${detail.slice(8)})` : ''}`);
   }
 }

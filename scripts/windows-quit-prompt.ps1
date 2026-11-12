@@ -3,6 +3,11 @@ param(
   [Parameter(Mandatory=$true)][int]$ProcessId
 )
 $ErrorActionPreference = 'Stop'
+trap {
+  $errorType = $_.Exception.GetType().Name -replace '[^A-Za-z0-9]', ''
+  Write-Output "TUS_UIA: automation-error-$errorType"
+  exit 2
+}
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $root = [System.Windows.Automation.AutomationElement]::RootElement
