@@ -19,7 +19,12 @@ public static class TusWindowLookup {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)]
   public static extern IntPtr FindWindow(string className, string windowName);
   [DllImport("user32.dll")]
-  public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+  private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+  public static uint GetWindowProcessId(IntPtr window) {
+    uint processId;
+    GetWindowThreadProcessId(window, out processId);
+    return processId;
+  }
 }
 '@
 Write-Output 'TUS_UIA: window-api-ready'
@@ -28,12 +33,20 @@ switch ($Action) {
     $buttonName = if ($Action -eq 'keep-open') { 'Keep the game open' } else { 'Quit anyway' }
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     $dialog = $null
+    $findWindowReported = $false
+    $findWindowReturnedReported = $false
+    $windowHandleReported = $false
+    $windowProcessReported = $false
     Write-Output 'TUS_UIA: locating-dialog'
     while ([DateTime]::UtcNow -lt $deadline) {
+      if (-not $findWindowReported) { Write-Output 'TUS_UIA: calling-find-window'; $findWindowReported = $true }
       $handle = [TusWindowLookup]::FindWindow($null, 'Codex activity may continue')
+      if (-not $findWindowReturnedReported) { Write-Output 'TUS_UIA: find-window-returned'; $findWindowReturnedReported = $true }
       if ($handle -ne [IntPtr]::Zero) {
-        [uint32]$dialogProcessId = 0
-        $null = [TusWindowLookup]::GetWindowThreadProcessId($handle, [ref]$dialogProcessId)
+        if (-not $windowHandleReported) { Write-Output 'TUS_UIA: window-handle-found'; $windowHandleReported = $true }
+        if (-not $windowProcessReported) { Write-Output 'TUS_UIA: reading-window-process' }
+        $dialogProcessId = [TusWindowLookup]::GetWindowProcessId($handle)
+        if (-not $windowProcessReported) { Write-Output 'TUS_UIA: window-process-read'; $windowProcessReported = $true }
         if ($dialogProcessId -eq $ProcessId) {
           Write-Output 'TUS_UIA: target-dialog-found'
           $dialog = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
