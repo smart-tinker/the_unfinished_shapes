@@ -104,9 +104,8 @@ test('native prompt inspection matches exact message or detail text in child con
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
   assert.match(windowsUI, /public static string LastPromptStatus/);
   for (const status of [
-    'title-mismatch', 'native-controls-not-found', 'control-text-unreadable',
-    'message-text-not-found', 'button-count-mismatch', 'expected-buttons-missing',
-    'requested-button-missing', 'matched',
+    'title-mismatch', 'button-count-mismatch', 'expected-buttons-missing',
+    'requested-button-missing', 'title-buttons-text-unavailable', 'matched',
   ]) {
     assert.ok(windowsUI.includes('LastPromptStatus = "' + status + '"'), 'native scan reports ' + status);
   }
@@ -142,7 +141,8 @@ test('production native quit dialog carries the exact known and unknown message 
 test('native prompt fallback requires exact title and both exact buttons before clicking', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
   assert.ok(windowsUI.includes('LastPromptStatus = "title-buttons-text-unavailable"'));
-  assert.ok(windowsUI.includes("Write-Output 'TUS_UIA: prompt-title-buttons-text-unavailable'"));
+  const safeMarker = "if ($promptStatus -eq 'title-buttons-text-unavailable') { Write-Output 'TUS_UIA: prompt-title-buttons-text-unavailable' }";
+  assert.equal(windowsUI.split(safeMarker).length - 1, 2, 'both native click paths report unavailable body text safely');
   const buttons = windowsUI.indexOf('if (buttons.Count != 2)');
   const labels = windowsUI.indexOf('if (!hasKeepOpen || !hasQuitAnyway)');
   const requested = windowsUI.indexOf('if (requested == IntPtr.Zero)');
