@@ -229,11 +229,14 @@ switch ($Action) {
       ),
       $menuType
     ))
+    $script:uiPhase = 'opening-file-menu'
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.SendKeys]::SendWait('%f')
+    Write-Output 'TUS_UIA: file-menu-shortcut-sent'
+    $script:uiPhase = 'locating-file-menu'
     $file = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $fileCondition)
     if (-not $file) { Write-Output 'TUS_UIA: file-menu-not-found'; throw 'The packaged TUS File menu was not found.' }
     Write-Output 'TUS_UIA: file-menu-found'
-    try { $file.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand() }
-    catch { $file.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
     $exitItem = $null
     $visibleNames = @()
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
