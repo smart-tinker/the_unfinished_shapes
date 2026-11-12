@@ -17,6 +17,7 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Text;
 public static class TusWindowLookup {
   private delegate bool EnumWindowsCallback(IntPtr window, IntPtr extraData);
   [DllImport("user32.dll")]
@@ -27,6 +28,13 @@ public static class TusWindowLookup {
   private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
   [DllImport("user32.dll")]
   public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  private static extern int GetWindowText(IntPtr window, StringBuilder text, int maximumLength);
+  public static string GetWindowTitle(IntPtr window) {
+    var text = new StringBuilder(256);
+    GetWindowText(window, text, text.Capacity);
+    return text.ToString();
+  }
   public static IntPtr[] GetProcessWindows(uint targetProcessId) {
     var windows = new List<IntPtr>();
     EnumWindows((window, extraData) => {
@@ -116,16 +124,25 @@ switch ($Action) {
       $script:uiPhase = 'checking-foreground-window'
       Write-Output 'TUS_UIA: checking-foreground-window'
       $foregroundHandle = [TusWindowLookup]::GetForegroundWindow()
+      Write-Output 'TUS_UIA: foreground-handle-read'
       if ($foregroundHandle -ne [IntPtr]::Zero) {
-        $script:uiPhase = 'opening-foreground-window'
-        $foreground = [System.Windows.Automation.AutomationElement]::FromHandle($foregroundHandle)
-        $prompt = FindExpectedQuitPrompt $foreground $buttonName
-        if ($prompt) {
-          Write-Output 'TUS_UIA: target-dialog-found'
-          $dialog = $foreground
-          $dialogMessage = $prompt.Message
-          $quitButton = $prompt.Button
-          Write-Output 'TUS_UIA: dialog-accessible'
+        $script:uiPhase = 'reading-foreground-title'
+        $foregroundTitle = [TusWindowLookup]::GetWindowTitle($foregroundHandle)
+        Write-Output 'TUS_UIA: foreground-title-read'
+        if ($foregroundTitle -eq 'Codex activity may continue') {
+          Write-Output 'TUS_UIA: foreground-title-matched'
+          $script:uiPhase = 'opening-foreground-window'
+          $foreground = [System.Windows.Automation.AutomationElement]::FromHandle($foregroundHandle)
+          $prompt = FindExpectedQuitPrompt $foreground $buttonName
+          if ($prompt) {
+            Write-Output 'TUS_UIA: target-dialog-found'
+            $dialog = $foreground
+            $dialogMessage = $prompt.Message
+            $quitButton = $prompt.Button
+            Write-Output 'TUS_UIA: dialog-accessible'
+          } else {
+            Write-Output 'TUS_UIA: foreground-window-content-not-found'
+          }
         } else {
           Write-Output 'TUS_UIA: foreground-window-content-not-found'
         }
