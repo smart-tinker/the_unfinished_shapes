@@ -65,3 +65,12 @@ test('Settings exposes update channel, package choice, and explicit update actio
   assert.match(updates, /id="updates-launch"/);
   assert.match(updates, /id="updates-status"[^>]*role="status"[^>]*aria-live="polite"/);
 });
+
+
+test('world save feedback stays with World settings', () => {
+  const world = section('settings-world');
+  const codex = section('settings-codex');
+  assert.match(world, /id="world-message"[^>]*class="feedback"[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.doesNotMatch(world, /id="settings-message"/);
+  assert.match(codex, /id="settings-message"[^>]*class="feedback"[^>]*role="status"[^>]*aria-live="polite"/);
+});
