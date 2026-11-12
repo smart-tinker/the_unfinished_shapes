@@ -11,7 +11,7 @@ async function ui(action, pid) {
     execFile('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', automationScript,
       '-Action', action, '-ProcessId', String(pid),
-    ], { timeout: 20000, windowsHide: true }, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
+    ], { timeout: 30000, windowsHide: true }, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
   });
   if (error) {
     const output = [stdout, stderr].map(value => String(value ?? '')).join('\n');
