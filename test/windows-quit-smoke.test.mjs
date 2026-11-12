@@ -110,6 +110,7 @@ test('native prompt inspection reports a fixed safe status without dialog text',
   }
   assert.ok(windowsUI.includes('TUS_UIA: prompt-$promptStatus'));
   assert.match(windowsUI, /NormalizePromptText/);
+  assert.match(windowsUI, /String\.IsNullOrWhiteSpace\(text\)/);
   assert.match(windowsUI, /normalizedText\.Equals\(message, StringComparison\.Ordinal\)/);
   assert.match(windowsUI, /normalizedText\.StartsWith\(message \+ " ", StringComparison\.Ordinal\)/);
   assert.match(automation, /markers\.slice\(-3\)\.join\(' after '\)/);
