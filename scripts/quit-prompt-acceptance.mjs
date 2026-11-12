@@ -38,7 +38,7 @@ export async function quitPromptAcceptance(app, page) {
     process.once('error', reject);
   });
   try {
-    await ui('close-window', pid);
+    await app.evaluate(({ BrowserWindow }) => {\n      const window = BrowserWindow.getAllWindows()[0];\n      if (!window) throw new Error('The packaged TUS window is unavailable.');\n      window.close();\n    });
     await ui('keep-open', pid);
     assert.equal(process.exitCode, null, 'Keep the game open leaves the packaged process running');
     await page.waitForFunction(() => document.querySelector('#connection')?.textContent.includes('World connected'), null, { timeout: 10000 });
