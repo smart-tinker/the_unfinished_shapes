@@ -25,6 +25,21 @@ public static class TusWindowLookup {
   private static extern bool IsWindowVisible(IntPtr window);
   [DllImport("user32.dll")]
   private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+  [DllImport("user32.dll")]
+  private static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", EntryPoint = "GetWindow")]
+  private static extern IntPtr GetWindowOwner(IntPtr window, uint command);
+  public static IntPtr GetForegroundOwnedWindow(uint targetProcessId) {
+    var foreground = GetForegroundWindow();
+    if (foreground == IntPtr.Zero) return IntPtr.Zero;
+    uint processId;
+    GetWindowThreadProcessId(foreground, out processId);
+    if (processId == targetProcessId) return foreground;
+    var owner = GetWindowOwner(foreground, 4);
+    if (owner == IntPtr.Zero) return IntPtr.Zero;
+    GetWindowThreadProcessId(owner, out processId);
+    return processId == targetProcessId ? foreground : IntPtr.Zero;
+  }
   public static IntPtr[] GetProcessWindows(uint targetProcessId) {
     var windows = new List<IntPtr>();
     EnumWindows((window, extraData) => {
@@ -77,6 +92,27 @@ switch ($Action) {
         }
       }
       if (-not $dialog) { Start-Sleep -Milliseconds 100 }
+    }
+    if (-not $dialog) {
+      $script:uiPhase = 'checking-foreground-window'
+      Write-Output 'TUS_UIA: checking-foreground-window'
+      $foregroundHandle = [TusWindowLookup]::GetForegroundOwnedWindow([uint32]$ProcessId)
+      if ($foregroundHandle -ne [IntPtr]::Zero) {
+        $script:uiPhase = 'opening-foreground-window'
+        $foreground = [System.Windows.Automation.AutomationElement]::FromHandle($foregroundHandle)
+        $script:uiPhase = 'reading-foreground-window'
+        $foregroundTitle = $foreground.Current.Name
+        $foregroundMessage = $foreground.FindFirst(
+          [System.Windows.Automation.TreeScope]::Descendants,
+          $messageCondition
+        )
+        if ($foregroundTitle -eq 'Codex activity may continue' -or $foregroundMessage) {
+          Write-Output 'TUS_UIA: target-dialog-found'
+          $dialog = $foreground
+          $dialogMessage = $foregroundMessage
+          Write-Output 'TUS_UIA: dialog-accessible'
+        }
+      }
     }
     if (-not $dialog) {
       Write-Output 'TUS_UIA: quit-dialog-not-found'
