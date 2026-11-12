@@ -18,7 +18,7 @@ async function ui(action, pid) {
   }
 }
 
-export async function quitPromptAcceptance(app, page) {
+export async function quitPromptAcceptance(app, page, graphics) {
   const process = app.process();
   assert.ok(process?.pid, 'packaged TUS main process has a PID');
   const pid = process.pid;
@@ -53,6 +53,7 @@ export async function quitPromptAcceptance(app, page) {
       };
     });
     assert.deepEqual(afterCancel, before, 'canceling the native prompt leaves settings and world unchanged');
+    await graphics.assertHealthy();
     await ui('file-exit', pid);
     await ui('quit-anyway', pid);
     const exitCode = await Promise.race([
