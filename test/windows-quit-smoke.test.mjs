@@ -152,18 +152,6 @@ test('native prompt fallback requires exact title and both exact buttons before 
 });
 
 
-test('File -> Exit uses only the exact foreground TUS window when Electron has no main HWND', async () => {
-  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
-  const fileExit = windowsUI.slice(windowsUI.indexOf("  'file-exit' {"));
-  const foreground = fileExit.indexOf('[TusWindowLookup]::GetForegroundWindow()');
-  const titleCheck = fileExit.indexOf("GetWindowTitle($windowHandle) -ne 'The Unfinished Shapes'");
-  const automation = fileExit.indexOf('[System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)');
-  assert.ok(fileExit.includes('$process.MainWindowHandle'), 'uses Electron HWND when Windows provides it');
-  assert.ok(foreground >= 0 && titleCheck > foreground && automation > titleCheck,
-    'missing main HWND falls back to foreground, then requires exact TUS title before UIA');
-});
-
-
 test('File -> Exit posts only the exact command from the TUS native menu', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
   const helper = windowsUI.slice(windowsUI.indexOf('public static class TusWindowLookup'), windowsUI.indexOf("\n'@"));
@@ -171,9 +159,11 @@ test('File -> Exit posts only the exact command from the TUS native menu', async
     assert.ok(helper.includes(api), 'native menu lookup uses ' + api);
   }
   const fileExit = windowsUI.slice(windowsUI.indexOf("  'file-exit' {"));
+  const foreground = fileExit.indexOf('[TusWindowLookup]::GetForegroundWindow()');
   const titleGate = fileExit.indexOf("GetWindowTitle($windowHandle) -ne 'The Unfinished Shapes'");
   const menuLookup = fileExit.indexOf("[TusWindowLookup]::FindMenuCommand($windowHandle, 'File', [string[]]@('Exit', 'Quit'))");
   const postCommand = fileExit.indexOf('[TusWindowLookup]::PostMenuCommand($windowHandle, $commandId)');
-  assert.ok(titleGate >= 0 && menuLookup > titleGate && postCommand > menuLookup,
-    'the exact TUS window must contain File -> Exit/Quit before its native command is posted');
+  assert.ok(fileExit.includes('$process.MainWindowHandle'), 'uses Electron HWND when Windows provides it');
+  assert.ok(foreground >= 0 && titleGate > foreground && menuLookup > titleGate && postCommand > menuLookup,
+    'the exact foreground TUS window must contain File -> Exit/Quit before its native command is posted');
 });
