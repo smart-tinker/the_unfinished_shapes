@@ -8,8 +8,10 @@ trap {
   Write-Output "TUS_UIA: automation-error-$errorType"
   exit 2
 }
+Write-Output 'TUS_UIA: script-start'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Write-Output 'TUS_UIA: automation-ready'
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -20,24 +22,29 @@ public static class TusWindowLookup {
   public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 }
 '@
+Write-Output 'TUS_UIA: window-api-ready'
 switch ($Action) {
   { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {
     $buttonName = if ($Action -eq 'keep-open') { 'Keep the game open' } else { 'Quit anyway' }
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     $dialog = $null
+    Write-Output 'TUS_UIA: locating-dialog'
     while ([DateTime]::UtcNow -lt $deadline) {
       $handle = [TusWindowLookup]::FindWindow($null, 'Codex activity may continue')
       if ($handle -ne [IntPtr]::Zero) {
         [uint32]$dialogProcessId = 0
         $null = [TusWindowLookup]::GetWindowThreadProcessId($handle, [ref]$dialogProcessId)
         if ($dialogProcessId -eq $ProcessId) {
+          Write-Output 'TUS_UIA: target-dialog-found'
           $dialog = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
+          Write-Output 'TUS_UIA: dialog-accessible'
           break
         }
       }
       Start-Sleep -Milliseconds 100
     }
     if (-not $dialog) { Write-Output 'TUS_UIA: quit-dialog-not-found'; throw 'The expected unknown-Codex native quit confirmation was not found.' }
+    Write-Output 'TUS_UIA: reading-dialog-content'
     $unknownMessage = $dialog.FindFirst(
       [System.Windows.Automation.TreeScope]::Descendants,
       [System.Windows.Automation.PropertyCondition]::new(
@@ -46,6 +53,7 @@ switch ($Action) {
       )
     )
     if (-not $unknownMessage) { Write-Output 'TUS_UIA: quit-dialog-content-not-found'; throw 'The native quit dialog did not contain the expected unknown-activity message.' }
+    Write-Output 'TUS_UIA: reading-dialog-buttons'
     $buttons = $dialog.FindAll(
       [System.Windows.Automation.TreeScope]::Descendants,
       [System.Windows.Automation.PropertyCondition]::new(
@@ -61,10 +69,12 @@ switch ($Action) {
     break
   }
   'file-exit' {
+    Write-Output 'TUS_UIA: locating-main-window'
     $process = [Diagnostics.Process]::GetProcessById($ProcessId)
     $process.Refresh()
     $windowHandle = $process.MainWindowHandle
     if ($windowHandle -eq [IntPtr]::Zero) { Write-Output 'TUS_UIA: app-window-not-found'; throw 'The packaged TUS main window was not found.' }
+    Write-Output 'TUS_UIA: main-window-found'
     $window = [System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)
     $menuType = [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
@@ -78,6 +88,7 @@ switch ($Action) {
     ))
     $file = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $fileCondition)
     if (-not $file) { Write-Output 'TUS_UIA: file-menu-not-found'; throw 'The packaged TUS File menu was not found.' }
+    Write-Output 'TUS_UIA: file-menu-found'
     try { $file.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand() }
     catch { $file.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
     $exitItem = $null
