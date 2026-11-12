@@ -152,18 +152,25 @@ test('native prompt fallback requires exact title and both exact buttons before 
 });
 
 
-test('File -> Exit posts only the exact command from the TUS native menu', async () => {
+test('File -> Exit selects the exact Electron Quit menu command on the TUS window', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
-  const helper = windowsUI.slice(windowsUI.indexOf('public static class TusWindowLookup'), windowsUI.indexOf("\n'@"));
-  for (const api of ['GetMenu(', 'GetSubMenu(', 'GetMenuItemCount(', 'GetMenuString', 'GetMenuItemID(', 'WM_COMMAND', 'PostWindowMessage']) {
-    assert.ok(helper.includes(api), 'native menu lookup uses ' + api);
-  }
+  const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
+  assert.match(automation, /Menu\.getApplicationMenu\(\)/);
+  assert.match(automation, /item\.role === 'quit'|\['Exit', 'Quit'\]\.includes\(item\.label\)/);
+  assert.match(automation, /await ui\('file-exit', pid, exitMenuKey\)/);
+  assert.match(windowsUI, /GetGUIThreadInfo/);
+  assert.match(windowsUI, /GUI_INMENUMODE/);
+  assert.match(windowsUI, /SendKeys\.SendWait\('%f'\)/);
+  assert.match(windowsUI, /SendKeys\.SendWait\(\$MenuKey\)/);
+  assert.match(windowsUI, /SendKeys\.SendWait\('\{ENTER\}'\)/);
+  assert.doesNotMatch(windowsUI, /GetMenu\(/);
   const fileExit = windowsUI.slice(windowsUI.indexOf("  'file-exit' {"));
-  const foreground = fileExit.indexOf('[TusWindowLookup]::GetForegroundWindow()');
   const titleGate = fileExit.indexOf("GetWindowTitle($windowHandle) -ne 'The Unfinished Shapes'");
-  const menuLookup = fileExit.indexOf("[TusWindowLookup]::FindMenuCommand($windowHandle, 'File', [string[]]@('Exit', 'Quit'))");
-  const postCommand = fileExit.indexOf('[TusWindowLookup]::PostMenuCommand($windowHandle, $commandId)');
-  assert.ok(fileExit.includes('$process.MainWindowHandle'), 'uses Electron HWND when Windows provides it');
-  assert.ok(foreground >= 0 && titleGate > foreground && menuLookup > titleGate && postCommand > menuLookup,
-    'the exact foreground TUS window must contain File -> Exit/Quit before its native command is posted');
+  const openFileMenu = fileExit.indexOf("SendKeys]::SendWait('%f')");
+  const menuModeGate = fileExit.indexOf('IsInMenuMode');
+  const chooseQuit = fileExit.indexOf('SendKeys]::SendWait($MenuKey)');
+  const activateQuit = fileExit.indexOf("SendKeys]::SendWait('{ENTER}')");
+  assert.ok(titleGate >= 0 && openFileMenu > titleGate && menuModeGate > openFileMenu &&
+    chooseQuit > menuModeGate && activateQuit > chooseQuit,
+    'keystrokes reach the menu only after validating the exact TUS window and confirming menu mode');
 });
