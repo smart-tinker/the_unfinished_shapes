@@ -32,13 +32,7 @@ public static class TusWindowLookup {
     }
   }
   [DllImport("user32.dll")]
-  private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr extraData);
-  [DllImport("user32.dll")]
   private static extern bool EnumChildWindows(IntPtr parent, EnumWindowsCallback callback, IntPtr extraData);
-  [DllImport("user32.dll")]
-  private static extern bool IsWindowVisible(IntPtr window);
-  [DllImport("user32.dll")]
-  private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
   [DllImport("user32.dll")]
   public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -117,16 +111,7 @@ public static class TusWindowLookup {
     IntPtr ignored;
     return SendMessageTimeoutCommand(button, BM_CLICK, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out ignored) != IntPtr.Zero;
   }
-  public static IntPtr[] GetProcessWindows(uint targetProcessId) {
-    var windows = new List<IntPtr>();
-    EnumWindows((window, extraData) => {
-      uint processId;
-      GetWindowThreadProcessId(window, out processId);
-      if (processId == targetProcessId && IsWindowVisible(window)) windows.Add(window);
-      return true;
-    }, IntPtr.Zero);
-    return windows.ToArray();
-  }
+
 }
 '@
 $script:uiPhase = 'loading-ui-automation'
