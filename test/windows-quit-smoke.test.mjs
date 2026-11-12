@@ -91,7 +91,24 @@ test('Windows quit UI reports its latest safe phase when native automation times
   assert.match(windowsUI, /\$script:uiPhase = 'reading-owned-window'/);
   assert.match(windowsUI, /if \(\$handle -eq \$mainWindowHandle\) \{ continue \}/);
   assert.ok(
-    automation.includes("markers.slice(-2).join(' after ')"),
-    'timeout errors report the failure marker and the phase before it',
+    automation.includes("markers.slice(-3).join(' after ')"),
+    'timeout errors report the failure marker, phase and safe prompt status',
   );
+});
+
+
+test('native prompt inspection reports a fixed safe status without dialog text', async () => {
+  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
+  const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
+  assert.match(windowsUI, /public static string LastPromptStatus/);
+  for (const status of [
+    'title-mismatch', 'native-controls-not-found', 'control-text-unreadable',
+    'message-text-not-found', 'button-count-mismatch', 'expected-buttons-missing',
+    'requested-button-missing', 'matched',
+  ]) {
+    assert.ok(windowsUI.includes('LastPromptStatus = "' + status + '"'), 'native scan reports ' + status);
+  }
+  assert.match(windowsUI, /TUS_UIA: prompt-\$\(\[TusWindowLookup\]::LastPromptStatus\)/);
+  assert.match(automation, /markers\.slice\(-3\)\.join\(' after '\)/);
+  assert.doesNotMatch(windowsUI, /Write-Output[^\\n]*(?:control\\.Text|foregroundTitle)/);
 });
