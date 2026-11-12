@@ -209,11 +209,14 @@ switch ($Action) {
     exit 2
   }
   'file-exit' {
+    $script:uiPhase = 'locating-main-window'
     Write-Output 'TUS_UIA: locating-main-window'
     $process = [Diagnostics.Process]::GetProcessById($ProcessId)
     $process.Refresh()
     $windowHandle = $process.MainWindowHandle
+    if ($windowHandle -eq [IntPtr]::Zero) { $windowHandle = [TusWindowLookup]::GetForegroundWindow() }
     if ($windowHandle -eq [IntPtr]::Zero) { Write-Output 'TUS_UIA: app-window-not-found'; throw 'The packaged TUS main window was not found.' }
+    if ([TusWindowLookup]::GetWindowTitle($windowHandle) -ne 'The Unfinished Shapes') { Write-Output 'TUS_UIA: main-window-title-mismatch'; throw 'The packaged TUS main window was not found.' }
     Write-Output 'TUS_UIA: main-window-found'
     $window = [System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)
     $menuType = [System.Windows.Automation.PropertyCondition]::new(
