@@ -32,13 +32,7 @@ public static class TusWindowLookup {
     }
   }
   [DllImport("user32.dll")]
-  private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr extraData);
-  [DllImport("user32.dll")]
   private static extern bool EnumChildWindows(IntPtr parent, EnumWindowsCallback callback, IntPtr extraData);
-  [DllImport("user32.dll")]
-  private static extern bool IsWindowVisible(IntPtr window);
-  [DllImport("user32.dll")]
-  private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
   [DllImport("user32.dll")]
   public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -117,18 +111,29 @@ public static class TusWindowLookup {
     IntPtr ignored;
     return SendMessageTimeoutCommand(button, BM_CLICK, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out ignored) != IntPtr.Zero;
   }
-  public static IntPtr[] GetProcessWindows(uint targetProcessId) {
-    var windows = new List<IntPtr>();
-    EnumWindows((window, extraData) => {
-      uint processId;
-      GetWindowThreadProcessId(window, out processId);
-      if (processId == targetProcessId && IsWindowVisible(window)) windows.Add(window);
-      return true;
-    }, IntPtr.Zero);
-    return windows.ToArray();
-  }
+
 }
 '@
+$script:uiPhase = 'loading-ui-automation'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+function Test-ExactPromptText([IntPtr]$dialog, [string[]]$expectedMessages) {
+  try {
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($dialog)
+    if ($null -eq $root) { return $false }
+    $elements = @($root) + @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition))
+    foreach ($element in $elements) {
+      $name = [regex]::Replace([string]$element.Current.Name, '\s+', ' ').Trim()
+      foreach ($message in $expectedMessages) {
+        $expected = [regex]::Replace([string]$message, '\s+', ' ').Trim()
+        if ([string]::Equals($name, $expected, [StringComparison]::Ordinal)) { return $true }
+      }
+    }
+  } catch {
+    return $false
+  }
+  return $false
+}
 Write-Output 'TUS_UIA: window-api-ready'
 switch ($Action) {
   { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {
@@ -139,70 +144,43 @@ switch ($Action) {
       'Quitting TUS closes its Codex connection but does not confirm that a Goal or turn stopped.',
       'Codex state could not be confirmed. Keep the game open and reconnect to check the conversation, or quit anyway.'
     )
-    $process = [Diagnostics.Process]::GetProcessById($ProcessId)
-    $process.Refresh()
-    $mainWindowHandle = $process.MainWindowHandle
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
-    $ownedWindowCount = 0
-    $promptStatus = 'not-checked'
-    Write-Output 'TUS_UIA: locating-dialog'
+    $promptStatus = 'foreground-window-unavailable'
+    $reportedTitleMatch = $false
+    Write-Output 'TUS_UIA: locating-foreground-dialog'
     while ([DateTime]::UtcNow -lt $deadline) {
-      $script:uiPhase = 'enumerating-process-windows'
-      $handles = [TusWindowLookup]::GetProcessWindows([uint32]$ProcessId)
-      $ownedWindowCount = 0
-      foreach ($handle in $handles) {
-        if ($handle -eq $mainWindowHandle) { continue }
-        $ownedWindowCount++
-        $script:uiPhase = 'reading-owned-window'
-        if ([TusWindowLookup]::GetWindowTitle($handle) -ne 'Codex activity may continue') { continue }
-        $quitButton = [TusWindowLookup]::FindExpectedQuitButton($handle, $expectedMessages, $buttonName)
-        $promptStatus = [TusWindowLookup]::LastPromptStatus
-        if ($quitButton -ne [IntPtr]::Zero) {
-          if ($promptStatus -eq 'title-buttons-text-unavailable') { Write-Output 'TUS_UIA: prompt-title-buttons-text-unavailable' }
-          Write-Output 'TUS_UIA: target-dialog-found'
-          Write-Output 'TUS_UIA: dialog-accessible'
-          $script:uiPhase = 'clicking-native-button'
-          if (-not [TusWindowLookup]::ClickNativePromptButton($quitButton)) { Write-Output 'TUS_UIA: quit-button-click-failed'; exit 2 }
-          Write-Output "Clicked native '$buttonName' button."
-          exit 0
+      $script:uiPhase = 'checking-foreground-window'
+      $foregroundHandle = [TusWindowLookup]::GetForegroundWindow()
+      if ($foregroundHandle -ne [IntPtr]::Zero) {
+        $script:uiPhase = 'reading-foreground-title'
+        if ([TusWindowLookup]::GetWindowTitle($foregroundHandle) -eq 'Codex activity may continue') {
+          if (-not $reportedTitleMatch) {
+            Write-Output 'TUS_UIA: foreground-title-matched'
+            $reportedTitleMatch = $true
+          }
+          $script:uiPhase = 'checking-exact-dialog-text'
+          if (Test-ExactPromptText $foregroundHandle $expectedMessages) {
+            $script:uiPhase = 'checking-exact-dialog-buttons'
+            $quitButton = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, $buttonName)
+            $promptStatus = [TusWindowLookup]::LastPromptStatus
+            if ($quitButton -ne [IntPtr]::Zero) {
+              Write-Output 'TUS_UIA: exact-foreground-prompt-matched'
+              Write-Output 'TUS_UIA: dialog-accessible'
+              $script:uiPhase = 'clicking-native-button'
+              if (-not [TusWindowLookup]::ClickNativePromptButton($quitButton)) { Write-Output 'TUS_UIA: quit-button-click-failed'; exit 2 }
+              Write-Output "Clicked native '$buttonName' button."
+              exit 0
+            }
+          } else {
+            $promptStatus = 'expected-message-mismatch'
+          }
+        } else {
+          $promptStatus = 'foreground-title-mismatch'
         }
       }
       Start-Sleep -Milliseconds 100
     }
-    $script:uiPhase = 'checking-foreground-window'
-    Write-Output 'TUS_UIA: checking-foreground-window'
-    $foregroundHandle = [TusWindowLookup]::GetForegroundWindow()
-    Write-Output 'TUS_UIA: foreground-handle-read'
-    if ($foregroundHandle -ne [IntPtr]::Zero) {
-      $script:uiPhase = 'reading-foreground-title'
-      $foregroundTitle = [TusWindowLookup]::GetWindowTitle($foregroundHandle)
-      Write-Output 'TUS_UIA: foreground-title-read'
-      if ($foregroundTitle -eq 'Codex activity may continue') {
-        Write-Output 'TUS_UIA: foreground-title-matched'
-        $script:uiPhase = 'reading-foreground-controls'
-        $quitButton = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, $buttonName)
-        $promptStatus = [TusWindowLookup]::LastPromptStatus
-        if ($quitButton -ne [IntPtr]::Zero) {
-          if ($promptStatus -eq 'title-buttons-text-unavailable') { Write-Output 'TUS_UIA: prompt-title-buttons-text-unavailable' }
-          Write-Output 'TUS_UIA: target-dialog-found'
-          Write-Output 'TUS_UIA: dialog-accessible'
-          $script:uiPhase = 'clicking-native-button'
-          if (-not [TusWindowLookup]::ClickNativePromptButton($quitButton)) { Write-Output 'TUS_UIA: quit-button-click-failed'; exit 2 }
-          Write-Output "Clicked native '$buttonName' button."
-          exit 0
-        }
-        Write-Output 'TUS_UIA: foreground-window-content-not-found'
-      } else {
-        $promptStatus = 'title-mismatch'
-        Write-Output 'TUS_UIA: foreground-window-content-not-found'
-      }
-    } else {
-      $promptStatus = 'foreground-window-unavailable'
-      Write-Output 'TUS_UIA: foreground-window-unavailable'
-    }
     Write-Output 'TUS_UIA: quit-dialog-not-found'
-    if ($ownedWindowCount -eq 0) { Write-Output 'TUS_UIA: no-owned-dialog-window' }
-    else { Write-Output 'TUS_UIA: owned-window-content-not-found' }
     Write-Output "TUS_UIA: prompt-$promptStatus"
     exit 2
   }

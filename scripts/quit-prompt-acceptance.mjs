@@ -27,6 +27,7 @@ async function ui(action, pid, menuKey) {
     throw new Error('Windows native quit UI action failed: ' + action + (detail ? ' (' + (detail.startsWith('TUS_UIA:') ? detail.slice(8) : detail) + ')' : ''));
   }
   if (stdout.trim()) console.log(stdout.trim());
+  return stdout.trim();
 }
 
 export async function quitPromptAcceptance(app, page, graphics) {
@@ -50,7 +51,8 @@ export async function quitPromptAcceptance(app, page, graphics) {
   });
   try {
     await app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; if (!window) throw new Error('The packaged TUS window is unavailable.'); window.close(); });
-    await ui('keep-open', pid);
+    const closePrompt = await ui('keep-open', pid);
+    assert.match(closePrompt, /^TUS_UIA: exact-foreground-prompt-matched$/m, 'window-close prompt is the exact TUS dialog');
     assert.equal(process.exitCode, null, 'Keep the game open leaves the packaged process running');
     await page.waitForFunction(() => document.querySelector('#connection')?.textContent.includes('World connected'), null, { timeout: 10000 });
     const afterCancel = await page.evaluate(async () => {
@@ -88,7 +90,8 @@ export async function quitPromptAcceptance(app, page, graphics) {
     });
     assert.equal(fileMenuOpened, true, 'Electron File submenu opens on the exact TUS window');
     await ui('file-menu-exit', pid, exitMenuKey);
-    await ui('quit-anyway', pid);
+    const exitPrompt = await ui('quit-anyway', pid);
+    assert.match(exitPrompt, /^TUS_UIA: exact-foreground-prompt-matched$/m, 'File → Exit prompt is the exact TUS dialog');
     const exitCode = await Promise.race([
       exited,
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Packaged TUS did not exit after Quit anyway.')), 15000); }),
