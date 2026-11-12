@@ -64,7 +64,7 @@ async function connect(client) {
   await page.locator('#server-url').fill(url);
   await page.locator('#token').fill(tokens[client.id]);
   await page.locator('#save-world').click();
-  await page.waitForFunction(() => document.querySelector('#settings-message').textContent.includes('saved'));
+  await page.waitForFunction(() => document.querySelector('#world-message').textContent.includes('saved'));
   await page.locator('#settings-close').click();
   await page.waitForFunction(() => document.querySelector('#connection').textContent.includes('World connected'));
   await page.evaluate(() => document.activeElement?.blur());
