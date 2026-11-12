@@ -160,9 +160,9 @@ test('File -> Exit selects the exact Electron menu command on the TUS window', a
   assert.match(automation, /item\.role === 'quit'|\['Exit', 'Quit'\]\.includes\(item\.label\)/);
   assert.match(automation, /await ui\('file-menu-open', pid\)/);
   assert.match(automation, /await ui\('file-menu-exit', pid, exitMenuKey\)/);
-  assert.match(windowsUI, /SendKeys\.SendWait\('%f'\)/);
-  assert.match(windowsUI, /SendKeys\.SendWait\(\$MenuKey\)/);
-  assert.match(windowsUI, /SendKeys\.SendWait\('\{ENTER\}'\)/);
+  assert.match(windowsUI, /SendKeys\]::SendWait\('%f'\)/);
+  assert.match(windowsUI, /SendKeys\]::SendWait\(\$MenuKey\)/);
+  assert.match(windowsUI, /SendKeys\]::SendWait\('\{ENTER\}'\)/);
   assert.doesNotMatch(windowsUI, /GetMenu\(/);
   const fileExit = windowsUI.slice(windowsUI.indexOf("  'file-menu-open' {"));
   const titleGate = fileExit.indexOf("GetWindowTitle($windowHandle) -ne 'The Unfinished Shapes'");
