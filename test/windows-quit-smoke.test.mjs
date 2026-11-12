@@ -9,7 +9,7 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(launch, /realQuitPrompt\s*\?\s*\[\]\s*:\s*\['--tus-smoke-confirm-quit'\]/);
 
   const acceptance = source.slice(source.indexOf('const promptApp ='), source.indexOf('// Restart the installed candidate'));
-  assert.match(acceptance, /const promptProcess = instance\.process\(\)/);
+  assert.match(acceptance, /promptProcess\s*=\s*instance\.process\(\)/);
   assert.match(acceptance, /promptProcess\.exitCode/);
   assert.doesNotMatch(acceptance, /promptGraphics\.assertNoErrors\(\)/);
 });
