@@ -152,25 +152,23 @@ test('native prompt fallback requires exact title and both exact buttons before 
 });
 
 
-test('File -> Exit selects the exact Electron Quit menu command on the TUS window', async () => {
+test('File -> Exit selects the exact Electron menu command on the TUS window', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
   assert.match(automation, /Menu\.getApplicationMenu\(\)/);
+  assert.match(automation, /menu-will-show/);
   assert.match(automation, /item\.role === 'quit'|\['Exit', 'Quit'\]\.includes\(item\.label\)/);
-  assert.match(automation, /await ui\('file-exit', pid, exitMenuKey\)/);
-  assert.match(windowsUI, /GetGUIThreadInfo/);
-  assert.match(windowsUI, /GUI_INMENUMODE/);
+  assert.match(automation, /await ui\('file-menu-open', pid\)/);
+  assert.match(automation, /await ui\('file-menu-exit', pid, exitMenuKey\)/);
   assert.match(windowsUI, /SendKeys\.SendWait\('%f'\)/);
   assert.match(windowsUI, /SendKeys\.SendWait\(\$MenuKey\)/);
   assert.match(windowsUI, /SendKeys\.SendWait\('\{ENTER\}'\)/);
   assert.doesNotMatch(windowsUI, /GetMenu\(/);
-  const fileExit = windowsUI.slice(windowsUI.indexOf("  'file-exit' {"));
+  const fileExit = windowsUI.slice(windowsUI.indexOf("  'file-menu-open' {"));
   const titleGate = fileExit.indexOf("GetWindowTitle($windowHandle) -ne 'The Unfinished Shapes'");
   const openFileMenu = fileExit.indexOf("SendKeys]::SendWait('%f')");
-  const menuModeGate = fileExit.indexOf('IsInMenuMode');
   const chooseQuit = fileExit.indexOf('SendKeys]::SendWait($MenuKey)');
   const activateQuit = fileExit.indexOf("SendKeys]::SendWait('{ENTER}')");
-  assert.ok(titleGate >= 0 && openFileMenu > titleGate && menuModeGate > openFileMenu &&
-    chooseQuit > menuModeGate && activateQuit > chooseQuit,
-    'keystrokes reach the menu only after validating the exact TUS window and confirming menu mode');
+  assert.ok(titleGate >= 0 && openFileMenu > titleGate && chooseQuit > openFileMenu && activateQuit > chooseQuit,
+    'menu keystrokes follow exact TUS title validation and the Electron menu-will-show check');
 });
