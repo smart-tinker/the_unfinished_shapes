@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 public static class TusWindowLookup {
+  public static string LastPromptStatus = "not-checked";
   private const uint WM_GETTEXT = 0x000D;
   private const uint BM_CLICK = 0x00F5;
   private const uint SMTO_ABORTIFHUNG = 0x0002;
@@ -56,16 +57,27 @@ public static class TusWindowLookup {
     return text.ToString();
   }
   public static IntPtr FindExpectedQuitButton(IntPtr dialog, string[] expectedMessages, string requestedButton) {
-    if (dialog == IntPtr.Zero || GetWindowTitle(dialog) != "Codex activity may continue" || expectedMessages == null) return IntPtr.Zero;
+    LastPromptStatus = "invalid-window";
+    if (dialog == IntPtr.Zero) return IntPtr.Zero;
+    if (GetWindowTitle(dialog) != "Codex activity may continue") {
+      LastPromptStatus = "title-mismatch";
+      return IntPtr.Zero;
+    }
+    if (expectedMessages == null) return IntPtr.Zero;
     var controls = new List<PromptControl>();
+    int nativeControlCount = 0, unreadableControlCount = 0;
     EnumChildWindows(dialog, (child, extraData) => {
       var className = new StringBuilder(64);
       if (GetClassName(child, className, className.Capacity) == 0) return true;
       var name = className.ToString();
       if (name != "Static" && name != "Button") return true;
+      nativeControlCount++;
       var text = new StringBuilder(512);
       IntPtr ignored;
-      if (SendMessageTimeoutText(child, WM_GETTEXT, new IntPtr(text.Capacity), text, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out ignored) == IntPtr.Zero) return true;
+      if (SendMessageTimeoutText(child, WM_GETTEXT, new IntPtr(text.Capacity), text, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out ignored) == IntPtr.Zero) {
+        unreadableControlCount++;
+        return true;
+      }
       controls.Add(new PromptControl(child, name, text.ToString()));
       return true;
     }, IntPtr.Zero);
@@ -82,7 +94,25 @@ public static class TusWindowLookup {
         if (control.Text == requestedButton) requested = control.Handle;
       }
     }
-    if (buttons.Count != 2 || !hasExpectedMessage || !hasKeepOpen || !hasQuitAnyway) return IntPtr.Zero;
+    if (!hasExpectedMessage) {
+      if (nativeControlCount == 0) LastPromptStatus = "native-controls-not-found";
+      else if (unreadableControlCount > 0) LastPromptStatus = "control-text-unreadable";
+      else LastPromptStatus = "message-text-not-found";
+      return IntPtr.Zero;
+    }
+    if (buttons.Count != 2) {
+      LastPromptStatus = "button-count-mismatch";
+      return IntPtr.Zero;
+    }
+    if (!hasKeepOpen || !hasQuitAnyway) {
+      LastPromptStatus = "expected-buttons-missing";
+      return IntPtr.Zero;
+    }
+    if (requested == IntPtr.Zero) {
+      LastPromptStatus = "requested-button-missing";
+      return IntPtr.Zero;
+    }
+    LastPromptStatus = "matched";
     return requested;
   }
   public static bool ClickNativePromptButton(IntPtr button) {
@@ -115,6 +145,7 @@ switch ($Action) {
     $mainWindowHandle = $process.MainWindowHandle
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     $ownedWindowCount = 0
+    $promptStatus = 'not-checked'
     Write-Output 'TUS_UIA: locating-dialog'
     while ([DateTime]::UtcNow -lt $deadline) {
       $script:uiPhase = 'enumerating-process-windows'
@@ -126,6 +157,7 @@ switch ($Action) {
         $script:uiPhase = 'reading-owned-window'
         if ([TusWindowLookup]::GetWindowTitle($handle) -ne 'Codex activity may continue') { continue }
         $quitButton = [TusWindowLookup]::FindExpectedQuitButton($handle, $expectedMessages, $buttonName)
+        $promptStatus = [TusWindowLookup]::LastPromptStatus
         if ($quitButton -ne [IntPtr]::Zero) {
           Write-Output 'TUS_UIA: target-dialog-found'
           Write-Output 'TUS_UIA: dialog-accessible'
@@ -149,6 +181,7 @@ switch ($Action) {
         Write-Output 'TUS_UIA: foreground-title-matched'
         $script:uiPhase = 'reading-foreground-controls'
         $quitButton = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, $buttonName)
+        $promptStatus = [TusWindowLookup]::LastPromptStatus
         if ($quitButton -ne [IntPtr]::Zero) {
           Write-Output 'TUS_UIA: target-dialog-found'
           Write-Output 'TUS_UIA: dialog-accessible'
@@ -159,14 +192,17 @@ switch ($Action) {
         }
         Write-Output 'TUS_UIA: foreground-window-content-not-found'
       } else {
+        $promptStatus = 'title-mismatch'
         Write-Output 'TUS_UIA: foreground-window-content-not-found'
       }
     } else {
+      $promptStatus = 'foreground-window-unavailable'
       Write-Output 'TUS_UIA: foreground-window-unavailable'
     }
     Write-Output 'TUS_UIA: quit-dialog-not-found'
     if ($ownedWindowCount -eq 0) { Write-Output 'TUS_UIA: no-owned-dialog-window' }
     else { Write-Output 'TUS_UIA: owned-window-content-not-found' }
+    Write-Output "TUS_UIA: prompt-$promptStatus"
     exit 2
   }
   'file-exit' {

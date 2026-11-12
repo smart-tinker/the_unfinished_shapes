@@ -110,5 +110,5 @@ test('native prompt inspection reports a fixed safe status without dialog text',
   }
   assert.match(windowsUI, /TUS_UIA: prompt-\$\(\[TusWindowLookup\]::LastPromptStatus\)/);
   assert.match(automation, /markers\.slice\(-3\)\.join\(' after '\)/);
-  assert.doesNotMatch(windowsUI, /Write-Output[^\\n]*(?:control\\.Text|foregroundTitle)/);
+  assert.doesNotMatch(windowsUI, /Write-Output.*(?:control|foreground).*(?:Text|Title)/);
 });
