@@ -17,7 +17,10 @@ async function ui(action, pid) {
     const output = [stdout, stderr].map(value => String(value ?? '')).join('\n');
     const marker = output.split(/\r?\n/).map(line => line.trim()).find(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line));
     const stderrLine = String(stderr ?? '').split(/\r?\n/).map(line => line.trim()).find(line => line && !/^(?:At\s|CategoryInfo|FullyQualifiedErrorId|[+~])/.test(line));
-    const detail = marker || stderrLine?.replace(/[A-Z]:\\[^\s'"]+/gi, '<path>').replace(/https?:\/\/\S+/gi, '<url>').slice(0, 160);
+    const processFailure = error.killed
+      ? 'timeout-' + String(error.signal ?? 'unknown').toLowerCase().replace(/[^a-z0-9-]/g, '')
+      : 'exit-' + (String(error.code ?? 'unknown').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'unknown');
+    const detail = marker || stderrLine?.replace(/[A-Z]:\\[^\\s'"]+/gi, '<path>').replace(/https?:\\/\\/\\S+/gi, '<url>').slice(0, 160) || processFailure;
     throw new Error('Windows native quit UI action failed: ' + action + (detail ? ' (' + (detail.startsWith('TUS_UIA:') ? detail.slice(8) : detail) + ')' : ''));
   }
   if (stdout.trim()) console.log(stdout.trim());
