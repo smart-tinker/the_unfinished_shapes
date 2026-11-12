@@ -162,3 +162,14 @@ test('File -> Exit uses only the exact foreground TUS window when Electron has n
   assert.ok(foreground >= 0 && titleCheck > foreground && automation > titleCheck,
     'missing main HWND falls back to foreground, then requires exact TUS title before UIA');
 });
+
+
+test('File -> Exit opens the native File menu before locating its exit command', async () => {
+  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
+  const fileExit = windowsUI.slice(windowsUI.indexOf("  'file-exit' {"));
+  const openFileMenu = fileExit.indexOf("[System.Windows.Forms.SendKeys]::SendWait('%f')");
+  const findFile = fileExit.indexOf('$window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $fileCondition)');
+  const findExit = fileExit.indexOf("if ($item.Current.Name -match '^(Exit|Quit)$')");
+  assert.ok(openFileMenu >= 0 && findFile > openFileMenu && findExit > findFile,
+    'opens File with its keyboard mnemonic before reading and selecting the exact Exit/Quit item');
+});
