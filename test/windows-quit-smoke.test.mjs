@@ -30,3 +30,8 @@ test('Windows UI automation preserves child output for safe failure reporting', 
   assert.match(ui, /error\.killed/);
   assert.match(ui, /error\.signal/);
 });
+
+
+test('quit prompt acceptance helper loads as valid ESM', async () => {
+  await import('../scripts/quit-prompt-acceptance.mjs');
+});
