@@ -21,36 +21,31 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(windowsUI, /GetForegroundWindow/);
   assert.doesNotMatch(windowsUI, /GetForegroundOwnedWindow|foreground-window-not-owned/);
 
-  const promptLookup = windowsUI.slice(
-    windowsUI.indexOf('function FindExpectedQuitPrompt'),
-    windowsUI.indexOf('switch ($Action)'),
-  );
-  assert.ok(promptLookup.includes('function FindExpectedQuitPrompt'), 'exact prompt matcher exists');
-  const titleCheck = promptLookup.indexOf("$Window.Current.Name -ne 'Codex activity may continue'");
-  const textCheck = promptLookup.indexOf('$Window.FindFirst');
-  const buttonsCheck = promptLookup.indexOf('$Window.FindAll');
-  assert.ok(titleCheck >= 0 && titleCheck < textCheck && textCheck < buttonsCheck,
-    'foreground descendants are read only after the exact TUS dialog title matches');
+  assert.match(windowsUI, /\$foregroundHandle = \[TusWindowLookup\]::GetForegroundWindow\(\)/);
+  assert.match(windowsUI, /FindExpectedQuitButton/);
+  assert.match(windowsUI, /ClickNativePromptButton/);
+  assert.match(windowsUI, /SendMessageTimeout/);
+  assert.match(windowsUI, /WM_GETTEXT/);
+  assert.match(windowsUI, /BM_CLICK/);
+  assert.match(windowsUI, /buttons\.Count != 2/);
+  assert.doesNotMatch(windowsUI, /AutomationElement\]::FromHandle\(\$foregroundHandle\)/);
   for (const text of [
     'Codex may still be working in this conversation.',
     'The current Codex activity is unknown.',
     'Keep the game open',
     'Quit anyway',
   ]) {
-    assert.ok(promptLookup.includes(text), 'exact TUS prompt text includes ' + text);
+    assert.ok(windowsUI.includes(text), 'native matcher includes exact TUS text ' + text);
   }
-  assert.match(promptLookup, /\$buttons\.Count -ne 2/);
-  assert.match(promptLookup, /\$buttonNames -notcontains 'Keep the game open'/);
-  assert.match(promptLookup, /\$buttonNames -notcontains 'Quit anyway'/);
-  assert.match(windowsUI, /\$foregroundHandle = \[TusWindowLookup\]::GetForegroundWindow\(\)/);
   const foregroundStart = windowsUI.indexOf('$foregroundHandle = [TusWindowLookup]::GetForegroundWindow()');
   const foregroundEnd = windowsUI.indexOf('if (-not $dialog) {', foregroundStart);
   const foregroundLookup = windowsUI.slice(foregroundStart, foregroundEnd);
   const nativeTitleRead = foregroundLookup.indexOf('[TusWindowLookup]::GetWindowTitle($foregroundHandle)');
   const exactTitleGate = foregroundLookup.indexOf("$foregroundTitle -eq 'Codex activity may continue'");
-  const uiAutomationOpen = foregroundLookup.indexOf('[System.Windows.Automation.AutomationElement]::FromHandle($foregroundHandle)');
-  assert.ok(nativeTitleRead >= 0 && nativeTitleRead < exactTitleGate && exactTitleGate < uiAutomationOpen,
-    'native title must match before UI Automation opens the foreground window');
+  const nativeButtonFind = foregroundLookup.indexOf('[TusWindowLookup]::FindExpectedQuitButton');
+  const nativeButtonClick = foregroundLookup.indexOf('[TusWindowLookup]::ClickNativePromptButton');
+  assert.ok(nativeTitleRead >= 0 && nativeTitleRead < exactTitleGate && exactTitleGate < nativeButtonFind && nativeButtonFind < nativeButtonClick,
+    'only an exact foreground TUS dialog title reaches native text and button automation');
   assert.match(windowsUI, /TUS_UIA: foreground-window-content-not-found/);
 
   assert.match(windowsUI, /GetProcessWindows/);
