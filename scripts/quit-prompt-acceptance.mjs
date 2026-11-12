@@ -75,17 +75,18 @@ export async function quitPromptAcceptance(app, page, graphics) {
       return ['Exit', 'Quit'].includes(label) ? label[0].toLowerCase() : null;
     });
     assert.ok(['e', 'q'].includes(exitMenuKey), 'Electron File menu exposes one exact Exit/Quit command');
-    const fileMenuOpened = app.evaluate(({ Menu }) => {
+    const fileMenuOpened = await app.evaluate(({ BrowserWindow, Menu }) => {
       const menu = Menu.getApplicationMenu();
       const file = menu?.items.find(item => item.label.replace(/&/g, '').trim() === 'File');
-      if (!file?.submenu) return Promise.resolve(false);
+      const window = BrowserWindow.getAllWindows().find(candidate => candidate.getTitle() === 'The Unfinished Shapes');
+      if (!file?.submenu || !window) return false;
       return new Promise(resolve => {
         const timer = setTimeout(() => resolve(false), 5000);
         file.submenu.once('menu-will-show', () => { clearTimeout(timer); resolve(true); });
+        file.submenu.popup({ window });
       });
     });
-    await ui('file-menu-open', pid);
-    assert.equal(await fileMenuOpened, true, 'Alt+F opens the actual Electron File menu');
+    assert.equal(fileMenuOpened, true, 'Electron File submenu opens on the exact TUS window');
     await ui('file-menu-exit', pid, exitMenuKey);
     await ui('quit-anyway', pid);
     const exitCode = await Promise.race([
