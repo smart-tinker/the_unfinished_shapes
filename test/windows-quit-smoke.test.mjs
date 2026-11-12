@@ -32,6 +32,8 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   for (const text of [
     'Codex may still be working in this conversation.',
     'The current Codex activity is unknown.',
+    'Quitting TUS closes its Codex connection but does not confirm that a Goal or turn stopped.',
+    'Codex state could not be confirmed. Keep the game open and reconnect to check the conversation, or quit anyway.',
     'Keep the game open',
     'Quit anyway',
   ]) {
