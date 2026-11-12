@@ -16,8 +16,7 @@ $processCondition = [System.Windows.Automation.PropertyCondition]::new(
   [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $ProcessId
 )
 switch ($Action) {
-  'keep-open'
-  'quit-anyway' {
+  { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {
     $buttonName = if ($Action -eq 'keep-open') { 'Keep the game open' } else { 'Quit anyway' }
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     $dialog = $null
