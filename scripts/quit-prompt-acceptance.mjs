@@ -6,12 +6,14 @@ import { fileURLToPath } from 'node:url';
 const run = promisify(execFile);
 const automationScript = fileURLToPath(new URL('./windows-quit-prompt.ps1', import.meta.url));
 
-async function ui(action, pid) {
+async function ui(action, pid, menuKey) {
+  const args = [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', automationScript,
+    '-Action', action, '-ProcessId', String(pid),
+  ];
+  if (action === 'file-menu-exit') args.push('-MenuKey', menuKey);
   const { error, stdout, stderr } = await new Promise(resolve => {
-    execFile('powershell.exe', [
-      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', automationScript,
-      '-Action', action, '-ProcessId', String(pid),
-    ], { timeout: 30000, windowsHide: true }, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
+    execFile('powershell.exe', args, { timeout: 30000, windowsHide: true }, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
   });
   if (error) {
     const output = [stdout, stderr].map(value => String(value ?? '')).join('\n');
@@ -63,7 +65,28 @@ export async function quitPromptAcceptance(app, page, graphics) {
     });
     assert.deepEqual(afterCancel, before, 'canceling the native prompt leaves settings and world unchanged');
     await graphics.assertHealthy();
-    await ui('file-exit', pid);
+    const exitMenuKey = await app.evaluate(({ Menu }) => {
+      const menu = Menu.getApplicationMenu();
+      const file = menu?.items.find(item => item.label.replace(/&/g, '').trim() === 'File');
+      const exits = (file?.submenu?.items ?? []).filter(item => item.enabled !== false && item.visible !== false &&
+        (item.role === 'quit' || ['Exit', 'Quit'].includes(item.label.replace(/&/g, '').trim())));
+      if (exits.length !== 1) return null;
+      const label = exits[0].label.replace(/&/g, '').trim();
+      return ['Exit', 'Quit'].includes(label) ? label[0].toLowerCase() : null;
+    });
+    assert.ok(['e', 'q'].includes(exitMenuKey), 'Electron File menu exposes one exact Exit/Quit command');
+    const fileMenuOpened = app.evaluate(({ Menu }) => {
+      const menu = Menu.getApplicationMenu();
+      const file = menu?.items.find(item => item.label.replace(/&/g, '').trim() === 'File');
+      if (!file?.submenu) return Promise.resolve(false);
+      return new Promise(resolve => {
+        const timer = setTimeout(() => resolve(false), 5000);
+        file.submenu.once('menu-will-show', () => { clearTimeout(timer); resolve(true); });
+      });
+    });
+    await ui('file-menu-open', pid);
+    assert.equal(await fileMenuOpened, true, 'Alt+F opens the actual Electron File menu');
+    await ui('file-menu-exit', pid, exitMenuKey);
     await ui('quit-anyway', pid);
     const exitCode = await Promise.race([
       exited,
