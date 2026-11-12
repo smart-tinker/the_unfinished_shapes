@@ -19,6 +19,7 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(windowsUI, /TUS_UIA: quit-dialog-not-found/);
   assert.match(windowsUI, /TUS_UIA: automation-error-/);
   assert.match(windowsUI, /Codex activity may continue/);
+  assert.match(windowsUI, /GetForegroundOwnedWindow/);
   assert.match(windowsUI, /GetProcessWindows/);
   assert.match(windowsUI, /EnumWindows/);
   assert.match(windowsUI, /IsWindowVisible/);
@@ -50,7 +51,7 @@ test('Windows quit UI reports its latest safe phase when native automation times
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
   const timeout = Number(automation.match(/timeout:\s*(\d+)/)?.[1]);
   assert.ok(timeout >= 25000, 'PowerShell timeout includes startup plus the full 15-second dialog wait');
-  for (const marker of ['script-start', 'window-api-ready', 'locating-dialog', 'target-dialog-found', 'dialog-accessible', 'no-owned-dialog-window', 'owned-window-content-not-found', 'reading-main-window']) {
+  for (const marker of ['script-start', 'window-api-ready', 'locating-dialog', 'target-dialog-found', 'dialog-accessible', 'no-owned-dialog-window', 'owned-window-content-not-found', 'reading-main-window', 'checking-foreground-window']) {
     assert.ok(windowsUI.includes('TUS_UIA: ' + marker), 'PowerShell reports ' + marker);
   }
   assert.match(windowsUI, /automation-error-\$errorType-at-\$script:uiPhase/);
