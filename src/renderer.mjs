@@ -66,6 +66,7 @@ function refreshAgentStatus() {
 function setAgentStatus(status) {
   $('agent-status').textContent = status;
   $('settings-codex-status').textContent = status;
+  $('settings-codex-recovery').hidden = connected;
 }
 function updateAgentControlButtons() {
   const state = agentControlState, live = connected && state?.connected === true && state.threadId === settings.threadId;
@@ -1083,7 +1084,12 @@ $('find-codex').addEventListener('click', async () => {
   }catch(error){results.textContent=error.message;}finally{button.disabled=false;}
 });
 for(const [button,kind,input] of [['browse-codex','codex','codex'],['browse-workspace','workspace','workspace']])$(button).addEventListener('click',async()=>{try{const selected=await bridge.choosePath(kind);if(selected)$(input).value=selected;}catch(error){$('settings-message').textContent=error.message;}});
-$('updates-notice').addEventListener('click', () => $('settings').showModal()); $('settings-open').addEventListener('click', () => $('settings').showModal()); $('settings-close').addEventListener('click', () => $('settings').close());
+function openSettings() {
+  if ($('settings-message').textContent === 'Connecting to your Codex app-server…') $('settings-message').textContent = '';
+  $('settings-codex-recovery').hidden = connected;
+  $('settings').showModal();
+}
+$('updates-notice').addEventListener('click', openSettings); $('settings-open').addEventListener('click', openSettings); $('settings-close').addEventListener('click', () => $('settings').close());
 function readSettings() { return { ...settings, workspacePath: $('workspace').value.trim(), codexPath: $('codex').value.trim(), serverUrl: $('server-url').value.trim(), token: $('token').value, lightingQuality:$('lighting-quality').value, updateChannel:$('update-channel').value }; }
 async function saveSettings() {
   if (editing) throw new Error('Finish the current world update before changing connection settings.');
