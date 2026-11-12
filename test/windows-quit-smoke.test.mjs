@@ -51,7 +51,7 @@ test('Windows quit UI reports its latest safe phase when native automation times
     assert.ok(windowsUI.includes('TUS_UIA: ' + marker), 'PowerShell reports ' + marker);
   }
   assert.ok(
-    automation.includes(".filter(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line)).at(-1)"),
-    'timeout errors report the last safe automation phase',
+    automation.includes("markers.slice(-2).join(' after ')"),
+    'timeout errors report the failure marker and the phase before it',
   );
 });
