@@ -150,3 +150,15 @@ test('native prompt fallback requires exact title and both exact buttons before 
   assert.ok(buttons >= 0 && labels > buttons && requested > labels && text > requested,
     'body-text fallback occurs only after both exact button names and the requested button match');
 });
+
+
+test('File -> Exit uses only the exact foreground TUS window when Electron has no main HWND', async () => {
+  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
+  const fileExit = windowsUI.slice(windowsUI.indexOf("  'file-exit' {"));
+  const foreground = fileExit.indexOf('[TusWindowLookup]::GetForegroundWindow()');
+  const titleCheck = fileExit.indexOf("GetWindowTitle($windowHandle) -ne 'The Unfinished Shapes'");
+  const automation = fileExit.indexOf('[System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)');
+  assert.ok(fileExit.includes('$process.MainWindowHandle'), 'uses Electron HWND when Windows provides it');
+  assert.ok(foreground >= 0 && titleCheck > foreground && automation > titleCheck,
+    'missing main HWND falls back to foreground, then requires exact TUS title before UIA');
+});
