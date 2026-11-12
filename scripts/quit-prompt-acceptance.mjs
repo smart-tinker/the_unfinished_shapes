@@ -7,19 +7,20 @@ const run = promisify(execFile);
 const automationScript = fileURLToPath(new URL('./windows-quit-prompt.ps1', import.meta.url));
 
 async function ui(action, pid) {
-  try {
-    const { stdout } = await run('powershell.exe', [
+  const { error, stdout, stderr } = await new Promise(resolve => {
+    execFile('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', automationScript,
       '-Action', action, '-ProcessId', String(pid),
-    ], { timeout: 20000, windowsHide: true });
-    if (stdout.trim()) console.log(stdout.trim());
-  } catch (error) {
-    const output = [error.stdout, error.stderr].map(value => String(value ?? '')).join('\n');
+    ], { timeout: 20000, windowsHide: true }, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
+  });
+  if (error) {
+    const output = [stdout, stderr].map(value => String(value ?? '')).join('\n');
     const marker = output.split(/\r?\n/).map(line => line.trim()).find(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line));
-    const stderr = String(error.stderr ?? '').split(/\r?\n/).map(line => line.trim()).find(line => line && !/^(?:At\s|CategoryInfo|FullyQualifiedErrorId|[+~])/.test(line));
-    const detail = marker || stderr?.replace(/[A-Z]:\\[^\s'"]+/gi, '<path>').replace(/https?:\/\/\S+/gi, '<url>').slice(0, 160);
-    throw new Error(`Windows native quit UI action failed: ${action}${detail ? ` (${detail.startsWith('TUS_UIA:') ? detail.slice(8) : detail})` : ''}`);
+    const stderrLine = String(stderr ?? '').split(/\r?\n/).map(line => line.trim()).find(line => line && !/^(?:At\s|CategoryInfo|FullyQualifiedErrorId|[+~])/.test(line));
+    const detail = marker || stderrLine?.replace(/[A-Z]:\\[^\s'"]+/gi, '<path>').replace(/https?:\/\/\S+/gi, '<url>').slice(0, 160);
+    throw new Error('Windows native quit UI action failed: ' + action + (detail ? ' (' + (detail.startsWith('TUS_UIA:') ? detail.slice(8) : detail) + ')' : ''));
   }
+  if (stdout.trim()) console.log(stdout.trim());
 }
 
 export async function quitPromptAcceptance(app, page, graphics) {
