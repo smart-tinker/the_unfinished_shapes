@@ -15,9 +15,10 @@ async function ui(action, pid) {
     if (stdout.trim()) console.log(stdout.trim());
   } catch (error) {
     const output = [error.stdout, error.stderr].map(value => String(value ?? '')).join('\n');
-    const markers = output.split(/\r?\n/).map(line => line.trim()).filter(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line));
-    const detail = markers.find(line => !/automation-error|started/i.test(line)) || markers[0];
-    throw new Error(`Windows native quit UI action failed: ${action}${detail ? ` (${detail.slice(8)})` : ''}`);
+    const marker = output.split(/\r?\n/).map(line => line.trim()).find(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line));
+    const stderr = String(error.stderr ?? '').split(/\r?\n/).map(line => line.trim()).find(line => line && !/^(?:At\s|CategoryInfo|FullyQualifiedErrorId|[+~])/.test(line));
+    const detail = marker || stderr?.replace(/[A-Z]:\\[^\s'"]+/gi, '<path>').replace(/https?:\/\/\S+/gi, '<url>').slice(0, 160);
+    throw new Error(`Windows native quit UI action failed: ${action}${detail ? ` (${detail.startsWith('TUS_UIA:') ? detail.slice(8) : detail})` : ''}`);
   }
 }
 
