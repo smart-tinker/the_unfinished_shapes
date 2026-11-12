@@ -61,7 +61,9 @@ switch ($Action) {
     break
   }
   'file-exit' {
-    $windowHandle = [Diagnostics.Process]::GetProcessById($ProcessId).MainWindowHandle
+    $process = [Diagnostics.Process]::GetProcessById($ProcessId)
+    $process.Refresh()
+    $windowHandle = $process.MainWindowHandle
     if ($windowHandle -eq [IntPtr]::Zero) { Write-Output 'TUS_UIA: app-window-not-found'; throw 'The packaged TUS main window was not found.' }
     $window = [System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)
     $menuType = [System.Windows.Automation.PropertyCondition]::new(
