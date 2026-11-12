@@ -86,7 +86,7 @@ async function launch(ctx,id) {
   await client.page.locator('#server-url').fill(ctx.url);
   await client.page.locator('#token').fill(token);
   await client.page.locator('#save-world').click();
-  await client.page.waitForFunction(()=>document.querySelector('#settings-message')?.textContent.toLowerCase().includes('saved'),null,{timeout:10000});
+  await client.page.waitForFunction(()=>document.querySelector('#world-message')?.textContent.toLowerCase().includes('saved'),null,{timeout:10000});
   await client.page.locator('#settings-close').click();
   await client.page.waitForFunction(()=>document.querySelector('#connection')?.textContent.includes('World connected'),null,{timeout:15000});
   assert.equal(await client.page.locator('#role').textContent(),'Role: builder');

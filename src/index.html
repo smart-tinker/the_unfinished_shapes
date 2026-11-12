@@ -41,6 +41,7 @@
 <p id="conversation-tools-note" class="muted small">Use this only to start a separate conversation with current game tools.</p>
 <details><summary>Conversation history</summary><p class="muted small">Existing conversations retain the tools registered when they were created. To use updated game tools, explicitly select “Create a new game conversation”. Otherwise the saved conversation resumes by ID. Creating a new conversation preserves the old conversation and its history.</p></details>
 <div class="settings-actions"><button id="connect" type="submit" class="primary">Connect Codex</button></div>
+<div id="settings-message" class="feedback" role="status" aria-live="polite"></div>
 </section>
 <section id="settings-world" class="settings-section" aria-labelledby="settings-world-heading">
 <h3 id="settings-world-heading">World</h3>
@@ -48,6 +49,7 @@
 <label>World access token (session only)<input id="token" type="password" value="" autocomplete="off"></label>
 <p class="muted small">For shared worlds, use the address and access token from the server operator.</p>
 <div class="settings-actions"><button id="save-world" type="button" class="quiet">Save world settings</button></div>
+<div id="world-message" class="feedback" role="status" aria-live="polite"></div>
 </section>
 <section id="settings-graphics" class="settings-section" aria-labelledby="settings-graphics-heading">
 <h3 id="settings-graphics-heading">Graphics</h3>
@@ -63,7 +65,6 @@
 <div class="path-actions"><button id="updates-extract" type="button" class="quiet" disabled>Extract archive…</button><button id="updates-launch" type="button" class="quiet" disabled>Quit and launch update</button></div>
 <div id="updates-status" class="feedback" role="status" aria-live="polite"></div>
 </section>
-<div id="settings-message" class="feedback" role="status" aria-live="polite"></div>
 <div class="dialog-actions"><button id="settings-close" type="button" class="quiet">Cancel</button></div>
 </form>
 </dialog>
