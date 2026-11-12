@@ -176,7 +176,7 @@ test('Codex recovery guidance follows the live connection state', () => {
   assert.equal(recovery.hidden, false);
 });
 
-test('opening Settings clears stale connection feedback and syncs recovery guidance', () => {
+test('opening Settings clears stale connection progress, preserves errors, and syncs recovery guidance', () => {
   const h = rendererHarness();
   let opens = 0;
   h.context.connected = true;
@@ -188,10 +188,16 @@ test('opening Settings clears stale connection feedback and syncs recovery guida
   assert.equal(h.element('settings-message').textContent, '');
   assert.equal(h.element('settings-codex-recovery').hidden, true);
   assert.equal(opens, 1);
-  h.element('settings-message').textContent = 'Old connection error';
-  h.element('settings-codex-recovery').hidden = false;
-  h.element('updates-notice').listeners.click();
-  assert.equal(h.element('settings-message').textContent, '');
+  h.element('settings-message').textContent = 'World settings could not be saved';
+  h.element('settings-open').listeners.click();
+  assert.equal(h.element('settings-message').textContent, 'World settings could not be saved');
   assert.equal(h.element('settings-codex-recovery').hidden, true);
   assert.equal(opens, 2);
+  h.context.connected = false;
+  h.element('settings-message').textContent = 'Codex executable is unavailable';
+  h.element('settings-codex-recovery').hidden = true;
+  h.element('updates-notice').listeners.click();
+  assert.equal(h.element('settings-message').textContent, 'Codex executable is unavailable');
+  assert.equal(h.element('settings-codex-recovery').hidden, false);
+  assert.equal(opens, 3);
 });
