@@ -10,25 +10,31 @@ trap {
 }
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
-$root = [System.Windows.Automation.AutomationElement]::RootElement
-$trueCondition = [System.Windows.Automation.Condition]::TrueCondition
-$processCondition = [System.Windows.Automation.PropertyCondition]::new(
-  [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $ProcessId
-)
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class TusWindowLookup {
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  public static extern IntPtr FindWindow(string className, string windowName);
+  [DllImport("user32.dll")]
+  public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+}
+'@
 switch ($Action) {
   { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {
     $buttonName = if ($Action -eq 'keep-open') { 'Keep the game open' } else { 'Quit anyway' }
-    $titleCondition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::NameProperty, 'Codex activity may continue'
-    )
-    $dialogCondition = [System.Windows.Automation.AndCondition]::new(
-      [System.Windows.Automation.Condition[]]@($processCondition, $titleCondition)
-    )
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     $dialog = $null
     while ([DateTime]::UtcNow -lt $deadline) {
-      $dialog = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $dialogCondition)
-      if ($dialog) { break }
+      $handle = [TusWindowLookup]::FindWindow($null, 'Codex activity may continue')
+      if ($handle -ne [IntPtr]::Zero) {
+        [uint32]$dialogProcessId = 0
+        $null = [TusWindowLookup]::GetWindowThreadProcessId($handle, [ref]$dialogProcessId)
+        if ($dialogProcessId -eq $ProcessId) {
+          $dialog = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
+          break
+        }
+      }
       Start-Sleep -Milliseconds 100
     }
     if (-not $dialog) { Write-Output 'TUS_UIA: quit-dialog-not-found'; throw 'The expected unknown-Codex native quit confirmation was not found.' }
@@ -55,41 +61,36 @@ switch ($Action) {
     break
   }
   'file-exit' {
-    $fileName = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::NameProperty, 'File'
-    )
+    $windowHandle = [Diagnostics.Process]::GetProcessById($ProcessId).MainWindowHandle
+    if ($windowHandle -eq [IntPtr]::Zero) { Write-Output 'TUS_UIA: app-window-not-found'; throw 'The packaged TUS main window was not found.' }
+    $window = [System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)
     $menuType = [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
       [System.Windows.Automation.ControlType]::MenuItem
     )
-    $fileCondition = [System.Windows.Automation.AndCondition]::new(
-      [System.Windows.Automation.Condition[]]@($processCondition, $fileName, $menuType)
-    )
-    $file = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $fileCondition)
+    $fileCondition = [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@(
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty, 'File'
+      ),
+      $menuType
+    ))
+    $file = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $fileCondition)
     if (-not $file) { Write-Output 'TUS_UIA: file-menu-not-found'; throw 'The packaged TUS File menu was not found.' }
     try { $file.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand() }
     catch { $file.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
-    $exitName = $null
+    $exitItem = $null
     $visibleNames = @()
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
-    while ([DateTime]::UtcNow -lt $deadline -and -not $exitName) {
-      $items = $root.FindAll(
-        [System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@(
-          $processCondition,
-          [System.Windows.Automation.PropertyCondition]::new(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::MenuItem
-          )
-        ))
-      )
+    while ([DateTime]::UtcNow -lt $deadline -and -not $exitItem) {
+      $items = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $menuType)
       foreach ($item in $items) {
         $visibleNames += $item.Current.Name
-        if ($item.Current.Name -match '^(Exit|Quit)$') { $exitName = $item.Current.Name; $exitItem = $item; break }
+        if ($item.Current.Name -match '^(Exit|Quit)$') { $exitItem = $item; break }
       }
-      if (-not $exitName) { Start-Sleep -Milliseconds 100 }
+      if (-not $exitItem) { Start-Sleep -Milliseconds 100 }
     }
-    if (-not $exitName) { Write-Output 'TUS_UIA: file-exit-not-found'; throw "File menu did not expose Exit or Quit; menu items: $($visibleNames -join ', ')" }
+    if (-not $exitItem) { Write-Output 'TUS_UIA: file-exit-not-found'; throw "File menu did not expose Exit or Quit; menu items: $($visibleNames -join ', ')" }
+    $exitName = $exitItem.Current.Name
     $exitItem.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Write-Output "Invoked File -> $exitName."
     break
