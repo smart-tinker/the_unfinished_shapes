@@ -43,6 +43,14 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(promptLookup, /\$buttonNames -notcontains 'Keep the game open'/);
   assert.match(promptLookup, /\$buttonNames -notcontains 'Quit anyway'/);
   assert.match(windowsUI, /\$foregroundHandle = \[TusWindowLookup\]::GetForegroundWindow\(\)/);
+  const foregroundStart = windowsUI.indexOf('$foregroundHandle = [TusWindowLookup]::GetForegroundWindow()');
+  const foregroundEnd = windowsUI.indexOf('if (-not $dialog) {', foregroundStart);
+  const foregroundLookup = windowsUI.slice(foregroundStart, foregroundEnd);
+  const nativeTitleRead = foregroundLookup.indexOf('[TusWindowLookup]::GetWindowTitle($foregroundHandle)');
+  const exactTitleGate = foregroundLookup.indexOf("$foregroundTitle -eq 'Codex activity may continue'");
+  const uiAutomationOpen = foregroundLookup.indexOf('[System.Windows.Automation.AutomationElement]::FromHandle($foregroundHandle)');
+  assert.ok(nativeTitleRead >= 0 && nativeTitleRead < exactTitleGate && exactTitleGate < uiAutomationOpen,
+    'native title must match before UI Automation opens the foreground window');
   assert.match(windowsUI, /TUS_UIA: foreground-window-content-not-found/);
 
   assert.match(windowsUI, /GetProcessWindows/);
@@ -79,7 +87,8 @@ test('Windows quit UI reports its latest safe phase when native automation times
   for (const marker of [
     'script-start', 'window-api-ready', 'locating-dialog', 'target-dialog-found',
     'dialog-accessible', 'no-owned-dialog-window', 'owned-window-content-not-found',
-    'checking-foreground-window', 'foreground-window-unavailable', 'foreground-window-content-not-found',
+    'checking-foreground-window', 'foreground-handle-read', 'foreground-title-read',
+    'foreground-title-matched', 'foreground-window-unavailable', 'foreground-window-content-not-found',
   ]) {
     assert.ok(windowsUI.includes('TUS_UIA: ' + marker), 'PowerShell reports ' + marker);
   }
