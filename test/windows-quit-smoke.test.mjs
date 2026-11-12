@@ -164,12 +164,16 @@ test('File -> Exit uses only the exact foreground TUS window when Electron has n
 });
 
 
-test('File -> Exit opens the native File menu before locating its exit command', async () => {
+test('File -> Exit posts only the exact command from the TUS native menu', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
+  const helper = windowsUI.slice(windowsUI.indexOf('public static class TusWindowLookup'), windowsUI.indexOf("\n'@"));
+  for (const api of ['GetMenu(', 'GetSubMenu(', 'GetMenuItemCount(', 'GetMenuString', 'GetMenuItemID(', 'WM_COMMAND', 'PostWindowMessage']) {
+    assert.ok(helper.includes(api), 'native menu lookup uses ' + api);
+  }
   const fileExit = windowsUI.slice(windowsUI.indexOf("  'file-exit' {"));
-  const openFileMenu = fileExit.indexOf("[System.Windows.Forms.SendKeys]::SendWait('%f')");
-  const findFile = fileExit.indexOf('$window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $fileCondition)');
-  const findExit = fileExit.indexOf("if ($item.Current.Name -match '^(Exit|Quit)$')");
-  assert.ok(openFileMenu >= 0 && findFile > openFileMenu && findExit > findFile,
-    'opens File with its keyboard mnemonic before reading and selecting the exact Exit/Quit item');
+  const titleGate = fileExit.indexOf("GetWindowTitle($windowHandle) -ne 'The Unfinished Shapes'");
+  const menuLookup = fileExit.indexOf("[TusWindowLookup]::FindMenuCommand($windowHandle, 'File', [string[]]@('Exit', 'Quit'))");
+  const postCommand = fileExit.indexOf('[TusWindowLookup]::PostMenuCommand($windowHandle, $commandId)');
+  assert.ok(titleGate >= 0 && menuLookup > titleGate && postCommand > menuLookup,
+    'the exact TUS window must contain File -> Exit/Quit before its native command is posted');
 });
