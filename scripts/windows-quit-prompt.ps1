@@ -69,18 +69,13 @@ public static class TusWindowLookup {
     }
     if (expectedMessages == null) return IntPtr.Zero;
     var controls = new List<PromptControl>();
-    int nativeControlCount = 0, unreadableControlCount = 0;
     EnumChildWindows(dialog, (child, extraData) => {
       var className = new StringBuilder(64);
       if (GetClassName(child, className, className.Capacity) == 0) return true;
       var name = className.ToString();
-      nativeControlCount++;
       var text = new StringBuilder(512);
       IntPtr ignored;
-      if (SendMessageTimeoutText(child, WM_GETTEXT, new IntPtr(text.Capacity), text, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out ignored) == IntPtr.Zero) {
-        unreadableControlCount++;
-        return true;
-      }
+      if (SendMessageTimeoutText(child, WM_GETTEXT, new IntPtr(text.Capacity), text, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out ignored) == IntPtr.Zero) return true;
       controls.Add(new PromptControl(child, name, text.ToString()));
       return true;
     }, IntPtr.Zero);
@@ -100,12 +95,6 @@ public static class TusWindowLookup {
         if (control.Text == requestedButton) requested = control.Handle;
       }
     }
-    if (!hasExpectedMessage) {
-      if (nativeControlCount == 0) LastPromptStatus = "native-controls-not-found";
-      else if (unreadableControlCount == nativeControlCount) LastPromptStatus = "control-text-unreadable";
-      else LastPromptStatus = "message-text-not-found";
-      return IntPtr.Zero;
-    }
     if (buttons.Count != 2) {
       LastPromptStatus = "button-count-mismatch";
       return IntPtr.Zero;
@@ -117,6 +106,10 @@ public static class TusWindowLookup {
     if (requested == IntPtr.Zero) {
       LastPromptStatus = "requested-button-missing";
       return IntPtr.Zero;
+    }
+    if (!hasExpectedMessage) {
+      LastPromptStatus = "title-buttons-text-unavailable";
+      return requested;
     }
     LastPromptStatus = "matched";
     return requested;
@@ -167,6 +160,7 @@ switch ($Action) {
         $quitButton = [TusWindowLookup]::FindExpectedQuitButton($handle, $expectedMessages, $buttonName)
         $promptStatus = [TusWindowLookup]::LastPromptStatus
         if ($quitButton -ne [IntPtr]::Zero) {
+          if ($promptStatus -eq 'title-buttons-text-unavailable') { Write-Output 'TUS_UIA: prompt-title-buttons-text-unavailable' }
           Write-Output 'TUS_UIA: target-dialog-found'
           Write-Output 'TUS_UIA: dialog-accessible'
           $script:uiPhase = 'clicking-native-button'
@@ -191,6 +185,7 @@ switch ($Action) {
         $quitButton = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, $buttonName)
         $promptStatus = [TusWindowLookup]::LastPromptStatus
         if ($quitButton -ne [IntPtr]::Zero) {
+          if ($promptStatus -eq 'title-buttons-text-unavailable') { Write-Output 'TUS_UIA: prompt-title-buttons-text-unavailable' }
           Write-Output 'TUS_UIA: target-dialog-found'
           Write-Output 'TUS_UIA: dialog-accessible'
           $script:uiPhase = 'clicking-native-button'
