@@ -50,6 +50,8 @@ test('Windows quit UI reports its latest safe phase when native automation times
   for (const marker of ['script-start', 'window-api-ready', 'locating-dialog', 'target-dialog-found', 'dialog-accessible']) {
     assert.ok(windowsUI.includes('TUS_UIA: ' + marker), 'PowerShell reports ' + marker);
   }
+  assert.match(windowsUI, /automation-error-\$errorType-at-\$script:uiPhase/);
+  assert.match(windowsUI, /\$script:uiPhase = 'reading-window-process'/);
   assert.ok(
     automation.includes("markers.slice(-2).join(' after ')"),
     'timeout errors report the failure marker and the phase before it',
