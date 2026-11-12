@@ -84,7 +84,7 @@ await withSmokeCleanup(async()=>{
  const candidate=page.locator('.codex-candidate').filter({hasText:expectedCodexPath});await candidate.waitFor();await candidate.click();
  assert.equal(await page.locator('#codex').inputValue(),expectedCodexPath);
  await page.locator('#workspace').fill(dir);await page.locator('#save-world').click();
- await page.waitForFunction(()=>document.querySelector('#settings-message')?.textContent.includes('saved'));
+ await page.waitForFunction(()=>document.querySelector('#world-message')?.textContent.includes('saved'));
  await page.locator('#settings-close').click();
  await page.evaluate(async()=>{const s=await window.tus.loadSettings();await window.tus.saveSettings({...s,threadId:'smoke-preserved-game-thread'});});
  await page.evaluate(async()=>{const s=await window.tus.loadSettings();await window.tus.saveSettings({...s,agentControlThreadId:s.threadId,agentModelId:'qwen3-local-cpu',agentEffort:'medium'});});
