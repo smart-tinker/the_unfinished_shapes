@@ -203,3 +203,13 @@ test('opening Settings clears stale connection progress, preserves errors, and s
   assert.equal(h.element('settings-codex-recovery').hidden, false);
   assert.equal(opens, 3);
 });
+
+
+test('saving world settings reports feedback in the World section', async () => {
+  const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'idle', turnId: null, pendingApprovals: 0, goalSupported: true, goal: null });
+  h.element('workspace').value = '/old-workspace';
+  h.load("$('save-world').addEventListener", "$('settings-form').addEventListener");
+  await h.element('save-world').listeners.click();
+  assert.equal(h.element('world-message').textContent, 'World settings saved. Access token is kept only for this session.');
+  assert.equal(h.element('settings-message').textContent, '');
+});
