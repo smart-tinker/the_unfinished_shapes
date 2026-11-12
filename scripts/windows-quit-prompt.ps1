@@ -47,6 +47,7 @@ switch ($Action) {
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     $dialog = $null
     $dialogMessage = $null
+    $ownedWindowCount = 0
     $messageCondition = [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::NameProperty,
       'The current Codex activity is unknown.'
@@ -55,8 +56,10 @@ switch ($Action) {
     while ([DateTime]::UtcNow -lt $deadline -and -not $dialog) {
       $script:uiPhase = 'enumerating-process-windows'
       $handles = [TusWindowLookup]::GetProcessWindows([uint32]$ProcessId)
+      $ownedWindowCount = 0
       foreach ($handle in $handles) {
         if ($handle -eq $mainWindowHandle) { continue }
+        $ownedWindowCount++
         $script:uiPhase = 'opening-owned-window'
         $candidate = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
         $script:uiPhase = 'reading-owned-window'
@@ -75,7 +78,11 @@ switch ($Action) {
       }
       if (-not $dialog) { Start-Sleep -Milliseconds 100 }
     }
-    if (-not $dialog) { Write-Output 'TUS_UIA: quit-dialog-not-found'; exit 2 }
+    if (-not $dialog) {
+      if ($ownedWindowCount -eq 0) { Write-Output 'TUS_UIA: no-owned-dialog-window' }
+      else { Write-Output 'TUS_UIA: owned-window-content-not-found' }
+      exit 2
+    }
     if (-not $dialogMessage) { Write-Output 'TUS_UIA: quit-dialog-content-not-found'; exit 2 }
     Write-Output 'TUS_UIA: reading-dialog-buttons'
     $script:uiPhase = 'reading-dialog-buttons'
