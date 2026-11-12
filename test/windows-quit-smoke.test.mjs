@@ -158,17 +158,15 @@ test('File -> Exit selects the exact Electron menu command on the TUS window', a
   assert.match(automation, /Menu\.getApplicationMenu\(\)/);
   assert.match(automation, /menu-will-show/);
   assert.match(automation, /item\.role === 'quit'|\['Exit', 'Quit'\]\.includes\(item\.label\)/);
-  assert.match(automation, /await ui\('file-menu-open', pid\)/);
+  assert.match(automation, /file\.submenu\.popup\(\{ window \}\)/);
   assert.match(automation, /await ui\('file-menu-exit', pid, exitMenuKey\)/);
-  assert.match(windowsUI, /SendKeys\]::SendWait\('%f'\)/);
   assert.match(windowsUI, /SendKeys\]::SendWait\(\$MenuKey\)/);
   assert.match(windowsUI, /SendKeys\]::SendWait\('\{ENTER\}'\)/);
   assert.doesNotMatch(windowsUI, /GetMenu\(/);
-  const fileExit = windowsUI.slice(windowsUI.indexOf("  'file-menu-open' {"));
+  const fileExit = windowsUI.slice(windowsUI.indexOf("  'file-menu-exit' {"));
   const titleGate = fileExit.indexOf("GetWindowTitle($windowHandle) -ne 'The Unfinished Shapes'");
-  const openFileMenu = fileExit.indexOf("SendKeys]::SendWait('%f')");
-  const chooseQuit = fileExit.indexOf('SendKeys]::SendWait($MenuKey)');
+  const chooseQuit = fileExit.indexOf("SendKeys]::SendWait($MenuKey)");
   const activateQuit = fileExit.indexOf("SendKeys]::SendWait('{ENTER}')");
-  assert.ok(titleGate >= 0 && openFileMenu > titleGate && chooseQuit > openFileMenu && activateQuit > chooseQuit,
-    'menu keystrokes follow exact TUS title validation and the Electron menu-will-show check');
+  assert.ok(titleGate >= 0 && chooseQuit > titleGate && activateQuit > chooseQuit,
+    'the visible Electron File submenu receives input only after validating the exact TUS window');
 });
