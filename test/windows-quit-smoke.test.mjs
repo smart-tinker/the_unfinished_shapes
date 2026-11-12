@@ -40,3 +40,16 @@ test('Windows UI automation preserves child output for safe failure reporting', 
 test('quit prompt acceptance helper loads as valid ESM', async () => {
   await import('../scripts/quit-prompt-acceptance.mjs');
 });
+
+
+test('Windows quit UI reports its latest safe phase when native automation times out', async () => {
+  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
+  const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
+  for (const marker of ['script-start', 'window-api-ready', 'locating-dialog', 'target-dialog-found', 'dialog-accessible']) {
+    assert.ok(windowsUI.includes('TUS_UIA: ' + marker), 'PowerShell reports ' + marker);
+  }
+  assert.ok(
+    automation.includes(".filter(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line)).at(-1)"),
+    'timeout errors report the last safe automation phase',
+  );
+});
