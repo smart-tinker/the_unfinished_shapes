@@ -3,9 +3,10 @@ param(
   [Parameter(Mandatory=$true)][int]$ProcessId
 )
 $ErrorActionPreference = 'Stop'
+$script:uiPhase = 'startup'
 trap {
   $errorType = $_.Exception.GetType().Name -replace '[^A-Za-z0-9]', ''
-  Write-Output "TUS_UIA: automation-error-$errorType"
+  Write-Output "TUS_UIA: automation-error-$errorType-at-$script:uiPhase"
   exit 2
 }
 Write-Output 'TUS_UIA: script-start'
@@ -37,27 +38,41 @@ switch ($Action) {
     $findWindowReturnedReported = $false
     $windowHandleReported = $false
     $windowProcessReported = $false
+    $sawDialogHandle = $false
+    $script:uiPhase = 'waiting-for-dialog'
     Write-Output 'TUS_UIA: locating-dialog'
     while ([DateTime]::UtcNow -lt $deadline) {
       if (-not $findWindowReported) { Write-Output 'TUS_UIA: calling-find-window'; $findWindowReported = $true }
+      $script:uiPhase = 'calling-find-window'
       $handle = [TusWindowLookup]::FindWindow($null, 'Codex activity may continue')
+      $script:uiPhase = 'find-window-returned'
       if (-not $findWindowReturnedReported) { Write-Output 'TUS_UIA: find-window-returned'; $findWindowReturnedReported = $true }
       if ($handle -ne [IntPtr]::Zero) {
+        $sawDialogHandle = $true
         if (-not $windowHandleReported) { Write-Output 'TUS_UIA: window-handle-found'; $windowHandleReported = $true }
         if (-not $windowProcessReported) { Write-Output 'TUS_UIA: reading-window-process' }
+        $script:uiPhase = 'reading-window-process'
         $dialogProcessId = [TusWindowLookup]::GetWindowProcessId($handle)
+        $script:uiPhase = 'window-process-read'
         if (-not $windowProcessReported) { Write-Output 'TUS_UIA: window-process-read'; $windowProcessReported = $true }
         if ($dialogProcessId -eq $ProcessId) {
           Write-Output 'TUS_UIA: target-dialog-found'
+          $script:uiPhase = 'creating-dialog-element'
           $dialog = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
+          $script:uiPhase = 'dialog-accessible'
           Write-Output 'TUS_UIA: dialog-accessible'
           break
         }
       }
       Start-Sleep -Milliseconds 100
     }
-    if (-not $dialog) { Write-Output 'TUS_UIA: quit-dialog-not-found'; throw 'The expected unknown-Codex native quit confirmation was not found.' }
+    if (-not $dialog) {
+      if ($sawDialogHandle) { Write-Output 'TUS_UIA: dialog-process-mismatch' }
+      else { Write-Output 'TUS_UIA: quit-dialog-not-found' }
+      exit 2
+    }
     Write-Output 'TUS_UIA: reading-dialog-content'
+    $script:uiPhase = 'reading-dialog-content'
     $unknownMessage = $dialog.FindFirst(
       [System.Windows.Automation.TreeScope]::Descendants,
       [System.Windows.Automation.PropertyCondition]::new(
@@ -67,6 +82,7 @@ switch ($Action) {
     )
     if (-not $unknownMessage) { Write-Output 'TUS_UIA: quit-dialog-content-not-found'; throw 'The native quit dialog did not contain the expected unknown-activity message.' }
     Write-Output 'TUS_UIA: reading-dialog-buttons'
+    $script:uiPhase = 'reading-dialog-buttons'
     $buttons = $dialog.FindAll(
       [System.Windows.Automation.TreeScope]::Descendants,
       [System.Windows.Automation.PropertyCondition]::new(
