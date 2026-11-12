@@ -27,4 +27,6 @@ test('Windows UI automation preserves child output for safe failure reporting', 
   const ui = source.slice(source.indexOf('async function ui'), source.indexOf('export async function'));
   assert.match(ui, /execFile\('powershell\.exe'/);
   assert.match(ui, /resolve\(\{\s*error,\s*stdout,\s*stderr\s*\}\)/);
+  assert.match(ui, /error\.killed/);
+  assert.match(ui, /error\.signal/);
 });
