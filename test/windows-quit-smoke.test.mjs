@@ -24,7 +24,7 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
     assert.ok(windowsUI.includes("$foregroundStatus = '" + marker + "'"), 'PowerShell classifies ' + marker);
   }
   assert.match(windowsUI, /HasForegroundWindow/);
-  assert.match(windowsUI, /Write-Output "TUS_UIA: \\$foregroundStatus"/);
+  assert.ok(windowsUI.includes('Write-Output "TUS_UIA: $foregroundStatus"'));
   assert.match(windowsUI, /GetProcessWindows/);
   assert.match(windowsUI, /EnumWindows/);
   assert.match(windowsUI, /IsWindowVisible/);
