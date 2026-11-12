@@ -200,3 +200,10 @@ test('update relaunch runs only after quit approval and is discarded when quit i
   assert.equal(canceled, 1);
   assert.equal(quit.counts().quitCalls, 1);
 });
+
+test('Windows installer smoke includes real native quit prompt acceptance', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../scripts/windows-installer-smoke.mjs', import.meta.url), 'utf8');
+  assert.match(source, /quitPromptAcceptance/);
+  assert.match(source, /realQuitPrompt:\s*true/);
+});

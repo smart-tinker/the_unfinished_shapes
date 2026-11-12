@@ -11,6 +11,7 @@ import { createGpuDiagnostics } from './gpu-smoke.mjs';
 
 import { manualEditing } from './ui-acceptance.mjs';
 import { fullscreenAcceptance } from './fullscreen-acceptance.mjs';
+import { quitPromptAcceptance } from './quit-prompt-acceptance.mjs';
 
 // This test intentionally touches the real per-user app directory only on a disposable runner.
 if (process.platform !== 'win32' || process.env.CI !== 'true' || process.env.RUNNER_OS !== 'Windows') {
@@ -44,10 +45,10 @@ const settingsFixture = {
 };
 await mkdir(settingsFixture.workspacePath, { recursive: true });
 let instance, graphics, gpu;
-async function launch(executablePath, label) {
+async function launch(executablePath, label, { realQuitPrompt = false } = {}) {
   gpu = await createGpuDiagnostics(label);
   // Use an explicit software renderer on the GPU-less runner, as in Linux CI.
-  instance = await electron.launch({ executablePath, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--tus-smoke-confirm-quit', ...gpu.args], env: { ...process.env, TUS_DATA_DIR: '' }, timeout: 45000 });
+  instance = await electron.launch({ executablePath, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', ...(realQuitPrompt ? [] : ['--tus-smoke-confirm-quit']), ...gpu.args], env: { ...process.env, TUS_DATA_DIR: '' }, timeout: 45000 });
   await gpu.attach(instance);
   const page = await instance.firstWindow();
   graphics = await observeGraphics(page, { label });
@@ -110,8 +111,20 @@ await withSmokeCleanup(async () => {
     await window.tus.request({ ...s, path: '/command', method: 'POST', body: { type: 'build', objectType: 'bridge', position: { x: 7, y: 1, z: 0 } } });
   }, settingsFixture);
   await close();
-  // Restart the installed candidate before testing the same-installer reinstall.
   const installedExe = path.join(installDir, 'TheUnfinishedShapes.exe');
+  page = await launch(installedExe, 'native quit prompt acceptance', { realQuitPrompt: true });
+  graphics.phase('native window close and File -> Exit confirmation');
+  await graphics.assertHealthy();
+  const promptApp = instance, promptProcess = instance.process(), promptGraphics = graphics, promptGpu = gpu;
+  try {
+    await quitPromptAcceptance(promptApp, page, promptGraphics);
+  } finally {
+    if (promptProcess.exitCode !== null) {
+      if (instance === promptApp) { instance = null; graphics = null; gpu = null; }
+      await promptGpu.finish();
+    }
+  }
+  // Restart the installed candidate before testing the same-installer reinstall.
   page = await launch(installedExe, 'installed restart'); await verifyRestored(page); await close();
   if (portableExecutable) {
     page = await launch(portableExecutable, 'portable archive'); await verifyRestored(page); await close();
