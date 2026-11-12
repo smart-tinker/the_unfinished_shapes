@@ -19,3 +19,12 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(windowsUI, /TUS_UIA: quit-dialog-not-found/);
   assert.match(windowsUI, /TUS_UIA: automation-error-/);
 });
+
+
+test('Windows UI automation preserves child output for safe failure reporting', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
+  const ui = source.slice(source.indexOf('async function ui'), source.indexOf('export async function'));
+  assert.match(ui, /execFile\('powershell\.exe'/);
+  assert.match(ui, /resolve\(\{\s*error,\s*stdout,\s*stderr\s*\}\)/);
+});
