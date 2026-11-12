@@ -79,6 +79,7 @@ switch ($Action) {
       if (-not $dialog) { Start-Sleep -Milliseconds 100 }
     }
     if (-not $dialog) {
+      Write-Output 'TUS_UIA: quit-dialog-not-found'
       if ($ownedWindowCount -eq 0) { Write-Output 'TUS_UIA: no-owned-dialog-window' }
       else { Write-Output 'TUS_UIA: owned-window-content-not-found' }
       exit 2
