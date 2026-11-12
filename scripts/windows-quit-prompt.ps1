@@ -40,6 +40,9 @@ public static class TusWindowLookup {
     GetWindowThreadProcessId(owner, out processId);
     return processId == targetProcessId ? foreground : IntPtr.Zero;
   }
+  public static bool HasForegroundWindow() {
+    return GetForegroundWindow() != IntPtr.Zero;
+  }
   public static IntPtr[] GetProcessWindows(uint targetProcessId) {
     var windows = new List<IntPtr>();
     EnumWindows((window, extraData) => {
@@ -98,6 +101,7 @@ switch ($Action) {
       Write-Output 'TUS_UIA: checking-foreground-window'
       $foregroundHandle = [TusWindowLookup]::GetForegroundOwnedWindow([uint32]$ProcessId)
       if ($foregroundHandle -ne [IntPtr]::Zero) {
+        $foregroundStatus = 'foreground-window-content-not-found'
         $script:uiPhase = 'opening-foreground-window'
         $foreground = [System.Windows.Automation.AutomationElement]::FromHandle($foregroundHandle)
         $script:uiPhase = 'reading-foreground-window'
@@ -110,14 +114,20 @@ switch ($Action) {
           Write-Output 'TUS_UIA: target-dialog-found'
           $dialog = $foreground
           $dialogMessage = $foregroundMessage
+          $foregroundStatus = $null
           Write-Output 'TUS_UIA: dialog-accessible'
         }
+      } elseif ([TusWindowLookup]::HasForegroundWindow()) {
+        $foregroundStatus = 'foreground-window-not-owned'
+      } else {
+        $foregroundStatus = 'foreground-window-unavailable'
       }
     }
     if (-not $dialog) {
       Write-Output 'TUS_UIA: quit-dialog-not-found'
       if ($ownedWindowCount -eq 0) { Write-Output 'TUS_UIA: no-owned-dialog-window' }
       else { Write-Output 'TUS_UIA: owned-window-content-not-found' }
+      if ($foregroundStatus) { Write-Output "TUS_UIA: $foregroundStatus" }
       exit 2
     }
     if (-not $dialogMessage) { Write-Output 'TUS_UIA: quit-dialog-content-not-found'; exit 2 }
