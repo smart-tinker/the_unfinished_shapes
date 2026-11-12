@@ -71,7 +71,7 @@ A successful build alone is not a security review. Do not run player-submitted c
 
 - The first world contains primitive geometric constructions, not a full economy, physics simulation or asset marketplace.
 - LAN state uses HTTP polling, bounded world state and JSON persistence, not large-scale infrastructure.
-- No auto-updates, automatic clone/install flow, or production deployment. Users clone/download the repository and supply paths.
+- TUS can check published releases and offers explicit in-app download and launch from Settings → Updates. It verifies the package digest and GitHub build provenance first; nothing installs or restarts automatically. Portable archives extract to a user-selected folder, and launching that copy is a separate choice. There is no automatic clone/install flow or production deployment; source runs still require user-supplied paths.
 - Existing Codex permissions remain meaningful. Game chat cannot silently approve shell commands or server changes.
 - Local game data is separate from Git. Back it up before upgrading world schemas.
 
