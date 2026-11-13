@@ -53,3 +53,17 @@ test('failed connection leaves saved thread unchanged and cannot claim successfu
   assert.equal(h.run('settings.threadId'), 'saved-thread'); assert.equal(h.messages.length, 0);
   assert.equal(h.element('settings-message').textContent, 'Connection failed');
 });
+
+test('missing saved conversation explains safe recovery without replacing or creating a thread', async () => {
+  const h = connectionHarness({ failure: 'Codex request failed (-32600): thread not loaded' });
+  await h.submit();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].threadId, 'saved-thread');
+  assert.equal(h.calls[0].newGameThread, false);
+  assert.equal(h.run('settings.threadId'), 'saved-thread');
+  assert.equal(h.element('new-game-thread').checked, false);
+  assert.match(h.element('settings-message').textContent, /same Codex profile|original Codex profile/i);
+  assert.match(h.element('settings-message').textContent, /Create a new game conversation/i);
+  assert.match(h.element('settings-message').textContent, /original conversation.*unchanged/i);
+  assert.equal(h.messages.length, 0, 'a failed resume must not be reported as successful');
+});
