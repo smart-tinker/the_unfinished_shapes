@@ -22,15 +22,13 @@ test('cancel is enabled only while an update package is downloading', () => {
 
 test('cancelled update download reports cancellation and restores retry controls', async () => {
   const h = rendererHarness();
-  h.run('let checkedUpdate = null, updateBusy = false, updateDownloaded = false, updateExtracted = false, updateDownloading = false;');
   h.run(`const bridge = {
     downloadUpdate: async () => { const error = new Error('The operation was aborted'); error.name = 'AbortError'; throw error; },
     cancelUpdate: async () => false,
     onUpdateProgress: () => {},
-  };
-  async function saveUpdatePreference() {}`);
-  h.load('function updateButtons() {', 'async function saveUpdatePreference() {');
-  h.load('const updateStatus = text =>', 'const toolRows = new Map(), itemRows');
+  };`);
+  h.load('const updateStatus = text =>', 'function showStartupUpdateNotice(');
+  h.load('let checkedUpdate = null', 'const toolRows = new Map(), itemRows');
   h.run("checkedUpdate = { status: 'available', channel: 'prerelease', distribution: 'portable' }; updateButtons()");
 
   await h.element('updates-download').listeners.click();
