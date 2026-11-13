@@ -57,7 +57,7 @@
 </section>
 <section id="settings-updates" class="settings-section" aria-labelledby="settings-updates-heading">
 <h3 id="settings-updates-heading">Updates</h3>
-<p class="muted small">TUS checks published GitHub releases and verifies the package digest and build provenance before it can be opened.</p>
+<details><summary>How update verification works</summary><p class="muted small">TUS checks published GitHub releases and verifies the package digest and build provenance before it can be opened.</p></details>
 <label>Release channel<select id="update-channel"><option value="stable" selected>Stable</option><option value="prerelease">Prerelease</option></select></label>
 <label>Windows package<select id="update-distribution"><option value="installer">Installer</option><option value="portable">Portable archive</option></select></label>
 <div class="path-actions"><button id="updates-save" type="button" class="quiet">Save update preference</button><button id="updates-check" type="button" class="quiet">Check for updates</button></div>
