@@ -64,5 +64,5 @@ test('verified updater download receives the selected release tag',()=>{
  const end=main.indexOf("handle('updates:cancel'",start);
  assert.ok(start>=0 && end>start,'download handler boundaries are present');
  const download=main.slice(start,end);
- assert.match(download,/downloadVerifiedAsset\\(\\{\\s*\\.\\.\\.availableUpdate,\\s*tag:\\s*availableUpdate\\.release\\.tag_name/);
+ assert.match(download,/downloadVerifiedAsset\(\{\s*\.\.\.availableUpdate,\s*tag:\s*availableUpdate\.release\.tag_name/);
 });
