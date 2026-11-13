@@ -180,6 +180,15 @@ app.whenReady().then(async()=>{
     await bridge?.stop();bridge=null;connectedWorld=null;
   });
   handle('codex:connect',async(s)=>{
+    const previousBridge=bridge;
+    if(previousBridge?.starting)throw new Error('Codex is still connecting; wait before reconnecting.');
+    if(previousBridge?.process){
+      if(!previousBridge.threadId)throw new Error('Codex activity cannot be verified; no restart was attempted.');
+      await previousBridge.assertIdleForReconnect();
+      if(bridge!==previousBridge||previousBridge.turnId||previousBridge.sending||previousBridge.approvals.size||previousBridge.goalOperation){
+        throw new Error('Codex activity changed during reconnect; no restart was attempted.');
+      }
+    }
     gameToolSession?.clear();
     if(bridge)await bridge.stop();
     connectedWorld={url:serverUrl(s.serverUrl),token:String(s.token||''),connectionId:randomBytes(16).toString('hex')};
