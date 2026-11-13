@@ -39,7 +39,7 @@
 .settings-section{display:grid;gap:8px;min-width:0;border-top:1px solid #45524f;padding-top:11px}
 .settings-section h3{font-size:13px;font-weight:500;margin:0}
 .settings-section>p{margin:0}
-.settings-section label{margin:0}
+.settings-section label{margin:0}#settings .settings-section label[hidden]{display:none}
 .settings-section .path-actions{margin:0}
 .settings-section details{font-size:11px;color:var(--muted)}
 .settings-section details summary{cursor:pointer;color:#d7dfd3}
