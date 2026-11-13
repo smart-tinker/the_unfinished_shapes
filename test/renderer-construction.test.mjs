@@ -413,7 +413,7 @@ test('connection settings cannot change while a shared lighting Apply is unresol
  h.context.worldRevision=0;h.context.objectSnapshot='';h.context.lightingInputVersion=-1;h.context.lampLights=new Map();
  h.context.meId=null;h.context.playerPosition={x:0,y:0,z:0};h.context.playerVelocityY=0;h.context.jumpRequested=false;h.context.lastPosition='';
  h.context.latestStateRevision=-1;h.context.localMovementVersion=0;h.context.moveStarts=new Map();h.context.scene=null;
- h.load('async function saveSettings()', "$('save-world').addEventListener");
+ h.load('async function saveSettings(', "$('save-world').addEventListener");
  await assert.rejects(h.run('saveSettings()'),/shared lighting Apply.*resolve/i);
  assert.deepEqual(effects,[]);
 });

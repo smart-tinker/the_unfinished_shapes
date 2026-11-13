@@ -15,11 +15,12 @@ const liveControls = ${state};
 const bridge = {
   readAgentControls: async threadId => { calls.push('read:' + threadId); return liveControls; },
   disconnectCodex: async () => calls.push('disconnect'),
+  connectCodex: async () => { calls.push('connect'); return { threadId: 'game-thread', resumed: true }; },
   saveSettings: async () => calls.push('save'),
 };
 function updateChatControls() {}
 async function poll() { calls.push('poll'); }`);
-    h.load('function readSettings() {', "$('save-world').addEventListener");
+    h.load('function readSettings() {', 'const updateStatus');
   h.element('workspace').value = '/new-workspace';
   h.element('codex').value = '/codex';
   h.element('server-url').value = 'http://world-a';
@@ -165,6 +166,17 @@ test('changing Codex path while connected still requires a verified idle convers
   assert.equal(h.run('settings.threadId'), 'game-thread');
 });
 
+test('reconnect requires a verified idle Codex conversation even when settings are unchanged', async () => {
+  const h = settingsHarness({ connected: true, threadId: 'game-thread', threadStatus: 'unknown', turnId: null, pendingApprovals: 0, goalSupported: true, goal: null });
+  h.element('workspace').value = '/old-workspace';
+  h.element('settings').close = () => {};
+  h.context.addMessage = () => {};
+  await h.element('settings-form').listeners.submit({ preventDefault() {} });
+  assert.equal(h.run('JSON.stringify(calls)'), '["read:game-thread"]');
+  assert.match(h.element('settings-message').textContent, /activity could not be verified|safely reconnect/i);
+  assert.equal(h.run('settings.threadId'), 'game-thread');
+});
+
 test('Codex recovery guidance follows the live connection state', () => {
   const h = rendererHarness();
   const recovery = h.element('settings-codex-recovery');
@@ -172,6 +184,9 @@ test('Codex recovery guidance follows the live connection state', () => {
   h.run("setAgentStatus('Connected · idle')");
   assert.equal(h.element('settings-codex-status').textContent, 'Connected · idle');
   assert.equal(recovery.hidden, true);
+  h.run("setAgentStatus('Connected · activity unknown')");
+  assert.equal(recovery.hidden, false);
+  assert.match(recovery.textContent, /activity.*unknown/i);
   h.context.connected = false;
   h.run("setAgentStatus('Codex disconnected')");
   assert.equal(h.element('settings-codex-status').textContent, 'Codex disconnected');
@@ -182,6 +197,9 @@ test('opening Settings clears stale connection progress, preserves errors, and s
   const h = rendererHarness();
   let opens = 0;
   h.context.connected = true;
+  h.context.busy = false;
+  h.context.goalMessageContextId = null;
+  h.context.agentControlState = { threadStatus: 'idle' };
   h.element('settings').showModal = () => { opens++; };
   h.element('settings-codex-recovery').hidden = false;
   h.element('settings-message').textContent = 'Connecting to your Codex app-server…';
@@ -190,18 +208,24 @@ test('opening Settings clears stale connection progress, preserves errors, and s
   assert.equal(h.element('settings-message').textContent, '');
   assert.equal(h.element('settings-codex-recovery').hidden, true);
   assert.equal(opens, 1);
+  h.context.agentControlState = null;
+  h.element('settings-open').listeners.click();
+  assert.equal(h.element('settings-codex-status').textContent, 'Connected · activity unknown');
+  assert.equal(h.element('settings-codex-recovery').hidden, false);
+  assert.equal(opens, 2);
+  h.context.agentControlState = { threadStatus: 'idle' };
   h.element('settings-message').textContent = 'World settings could not be saved';
   h.element('settings-open').listeners.click();
   assert.equal(h.element('settings-message').textContent, 'World settings could not be saved');
   assert.equal(h.element('settings-codex-recovery').hidden, true);
-  assert.equal(opens, 2);
+  assert.equal(opens, 3);
   h.context.connected = false;
   h.element('settings-message').textContent = 'Codex executable is unavailable';
   h.element('settings-codex-recovery').hidden = true;
   h.element('updates-notice').listeners.click();
   assert.equal(h.element('settings-message').textContent, 'Codex executable is unavailable');
   assert.equal(h.element('settings-codex-recovery').hidden, false);
-  assert.equal(opens, 3);
+  assert.equal(opens, 4);
 });
 
 
