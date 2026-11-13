@@ -66,7 +66,12 @@ function refreshAgentStatus() {
 function setAgentStatus(status) {
   $('agent-status').textContent = status;
   $('settings-codex-status').textContent = status;
-  $('settings-codex-recovery').hidden = connected;
+  const recovery = $('settings-codex-recovery');
+  const activityUnknown = connected && status === 'Connected · activity unknown';
+  recovery.hidden = connected && !activityUnknown;
+  recovery.textContent = activityUnknown
+    ? 'Current Codex activity is unknown. TUS will not restart Codex or change its workspace until the conversation is confirmed idle; wait for it to finish, then retry Connect. Your conversation is preserved.'
+    : 'Check the Codex executable path, then select Connect. The saved conversation stays intact.';
 }
 function updateAgentControlButtons() {
   const state = agentControlState, live = connected && state?.connected === true && state.threadId === settings.threadId;
@@ -1086,7 +1091,7 @@ $('find-codex').addEventListener('click', async () => {
 for(const [button,kind,input] of [['browse-codex','codex','codex'],['browse-workspace','workspace','workspace']])$(button).addEventListener('click',async()=>{try{const selected=await bridge.choosePath(kind);if(selected)$(input).value=selected;}catch(error){$('settings-message').textContent=error.message;}});
 function openSettings() {
   if ($('settings-message').textContent === 'Connecting to your Codex app-server…') $('settings-message').textContent = '';
-  $('settings-codex-recovery').hidden = connected;
+  refreshAgentStatus();
   $('settings').showModal();
 }
 function restoreSettingsForm() {
@@ -1102,7 +1107,7 @@ function restoreSettingsForm() {
 $('settings').addEventListener('close', restoreSettingsForm);
 $('updates-notice').addEventListener('click', openSettings); $('settings-open').addEventListener('click', openSettings); $('settings-close').addEventListener('click', () => $('settings').close());
 function readSettings() { return { ...settings, workspacePath: $('workspace').value.trim(), codexPath: $('codex').value.trim(), serverUrl: $('server-url').value.trim(), token: $('token').value, lightingQuality:$('lighting-quality').value, updateChannel:$('update-channel').value }; }
-async function saveSettings() {
+async function saveSettings({ reconnecting = false } = {}) {
   if (editing) throw new Error('Finish the current world update before changing connection settings.');
   const next = readSettings();
   const changed = ['workspacePath', 'codexPath', 'serverUrl', 'token'].some(key => next[key] !== settings[key]);
@@ -1111,18 +1116,21 @@ async function saveSettings() {
   if (changed && !connected && settings.threadId && worldSettingsChanged) {
     throw new Error('Reconnect Codex before changing world or workspace settings; the saved conversation is preserved.');
   }
-  if (changed && connected) {
+  if ((changed || reconnecting) && connected) {
     if (!settings.threadId) throw new Error('Cannot verify the current Codex conversation; reconnect before changing connection settings.');
     const state = await bridge.readAgentControls(settings.threadId);
     if (!state?.connected || state.threadId !== settings.threadId ||
         !['idle', 'active', 'systemError', 'unknown'].includes(state.threadStatus) ||
         (state.turnId !== null && typeof state.turnId !== 'string') ||
         !Number.isInteger(state.pendingApprovals) || state.pendingApprovals < 0 ||
-        typeof state.goalSupported !== 'boolean' || !Object.hasOwn(state, 'goal') || state.threadStatus === 'unknown') {
-      throw new Error('Cannot verify the current Codex conversation; reconnect and check its state before changing connection settings.');
+        typeof state.goalSupported !== 'boolean' || !Object.hasOwn(state, 'goal')) {
+      throw new Error('Cannot safely reconnect because the current Codex conversation could not be verified. The saved conversation is unchanged.');
     }
-    if (state.threadStatus !== 'idle' || state.turnId || state.pendingApprovals > 0 || state.goal) {
-      throw new Error('Clear the native Goal, resolve pending approvals, and wait for Codex to become idle before changing connection settings.');
+    if (state.threadStatus === 'unknown') {
+      throw new Error('Current Codex activity is unknown. Wait for it to finish before reconnecting or changing connection settings; the saved conversation is unchanged.');
+    }
+    if (busy || state.threadStatus !== 'idle' || state.turnId || state.pendingApprovals > 0 || state.goal) {
+      throw new Error('Codex is not confirmed idle. Finish its current turn, resolve pending approvals, and clear any active Goal before reconnecting or changing connection settings.');
     }
   }
   if (changed && (movePreview || dragCandidate || inspectorDirty) &&
@@ -1145,7 +1153,7 @@ async function saveSettings() {
   await poll();
 }
 $('save-world').addEventListener('click', async () => { try { await saveSettings(); $('world-message').textContent = 'World settings saved. Access token is kept only for this session.'; } catch (error) { $('world-message').textContent = error.message; } });
-$('settings-form').addEventListener('submit', async event => { event.preventDefault(); $('connect').disabled = true; $('settings-message').textContent = 'Connecting to your Codex app-server…'; try { await saveSettings(); const result = await bridge.connectCodex({ ...settings, newGameThread: $('new-game-thread').checked }); settings.threadId = result.threadId; $('new-game-thread').checked = false; const { token, ...persisted } = settings; await bridge.saveSettings(persisted); connected = true; setAgentStatus('Ready · responds only when asked'); updateChatControls(); $('settings').close(); if ($('agent-controls').open) void refreshAgentControls(); addMessage(result.resumed ? 'Resumed your saved Codex conversation. It retains the tools registered when it was created. To use updated game commands, open Settings and explicitly select “Create a new game conversation”, then Connect. Your old conversation and its history are preserved. No request has been sent.' : 'Connected to your Codex workspace. No request has been sent.'); } catch (error) { const missingSavedThread = !$('new-game-thread').checked && settings.threadId && /thread not loaded/i.test(error.message); $('settings-message').textContent = missingSavedThread ? 'This Codex profile cannot load the saved conversation. Check that TUS is using the profile where it was created, then retry, or explicitly select “Create a new game conversation” to start a separate one. The original conversation and its history are unchanged.' : error.message; } finally { $('connect').disabled = false; } });
+$('settings-form').addEventListener('submit', async event => { event.preventDefault(); $('connect').disabled = true; $('settings-message').textContent = 'Connecting to your Codex app-server…'; try { await saveSettings({ reconnecting: true }); const result = await bridge.connectCodex({ ...settings, newGameThread: $('new-game-thread').checked }); settings.threadId = result.threadId; $('new-game-thread').checked = false; const { token, ...persisted } = settings; await bridge.saveSettings(persisted); connected = true; setAgentStatus('Ready · responds only when asked'); updateChatControls(); $('settings').close(); if ($('agent-controls').open) void refreshAgentControls(); addMessage(result.resumed ? 'Resumed your saved Codex conversation. It retains the tools registered when it was created. To use updated game commands, open Settings and explicitly select “Create a new game conversation”, then Connect. Your old conversation and its history are preserved. No request has been sent.' : 'Connected to your Codex workspace. No request has been sent.'); } catch (error) { const missingSavedThread = !$('new-game-thread').checked && settings.threadId && /thread not loaded/i.test(error.message); $('settings-message').textContent = missingSavedThread ? 'This Codex profile cannot load the saved conversation. Check that TUS is using the profile where it was created, then retry, or explicitly select “Create a new game conversation” to start a separate one. The original conversation and its history are unchanged.' : error.message; } finally { $('connect').disabled = false; } });
 const updateStatus = text => { $('updates-status').textContent = text; };
 function showStartupUpdateNotice(result) {
   const button = $('updates-notice');
