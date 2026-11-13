@@ -62,7 +62,7 @@ test('missing saved conversation explains safe recovery without replacing or cre
   assert.equal(h.calls[0].newGameThread, false);
   assert.equal(h.run('settings.threadId'), 'saved-thread');
   assert.equal(h.element('new-game-thread').checked, false);
-  assert.match(h.element('settings-message').textContent, /same Codex profile|original Codex profile/i);
+  assert.match(h.element('settings-message').textContent, /This Codex profile cannot load the saved conversation/i);
   assert.match(h.element('settings-message').textContent, /Create a new game conversation/i);
   assert.match(h.element('settings-message').textContent, /original conversation.*unchanged/i);
   assert.equal(h.messages.length, 0, 'a failed resume must not be reported as successful');
