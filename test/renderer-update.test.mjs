@@ -20,10 +20,10 @@ test('cancel is enabled only while an update package is downloading', () => {
   assert.equal(h.element('updates-cancel').disabled, true, 'completed operations cannot be cancelled');
 });
 
-test('cancelled update download reports cancellation and restores retry controls', async () => {
+test('structured IPC cancellation reports cancellation and restores retry controls', async () => {
   const h = rendererHarness();
   h.run(`const bridge = {
-    downloadUpdate: async () => { const error = new Error('The operation was aborted'); error.name = 'AbortError'; throw error; },
+    downloadUpdate: async () => ({ cancelled: true }),
     cancelUpdate: async () => false,
     onUpdateProgress: () => {},
   };`);
