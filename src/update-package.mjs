@@ -207,6 +207,7 @@ export async function downloadVerifiedAsset({
   } catch (error) {
     if (partPath) await rm(partPath, { force: true }).catch(() => {});
     if (created) await rm(finalPath, { force: true }).catch(() => {});
+    if (signal?.aborted && (error?.name === 'AbortError' || error?.code === 'ABORT_ERR')) return { cancelled: true };
     throw error;
   }
 }
