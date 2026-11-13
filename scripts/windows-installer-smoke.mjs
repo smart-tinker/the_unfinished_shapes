@@ -101,6 +101,43 @@ await withSmokeCleanup(async () => {
   assert.equal(cleanWorld.objects.length, 0);
   graphics.phase('native fullscreen controls, keyboard priority and world isolation');
   await fullscreenAcceptance(instance, page);
+  graphics.phase('settings layout at minimum supported window and keyboard disclosure');
+  const originalWindowSize = await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize());
+  const originalViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  const testWindowSize = await instance.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    win.setSize(1000, 700);
+    return win.getSize();
+  });
+  assert.deepEqual(testWindowSize, [1000, 700], 'the minimum supported window size is applied');
+  await page.waitForFunction(() => innerWidth <= 1000 && innerHeight <= 700);
+  await page.locator('#settings-open').click();
+  const resultsStyle = await page.locator('#codex-results').evaluate(element => {
+    const style = getComputedStyle(element);
+    return { maxHeight: style.maxHeight, overflowY: style.overflowY };
+  });
+  assert.deepEqual(resultsStyle, { maxHeight: 'none', overflowY: 'visible' }, 'Codex results share the Settings dialog scroll surface');
+  const updateHelp = page.locator('#settings-updates details');
+  assert.equal(await updateHelp.evaluate(element => element.open), false, 'detailed update guidance starts collapsed');
+  await updateHelp.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await updateHelp.evaluate(element => element.open), true, 'update guidance opens from the keyboard');
+  const originalServerUrl = await page.locator('#server-url').inputValue();
+  await page.locator('#server-url').fill('http://cancelled.invalid');
+  await page.locator('#settings').evaluate(element => { element.scrollTop = element.scrollHeight; });
+  const cancelBounds = await page.locator('#settings-close').boundingBox();
+  const dialogBounds = await page.locator('#settings').evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return { top: rect.top + element.clientTop, bottom: rect.top + element.clientTop + element.clientHeight };
+  });
+  assert.ok(cancelBounds && cancelBounds.y >= dialogBounds.top && cancelBounds.y + cancelBounds.height <= dialogBounds.bottom, 'Cancel remains visible at the bottom of the settings scroll surface');
+  await page.locator('#settings-close').click();
+  assert.equal(await page.locator('#settings').isVisible(), false, 'Cancel closes Settings');
+  await page.locator('#settings-open').click();
+  assert.equal(await page.locator('#server-url').inputValue(), originalServerUrl, 'Cancel discards unsaved settings');
+  await page.locator('#settings-close').click();
+  await instance.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size[0], size[1]), originalWindowSize);
+  await page.waitForFunction(size => innerWidth === size.width && innerHeight === size.height, originalViewport);
   graphics.phase('manual UI create, select, edit and remove');
   await manualEditing(page);
   graphics.phase('create current-candidate fixture');
