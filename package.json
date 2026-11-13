@@ -1,6 +1,6 @@
 {
   "name": "the-unfinished-shapes",
-  "version": "0.1.0-rc.19",
+  "version": "0.1.0-rc.20",
   "description": "A shared 3D construction world with your own Codex companion",
   "main": "src/main.mjs",
   "scripts": {
