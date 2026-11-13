@@ -73,17 +73,17 @@ test('saved ID is stable and wrong workspace/active threads fail without fallbac
   f.bridge.stop();
 });
 
-test('resuming a game conversation restores only user-facing history in chronological order', async () => {
+test('resuming a game conversation restores recent user-facing history in chronological order', async () => {
   const pages = [
     { data: [
-      { turnId: 'turn-1', item: { id: 'user-1', type: 'userMessage', content: [{ type: 'text', text: 'Build a bridge' }] } },
-      { turnId: 'turn-1', item: { id: 'reasoning-1', type: 'reasoning', summary: 'Never display reasoning' } },
-      { turnId: 'turn-1', item: { id: 'tool-1', type: 'dynamicToolCall', tool: 'world_state', arguments: {} } },
+      { turnId: 'turn-2', item: { id: 'assistant-2', type: 'agentMessage', text: 'The bridge is wider.' } },
+      { turnId: 'turn-2', item: { id: 'user-2', type: 'userMessage', content: [{ type: 'text', text: 'Widen it' }] } },
       { turnId: 'turn-1', item: { id: 'assistant-1', type: 'agentMessage', text: 'I will build it.' } },
+      { turnId: 'turn-1', item: { id: 'tool-1', type: 'dynamicToolCall', tool: 'world_state', arguments: {} } },
     ], nextCursor: 'items-page-2' },
     { data: [
-      { turnId: 'turn-2', item: { id: 'user-2', type: 'userMessage', content: [{ type: 'text', text: 'Widen it' }] } },
-      { turnId: 'turn-2', item: { id: 'assistant-2', type: 'agentMessage', text: 'The bridge is wider.', phase: 'final_answer' } },
+      { turnId: 'turn-1', item: { id: 'reasoning-1', type: 'reasoning', summary: 'Never display reasoning' } },
+      { turnId: 'turn-1', item: { id: 'user-1', type: 'userMessage', content: [{ type: 'text', text: 'Build a bridge' }] } },
     ], nextCursor: null },
   ];
   const f = fixture(m => m.method === 'thread/items/list' ? (m.params.cursor === 'items-page-2' ? pages[1] : pages[0]) : undefined);
@@ -95,6 +95,7 @@ test('resuming a game conversation restores only user-facing history in chronolo
     type: 'history',
     threadId: 'saved',
     available: true,
+    truncated: false,
     messages: [
       { role: 'user', text: 'Build a bridge' },
       { role: 'assistant', text: 'I will build it.' },
@@ -106,11 +107,38 @@ test('resuming a game conversation restores only user-facing history in chronolo
   assert.equal(resume.params.excludeTurns, true, 'paginated history is loaded without a deprecated full-thread response');
   const pagesRead = f.requests.filter(request => request.method === 'thread/items/list');
   assert.equal(pagesRead.length, 2);
-  assert.ok(pagesRead.every(request => request.params.threadId === 'saved' && request.params.sortDirection === 'asc'));
+  assert.ok(pagesRead.every(request => request.params.threadId === 'saved' && request.params.sortDirection === 'desc'));
   assert.equal(f.requests.some(request => request.method === 'turn/start'), false, 'restoring chat must not start another turn');
   f.bridge.stop();
 });
 
+test('restored chat history reads at most ten pages and flags older items as omitted', async () => {
+  let pageIndex = 0;
+  const f = fixture(m => {
+    if (m.method !== 'thread/items/list') return undefined;
+    const index = pageIndex++;
+    return {
+      data: Array.from({ length: 100 }, (_, itemIndex) => ({
+        turnId: `turn-${index}`,
+        item: { id: `page-${index}-item-${itemIndex}`, type: 'userMessage', content: [{ type: 'text', text: `page-${index}-item-${itemIndex}` }] },
+      })),
+      nextCursor: index < 9 ? `page-${index + 1}` : 'older-items',
+    };
+  });
+  const events = [];
+  f.bridge.on('event', event => events.push(event));
+  await f.start({ threadId: 'saved' });
+  const history = events.find(event => event.type === 'history');
+  assert.equal(history.available, true);
+  assert.equal(history.truncated, true);
+  assert.equal(history.messages.length, 1000);
+  assert.equal(history.messages[0].text, 'page-9-item-99');
+  assert.equal(history.messages.at(-1).text, 'page-0-item-0');
+  const pagesRead = f.requests.filter(request => request.method === 'thread/items/list');
+  assert.equal(pagesRead.length, 10);
+  assert.ok(pagesRead.every(request => request.params.limit === 100 && request.params.sortDirection === 'desc'));
+  f.bridge.stop();
+});
 test('a history API error keeps the saved conversation connected and reports history unavailable', async () => {
   const f = fixture((message, reply) => {
     if (message.method === 'thread/items/list') {
