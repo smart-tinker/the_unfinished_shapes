@@ -136,6 +136,7 @@ export class CodexBridge extends EventEmitter {
           seen.add(cursor);
         } while (!selected && cursor);
         if (selected) throw new Error('An existing conversation cannot gain game tools. Select New game conversation explicitly; the original conversation will be preserved.');
+        throw new Error('No game conversation was found. Select New game conversation explicitly to create one.');
       }
       const result = selected
         ? await this.request('thread/resume', { threadId: selected.id, excludeTurns: true, cwd: this.workspacePath, sandbox: 'workspace-write', approvalPolicy: 'on-request', developerInstructions: GAME_DEVELOPER_INSTRUCTIONS })

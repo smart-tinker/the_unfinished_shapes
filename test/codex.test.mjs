@@ -39,9 +39,9 @@ function fixture(handler = () => undefined, timeoutMs = 500) {
 
 test('connect initializes, starts workspace without invoking a model, and whitelists environment', async () => {
   const f = fixture(); const events=[]; f.bridge.on('event',e=>events.push(e));
-  const result = await f.start({env:{TUS_WORLD_URL:'http://localhost:1234',TUS_WORLD_TOKEN:'test',UNSAFE_SETTING:'x'}});
+  const result = await f.start({newGameThread:true,env:{TUS_WORLD_URL:'http://localhost:1234',TUS_WORLD_TOKEN:'test',UNSAFE_SETTING:'x'}});
   assert.equal(result.threadId,'new-thread');
-  assert.deepEqual(f.requests.map(x=>x.method),['initialize','initialized','thread/list','thread/start']);
+  assert.deepEqual(f.requests.map(x=>x.method),['initialize','initialized','thread/start']);
   assert.equal(f.options().shell,false); assert.equal(f.options().env.TUS_WORLD_TOKEN,'test');
   assert.equal(f.options().env.UNSAFE_SETTING,undefined);
   assert.equal(events.at(-1).type,'connected');
@@ -130,7 +130,7 @@ test('a history API error keeps the saved conversation connected and reports his
 });
 
 test('explicit send, duplicate send protection, interrupt, completion',async()=>{
-  const f=fixture(); await f.start();
+  const f=fixture(); await f.start({newGameThread:true});
   await f.bridge.send('Build a bridge');
   await assert.rejects(f.bridge.send('duplicate'),/already running/);
   assert.equal(await f.bridge.interrupt(),true);
@@ -140,7 +140,7 @@ test('explicit send, duplicate send protection, interrupt, completion',async()=>
 });
 
 test('a scene snapshot is sent with its player request and is not carried into a later turn',async()=>{
-  const f=fixture(); await f.start();
+  const f=fixture(); await f.start({newGameThread:true});
   const snapshot={worldConnectionId:'connection-1',revision:7,selectedIds:['shape-1']};
   await f.bridge.send('Build a bridge',{},snapshot);
   const first=f.requests.filter(request=>request.method==='turn/start').at(-1);
@@ -156,7 +156,7 @@ test('a scene snapshot is sent with its player request and is not carried into a
 });
 
 test('server approvals stay pending until an explicit matching response',async()=>{
-  const f=fixture(); await f.start(); const events=[]; f.bridge.on('event',e=>events.push(e));
+  const f=fixture(); await f.start({newGameThread:true}); const events=[]; f.bridge.on('event',e=>events.push(e));
   const before=f.requests.length;
   f.reply({id:77,method:'item/commandExecution/requestApproval',params:{command:'test'}});
   assert.equal(f.requests.length,before); assert.equal(events[0].type,'approval');
@@ -196,7 +196,7 @@ test('completion arriving before turn start response does not leave bridge busy'
       return {turn:{id:'turn1',status:'inProgress'}};
     }
   });
-  await f.start(); await f.bridge.send('Hello'); assert.equal(f.bridge.turnId,null);
+  await f.start({newGameThread:true}); await f.bridge.send('Hello'); assert.equal(f.bridge.turnId,null);
   await f.bridge.send('Again'); f.bridge.stop();
 });
 
@@ -221,7 +221,7 @@ test('dynamic tools route separately with exact arguments and structured respons
 });
 
 test('tool calls cannot run outside an explicit turn, from another thread or namespace',async()=>{
-  const f=fixture(); await f.start(); const events=[];f.bridge.on('event',e=>events.push(e));
+  const f=fixture(); await f.start({newGameThread:true}); const events=[];f.bridge.on('event',e=>events.push(e));
   const params={threadId:'new-thread',turnId:'turn1',callId:'call',tool:'world_state',arguments:{}};
   f.reply({id:91,method:'item/tool/call',params});
   assert.equal(f.requests.at(-1).result.success,false); assert.equal(events.length,0);
@@ -264,7 +264,7 @@ test('an accepted turn is returned if the conversation changes before its start 
   f=fixture(request=>{
     if(request.method==='turn/start')f.bridge.threadId='replacement-thread';
   });
-  await f.start();
+  await f.start({newGameThread:true});
   const result=await f.bridge.send('Build one thing');
   assert.equal(result.turn.id,'turn1');
   assert.equal(f.bridge.turnId,null);
@@ -273,7 +273,7 @@ test('an accepted turn is returned if the conversation changes before its start 
 
 test('a turn-start timeout is uncertain and cannot be blindly retried',async()=>{
   const f=fixture(request=>request.method==='turn/start'?false:undefined,35);
-  await f.start();
+  await f.start({newGameThread:true});
   await assert.rejects(f.bridge.send('Build one thing'),/Turn outcome is unknown.*check the conversation before retrying/i);
   assert.equal(f.requests.filter(request=>request.method==='turn/start').length,1);
   await assert.rejects(f.bridge.send('Retry build'),/Connect Codex first/);
@@ -293,4 +293,14 @@ test('agent construction exposes preview and gated apply, never direct build',()
  assert.deepEqual(apply.required,['previewId']);assert.deepEqual(Object.keys(apply.properties),['previewId']);assert.equal(apply.additionalProperties,false);
  assert.equal(WORLD_TOOLS.some(tool=>tool.name==='world_build'),false);
  assert.equal(WORLD_TOOLS.find(tool=>tool.name==='world_command').inputSchema.properties.command.properties.type.enum.includes('build'),false);
+});
+
+
+test('does not create a game conversation without explicit player choice', async () => {
+  const f = fixture();
+  await assert.rejects(f.start(), /Select New game conversation explicitly/);
+  assert.deepEqual(f.requests.map(request => request.method), ['initialize', 'initialized', 'thread/list']);
+  assert.equal(f.requests.some(request => request.method === 'thread/start'), false);
+  assert.equal(f.bridge.threadId, null);
+  assert.equal(f.child.killed, true);
 });
