@@ -45,5 +45,5 @@
 .settings-section details summary{cursor:pointer;color:#d7dfd3}
 .settings-section details p{margin:6px 0 0}
 .settings-actions{display:flex;gap:8px;flex-wrap:wrap}
-#settings .codex-results{max-height:110px;margin:0;overflow:auto}
+#settings .codex-results{max-height:none;margin:0;overflow:visible}
 #settings .feedback,#settings .dialog-actions{margin:0}
