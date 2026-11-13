@@ -78,6 +78,8 @@ await withSmokeCleanup(async()=>{
  assert.equal(await page.locator('#send').isDisabled(),true);
  graphics.phase('settings and Codex discovery');
  await page.locator('#settings-open').click();assert.equal(await page.locator('#settings').isVisible(),true);
+ const windowsPackageSetting=page.locator('#update-distribution').locator('xpath=..');
+ assert.equal(await windowsPackageSetting.isVisible(),process.platform==='win32','Windows installer/portable selection is only shown on Windows');
  await page.locator('#settings-close').click();assert.equal(await page.locator('#settings').isVisible(),false);
  await page.locator('#settings-open').click();
  await page.locator('#find-codex').click();

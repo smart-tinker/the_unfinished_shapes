@@ -122,6 +122,7 @@ app.whenReady().then(async()=>{
         directory, signal: controller.signal,
         onProgress: progress => win?.webContents.send('updates:progress', { state: 'downloading', ...progress }),
       });
+      if (result?.cancelled === true) return result;
       downloadedUpdate = { ...availableUpdate, ...result };
       win?.webContents.send('updates:progress', { state: 'verified', assetName: result.assetName, sha256: result.sha256 });
       return { assetName: result.assetName, sha256: result.sha256, distribution: availableUpdate.distribution };

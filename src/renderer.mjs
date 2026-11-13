@@ -1221,9 +1221,16 @@ $('updates-download').addEventListener('click', async () => {
   updateDownloading = true; updateBusy = true; updateButtons(); updateStatus('Downloading release package…');
   try {
     const result = await bridge.downloadUpdate();
+    if (result?.cancelled === true) {
+      updateStatus('Download cancelled. You can try again.');
+      return;
+    }
     updateDownloaded = true;
     updateStatus('Verified ' + result.assetName + ' (SHA-256 ' + result.sha256.slice(0, 12) + '…).');
-  } catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
+  } catch (error) {
+    if (error?.name === 'AbortError' || error?.code === 'ABORT_ERR') updateStatus('Download cancelled. You can try again.');
+    else updateStatus(String(error?.message || error).slice(0, 300));
+  }
   finally { updateDownloading = false; updateBusy = false; updateButtons(); }
 });
 $('updates-cancel').addEventListener('click', async () => {
@@ -1480,6 +1487,7 @@ function codexEvent(event) {
 try { initScene(); } catch (error) { $('scene-error').hidden = false; $('scene-error').textContent = `3D rendering unavailable: ${error.message}. Check hardware acceleration and restart.`; }
 if (!bridge) { feedback('Open this app through its desktop launcher.', true); $('settings-open').disabled = true; }
 else {
+  $('update-distribution-setting').hidden = bridge.platform !== 'win32';
   try { const saved = await bridge.loadSettings(); settings = { ...settings, ...saved }; $('lighting-quality').value=settings.lightingQuality||'full'; $('update-channel').value=settings.updateChannel||'stable'; $('workspace').value = settings.workspacePath || ''; $('codex').value = settings.codexPath || ''; $('server-url').value = settings.serverUrl; if (!/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(settings.serverUrl)) settings.token = ''; $('token').value = settings.token; } catch (error) { feedback(error.message, true); }
   void bridge.checkStartupUpdates().then(showStartupUpdateNotice).catch(() => showStartupUpdateNotice({ status: 'unavailable' }));
   bridge.onCodexEvent(codexEvent); await poll(); setInterval(poll, 1000); setInterval(syncPosition, 250);

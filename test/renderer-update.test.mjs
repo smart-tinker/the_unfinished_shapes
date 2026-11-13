@@ -19,3 +19,21 @@ test('cancel is enabled only while an update package is downloading', () => {
   h.run('updateDownloading = false; updateBusy = false; updateButtons()');
   assert.equal(h.element('updates-cancel').disabled, true, 'completed operations cannot be cancelled');
 });
+
+test('structured IPC cancellation reports cancellation and restores retry controls', async () => {
+  const h = rendererHarness();
+  h.run(`const bridge = {
+    downloadUpdate: async () => ({ cancelled: true }),
+    cancelUpdate: async () => false,
+    onUpdateProgress: () => {},
+  };`);
+  h.load('const updateStatus = text =>', 'function showStartupUpdateNotice(');
+  h.load('let checkedUpdate = null', 'const toolRows = new Map(), itemRows');
+  h.run("checkedUpdate = { status: 'available', channel: 'prerelease', distribution: 'portable' }; updateButtons()");
+
+  await h.element('updates-download').listeners.click();
+
+  assert.match(h.element('updates-status').textContent, /cancelled/i);
+  assert.equal(h.element('updates-download').disabled, false, 'the selected package can be retried');
+  assert.equal(h.element('updates-cancel').disabled, true, 'a completed cancellation cannot be repeated');
+});
