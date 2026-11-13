@@ -1223,7 +1223,10 @@ $('updates-download').addEventListener('click', async () => {
     const result = await bridge.downloadUpdate();
     updateDownloaded = true;
     updateStatus('Verified ' + result.assetName + ' (SHA-256 ' + result.sha256.slice(0, 12) + '…).');
-  } catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
+  } catch (error) {
+    if (error?.name === 'AbortError' || error?.code === 'ABORT_ERR') updateStatus('Download cancelled. You can try again.');
+    else updateStatus(String(error?.message || error).slice(0, 300));
+  }
   finally { updateDownloading = false; updateBusy = false; updateButtons(); }
 });
 $('updates-cancel').addEventListener('click', async () => {
