@@ -274,7 +274,7 @@ let connected = false;`);
 
 test('settings Codex results stay in the outer dialog scroll area', async () => {
   const css = await readFile(new URL('../src/style.css', import.meta.url), 'utf8');
-  const rule = css.match(/#settings \\.codex-results\\{([^}]*)\\}/)?.[1] ?? '';
-  assert.match(rule, /max-height\\s*:\\s*none/);
-  assert.match(rule, /overflow\\s*:\\s*visible/);
+  const rule = css.match(/#settings \.codex-results\{([^}]*)\}/)?.[1] ?? '';
+  assert.match(rule, /max-height\s*:\s*none/);
+  assert.match(rule, /overflow\s*:\s*visible/);
 });
