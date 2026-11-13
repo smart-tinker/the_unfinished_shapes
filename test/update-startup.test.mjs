@@ -57,3 +57,12 @@ test('selected-channel update status includes bounded release notes',()=>{
  assert.match(check,/Release notes/);
  assert.match(check,/slice\(0, 1200\)/);
 });
+
+test('verified updater download receives the selected release tag',()=>{
+ const main=readFileSync(new URL('../src/main.mjs',import.meta.url),'utf8');
+ const start=main.indexOf("handle('updates:download'");
+ const end=main.indexOf("handle('updates:cancel'",start);
+ assert.ok(start>=0 && end>start,'download handler boundaries are present');
+ const download=main.slice(start,end);
+ assert.match(download,/downloadVerifiedAsset\(\{\s*\.\.\.availableUpdate,\s*tag:\s*availableUpdate\.release\.tag_name/);
+});

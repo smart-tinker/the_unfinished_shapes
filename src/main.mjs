@@ -117,7 +117,9 @@ app.whenReady().then(async()=>{
       const directory = path.join(app.getPath('downloads'), 'TheUnfinishedShapes-Updates');
       const { downloadVerifiedAsset } = await import('./update-package.mjs');
       const result = await downloadVerifiedAsset({
-        ...availableUpdate, directory, signal: controller.signal,
+        ...availableUpdate,
+        tag: availableUpdate.release.tag_name,
+        directory, signal: controller.signal,
         onProgress: progress => win?.webContents.send('updates:progress', { state: 'downloading', ...progress }),
       });
       downloadedUpdate = { ...availableUpdate, ...result };
