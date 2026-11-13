@@ -102,11 +102,14 @@ await withSmokeCleanup(async () => {
   graphics.phase('native fullscreen controls, keyboard priority and world isolation');
   await fullscreenAcceptance(instance, page);
   graphics.phase('settings layout at minimum supported window and keyboard disclosure');
-  const originalWindowSize = await instance.evaluate(({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows()[0], size = win.getSize();
+  const originalWindowSize = await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize());
+  const originalViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  const testWindowSize = await instance.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
     win.setSize(1000, 700);
-    return size;
+    return win.getSize();
   });
+  assert.deepEqual(testWindowSize, [1000, 700], 'the minimum supported window size is applied');
   await page.waitForFunction(() => innerWidth <= 1000 && innerHeight <= 700);
   await page.locator('#settings-open').click();
   const resultsStyle = await page.locator('#codex-results').evaluate(element => {
@@ -134,7 +137,7 @@ await withSmokeCleanup(async () => {
   assert.equal(await page.locator('#server-url').inputValue(), originalServerUrl, 'Cancel discards unsaved settings');
   await page.locator('#settings-close').click();
   await instance.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size[0], size[1]), originalWindowSize);
-  await page.waitForFunction(() => innerWidth > 1000 && innerHeight > 700);
+  await page.waitForFunction(size => innerWidth === size.width && innerHeight === size.height, originalViewport);
   graphics.phase('manual UI create, select, edit and remove');
   await manualEditing(page);
   graphics.phase('create current-candidate fixture');
