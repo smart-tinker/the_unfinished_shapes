@@ -278,3 +278,8 @@ test('settings Codex results stay in the outer dialog scroll area', async () => 
   assert.match(rule, /max-height\s*:\s*none/);
   assert.match(rule, /overflow\s*:\s*visible/);
 });
+
+test('Settings keeps update verification details in a native disclosure', async () => {
+  const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
+  assert.ok(html.includes('<details><summary>How update verification works</summary><p class="muted small">TUS checks published GitHub releases and verifies the package digest and build provenance before it can be opened.</p></details>'));
+});
