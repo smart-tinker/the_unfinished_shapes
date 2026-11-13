@@ -163,6 +163,35 @@ test('downloads only the exact official asset and requires its matching signed a
   }
 });
 
+test('returns structured cancellation when the download request is aborted', async () => {
+  const controller = new AbortController();
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'tus-update-cancel-'));
+  let requestStarted;
+  const started = new Promise(resolve => { requestStarted = resolve; });
+  try {
+    const pending = downloadVerifiedAsset({
+      asset, tag, directory: dir, signal: controller.signal,
+      fetcher: async (url, options) => {
+        if (url.startsWith('https://github.com/')) {
+          return new Response(null, { status: 302, headers: {
+            location: 'https://release-assets.githubusercontent.com/package',
+          } });
+        }
+        requestStarted();
+        return new Promise((resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        });
+      },
+    });
+    await started;
+    controller.abort();
+    assert.deepEqual(await pending, { cancelled: true });
+    assert.deepEqual(await readdir(dir), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('rejects an untrusted redirect and removes partial update files', async () => {
   const bytes = Buffer.from('not trusted');
   const downloadAsset = { ...asset, size: bytes.length };
