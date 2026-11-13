@@ -46,6 +46,15 @@ test('history replacement avoids duplicates and reports unavailable saved histor
   ]);
 });
 
+test('truncated restored chat tells the player older messages remain in Codex', () => {
+  const h = historyRendererHarness();
+  h.run(`codexEvent({type:'history',threadId:'saved',available:true,truncated:true,messages:[{role:'assistant',text:'Recent reply'}]})`);
+  assert.deepEqual(h.element('chat').children.map(message => [message.className, message.textContent]), [
+    ['chat-message assistant', 'Recent reply'],
+    ['chat-message system', 'Showing recent game chat; older messages remain in Codex.'],
+  ]);
+});
+
 test('activity shows requested command intent and only structured result evidence', () => {
   const h = activityHarness();
   h.tool({ type: 'tool-start', name: 'world_command', arguments: { command: { type: 'update', secret: 'SECRET' } } });
