@@ -41,7 +41,7 @@ function fixture(handler = () => undefined) {
 }
 
 test('agent status is read-only and reports native runtime, model catalog, and Goal capability', async () => {
-  const f = fixture(); await f.start();
+  const f = fixture(); await f.start({ newGameThread: true });
   const state = await f.bridge.readControlState();
   assert.equal(state.threadId, 'game-thread');
   assert.equal(state.runtime.version, '0.167.0');
@@ -55,7 +55,7 @@ test('agent status is read-only and reports native runtime, model catalog, and G
 });
 
 test('creates one real native Goal with the user objective and completion criterion', async () => {
-  const f = fixture(); await f.start();
+  const f = fixture(); await f.start({ newGameThread: true });
   await f.bridge.createGoal({ objective: 'Build a bridge', completionCriteria: 'Two players can cross it.' });
   const call = f.requests.find(request => request.method === 'thread/goal/set');
   assert.equal(call.params.threadId, 'game-thread');
@@ -69,7 +69,7 @@ test('creates one real native Goal with the user objective and completion criter
 
 test('does not replace an existing native Goal', async () => {
   const f = fixture(message => message.method === 'thread/goal/get' ? { goal: { threadId: 'game-thread', objective: 'Existing', status: 'active' } } : undefined);
-  await f.start();
+  await f.start({ newGameThread: true });
   await assert.rejects(f.bridge.createGoal({ objective: 'New', completionCriteria: 'Done' }), /already exists/i);
   assert.equal(f.requests.some(request => request.method === 'thread/goal/set'), false);
   f.bridge.stop();
@@ -80,7 +80,7 @@ test('pause, resume, clear Goal use native methods and stay distinct from interr
     if (message.method === 'thread/goal/get') return { goal: { threadId: 'game-thread', objective: 'Build', status: 'active' } };
     if (message.method === 'thread/goal/set') return { goal: { threadId: 'game-thread', objective: 'Build', status: message.params.status } };
   });
-  await f.start();
+  await f.start({ newGameThread: true });
   await f.bridge.pauseGoal();
   await f.bridge.resumeGoal();
   await f.bridge.clearGoal();
@@ -91,7 +91,7 @@ test('pause, resume, clear Goal use native methods and stay distinct from interr
 });
 
 test('model and reasoning overrides apply to the next turn only', async () => {
-  const f = fixture(); await f.start();
+  const f = fixture(); await f.start({ newGameThread: true });
   await f.bridge.send('Build a bridge', { model: 'qwen3-local-cpu', effort: 'medium' });
   const call = f.requests.find(request => request.method === 'turn/start');
   assert.equal(call.params.model, 'qwen3-local-cpu');
@@ -106,7 +106,7 @@ test('unsupported native Goals are detected by the native method, not experiment
     reply({ id: message.id, error: { code: -32601, message: 'Method not found' } });
     return false;
   });
-  await f.start();
+  await f.start({ newGameThread: true });
   const state = await f.bridge.readControlState();
   assert.equal(state.goalSupported, false);
   assert.equal(state.goalReason, 'Native Goals are not supported by this Codex runtime.');
@@ -123,7 +123,7 @@ test('ephemeral conversations report Goals unavailable, while unrelated API erro
     reply({ id: message.id, error: { code: -32600, message: 'ephemeral thread does not support goals: game-thread' } });
     return false;
   });
-  await ephemeral.start();
+  await ephemeral.start({ newGameThread: true });
   const ephemeralState = await ephemeral.bridge.readControlState();
   assert.equal(ephemeralState.goalSupported, false);
   assert.equal(ephemeralState.goalReason, 'This conversation cannot store native Goals.');
@@ -136,7 +136,7 @@ test('ephemeral conversations report Goals unavailable, while unrelated API erro
     reply({ id: message.id, error: { code: -32000, message: 'Temporary server error' } });
     return false;
   });
-  await unavailable.start();
+  await unavailable.start({ newGameThread: true });
   const unavailableState = await unavailable.bridge.readControlState();
   assert.equal(unavailableState.goalSupported, null);
   assert.equal(unavailableState.goalReason, 'Could not verify native Goal support.');
@@ -150,7 +150,7 @@ test('does not send with a different conversation if the model catalog resolves 
   const f = fixture(message => {
     if (message.method === 'model/list') { catalogRequest = message; return false; }
   });
-  await f.start();
+  await f.start({ newGameThread: true });
   const sending = f.bridge.send('Build a bridge', { model: 'qwen3-local-cpu', effort: 'medium' });
   await new Promise(resolve => setImmediate(resolve));
   assert.ok(catalogRequest);
@@ -165,7 +165,7 @@ test('clearing a native Goal records an explicit user mutation', async () => {
   const f = fixture(message => {
     if (message.method === 'thread/goal/get') return { goal: { threadId: 'game-thread', objective: 'Build', status: 'paused' } };
   });
-  await f.start();
+  await f.start({ newGameThread: true });
   await f.bridge.clearGoal();
   const clear = f.requests.find(request => request.method === 'thread/goal/clear');
   assert.equal(clear.params.origin, 'user');
