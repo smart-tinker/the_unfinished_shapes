@@ -1089,6 +1089,17 @@ function openSettings() {
   $('settings-codex-recovery').hidden = connected;
   $('settings').showModal();
 }
+function restoreSettingsForm() {
+  $('workspace').value = settings.workspacePath || '';
+  $('codex').value = settings.codexPath || '';
+  $('server-url').value = settings.serverUrl || 'http://127.0.0.1:4317';
+  $('token').value = settings.token || '';
+  $('lighting-quality').value = settings.lightingQuality || 'full';
+  $('update-channel').value = settings.updateChannel || 'stable';
+  $('update-distribution').value = 'installer';
+  $('new-game-thread').checked = false;
+}
+$('settings').addEventListener('close', restoreSettingsForm);
 $('updates-notice').addEventListener('click', openSettings); $('settings-open').addEventListener('click', openSettings); $('settings-close').addEventListener('click', () => $('settings').close());
 function readSettings() { return { ...settings, workspacePath: $('workspace').value.trim(), codexPath: $('codex').value.trim(), serverUrl: $('server-url').value.trim(), token: $('token').value, lightingQuality:$('lighting-quality').value, updateChannel:$('update-channel').value }; }
 async function saveSettings() {

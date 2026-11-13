@@ -213,3 +213,36 @@ test('saving world settings reports feedback in the World section', async () => 
   assert.equal(h.element('world-message').textContent, 'World settings saved. Access token is kept only for this session.');
   assert.equal(h.element('settings-message').textContent, '');
 });
+
+
+test('Cancel discards uncommitted settings values without saving them', () => {
+  const h = rendererHarness();
+  h.run(`let settings = { workspacePath: '/saved-workspace', codexPath: '/saved-codex', serverUrl: 'http://saved-world', token: 'saved-token', lightingQuality: 'reduced', updateChannel: 'prerelease' };
+let connected = false;`);
+  h.load('function openSettings()', 'function readSettings() {');
+  let closeEvents = 0;
+  h.element('settings').close = () => {
+    closeEvents++;
+    h.element('settings').listeners.close?.();
+  };
+  h.element('workspace').value = '/unsaved-workspace';
+  h.element('codex').value = '/unsaved-codex';
+  h.element('server-url').value = 'http://unsaved-world';
+  h.element('token').value = 'unsaved-token';
+  h.element('lighting-quality').value = 'full';
+  h.element('update-channel').value = 'stable';
+  h.element('update-distribution').value = 'portable';
+  h.element('new-game-thread').checked = true;
+
+  h.element('settings-close').listeners.click();
+
+  assert.equal(closeEvents, 1);
+  assert.equal(h.element('workspace').value, '/saved-workspace');
+  assert.equal(h.element('codex').value, '/saved-codex');
+  assert.equal(h.element('server-url').value, 'http://saved-world');
+  assert.equal(h.element('token').value, 'saved-token');
+  assert.equal(h.element('lighting-quality').value, 'reduced');
+  assert.equal(h.element('update-channel').value, 'prerelease');
+  assert.equal(h.element('update-distribution').value, 'installer');
+  assert.equal(h.element('new-game-thread').checked, false);
+});
