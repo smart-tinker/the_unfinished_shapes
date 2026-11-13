@@ -1169,13 +1169,13 @@ function showStartupUpdateNotice(result) {
   button.title = messages.join(' ') + ' Open Settings to choose a channel and review; nothing is installed automatically.';
   updateStatus(button.title);
 }
-let checkedUpdate = null, updateDownloaded = false, updateExtracted = false, updateBusy = false;
+let checkedUpdate = null, updateDownloaded = false, updateExtracted = false, updateBusy = false, updateDownloading = false;
 function updateButtons() {
   const available = checkedUpdate?.status === 'available';
   $('updates-save').disabled = updateBusy;
   $('updates-check').disabled = updateBusy;
   $('updates-download').disabled = updateBusy || !available || updateDownloaded;
-  $('updates-cancel').disabled = !updateBusy;
+  $('updates-cancel').disabled = !updateDownloading;
   $('updates-extract').disabled = updateBusy || !updateDownloaded || checkedUpdate?.distribution === 'installer' || updateExtracted;
   $('updates-launch').disabled = updateBusy || !updateDownloaded || (checkedUpdate?.distribution !== 'installer' && !updateExtracted);
   $('update-channel').disabled = updateBusy;
@@ -1210,13 +1210,13 @@ $('updates-check').addEventListener('click', async () => {
 $('update-channel').addEventListener('change', () => { checkedUpdate = null; updateDownloaded = false; updateExtracted = false; updateStatus('Save the channel preference, then check for updates.'); updateButtons(); });
 $('update-distribution').addEventListener('change', () => { checkedUpdate = null; updateDownloaded = false; updateExtracted = false; updateStatus('Check again for the selected Windows package.'); updateButtons(); });
 $('updates-download').addEventListener('click', async () => {
-  updateBusy = true; updateButtons(); updateStatus('Downloading release package…');
+  updateDownloading = true; updateBusy = true; updateButtons(); updateStatus('Downloading release package…');
   try {
     const result = await bridge.downloadUpdate();
     updateDownloaded = true;
     updateStatus('Verified ' + result.assetName + ' (SHA-256 ' + result.sha256.slice(0, 12) + '…).');
   } catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
-  finally { updateBusy = false; updateButtons(); }
+  finally { updateDownloading = false; updateBusy = false; updateButtons(); }
 });
 $('updates-cancel').addEventListener('click', async () => {
   try { if (await bridge.cancelUpdate()) updateStatus('Cancelling download…'); }
