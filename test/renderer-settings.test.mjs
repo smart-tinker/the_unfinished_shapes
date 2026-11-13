@@ -197,6 +197,8 @@ test('opening Settings clears stale connection progress, preserves errors, and s
   const h = rendererHarness();
   let opens = 0;
   h.context.connected = true;
+  h.context.busy = false;
+  h.context.goalMessageContextId = null;
   h.context.agentControlState = { threadStatus: 'idle' };
   h.element('settings').showModal = () => { opens++; };
   h.element('settings-codex-recovery').hidden = false;
@@ -206,18 +208,24 @@ test('opening Settings clears stale connection progress, preserves errors, and s
   assert.equal(h.element('settings-message').textContent, '');
   assert.equal(h.element('settings-codex-recovery').hidden, true);
   assert.equal(opens, 1);
+  h.context.agentControlState = null;
+  h.element('settings-open').listeners.click();
+  assert.equal(h.element('settings-codex-status').textContent, 'Connected · activity unknown');
+  assert.equal(h.element('settings-codex-recovery').hidden, false);
+  assert.equal(opens, 2);
+  h.context.agentControlState = { threadStatus: 'idle' };
   h.element('settings-message').textContent = 'World settings could not be saved';
   h.element('settings-open').listeners.click();
   assert.equal(h.element('settings-message').textContent, 'World settings could not be saved');
   assert.equal(h.element('settings-codex-recovery').hidden, true);
-  assert.equal(opens, 2);
+  assert.equal(opens, 3);
   h.context.connected = false;
   h.element('settings-message').textContent = 'Codex executable is unavailable';
   h.element('settings-codex-recovery').hidden = true;
   h.element('updates-notice').listeners.click();
   assert.equal(h.element('settings-message').textContent, 'Codex executable is unavailable');
   assert.equal(h.element('settings-codex-recovery').hidden, false);
-  assert.equal(opens, 3);
+  assert.equal(opens, 4);
 });
 
 
