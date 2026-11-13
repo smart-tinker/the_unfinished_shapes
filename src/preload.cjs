@@ -1,5 +1,6 @@
 const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('tus',Object.freeze({
+platform:process.platform,
 getBuildInfo:()=>ipcRenderer.invoke('app:build-info'),findCodex:()=>ipcRenderer.invoke('codex:find'),choosePath:kind=>ipcRenderer.invoke('path:choose',kind),loadSettings:()=>ipcRenderer.invoke('settings:load'),saveSettings:s=>ipcRenderer.invoke('settings:save',s),
 disconnectCodex:()=>ipcRenderer.invoke('codex:disconnect'),connectCodex:s=>ipcRenderer.invoke('codex:connect',s),sendPrompt:(t,scene)=>ipcRenderer.invoke('codex:send',t,scene),interrupt:()=>ipcRenderer.invoke('codex:interrupt'),respond:(id,result)=>ipcRenderer.invoke('codex:respond',id,result),decideBuildPreview:(previewId,decision,threadId)=>ipcRenderer.invoke('codex:build-preview-decision',{previewId,decision,threadId}),
  readAgentControls:threadId=>ipcRenderer.invoke('codex:controls:read',threadId),createAgentGoal:(threadId,value)=>ipcRenderer.invoke('codex:goal:create',threadId,value),pauseAgentGoal:threadId=>ipcRenderer.invoke('codex:goal:pause',threadId),resumeAgentGoal:threadId=>ipcRenderer.invoke('codex:goal:resume',threadId),clearAgentGoal:threadId=>ipcRenderer.invoke('codex:goal:clear',threadId),saveAgentModel:value=>ipcRenderer.invoke('codex:model:save',value),

@@ -1483,6 +1483,7 @@ function codexEvent(event) {
 try { initScene(); } catch (error) { $('scene-error').hidden = false; $('scene-error').textContent = `3D rendering unavailable: ${error.message}. Check hardware acceleration and restart.`; }
 if (!bridge) { feedback('Open this app through its desktop launcher.', true); $('settings-open').disabled = true; }
 else {
+  $('update-distribution-setting').hidden = bridge.platform !== 'win32';
   try { const saved = await bridge.loadSettings(); settings = { ...settings, ...saved }; $('lighting-quality').value=settings.lightingQuality||'full'; $('update-channel').value=settings.updateChannel||'stable'; $('workspace').value = settings.workspacePath || ''; $('codex').value = settings.codexPath || ''; $('server-url').value = settings.serverUrl; if (!/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(settings.serverUrl)) settings.token = ''; $('token').value = settings.token; } catch (error) { feedback(error.message, true); }
   void bridge.checkStartupUpdates().then(showStartupUpdateNotice).catch(() => showStartupUpdateNotice({ status: 'unavailable' }));
   bridge.onCodexEvent(codexEvent); await poll(); setInterval(poll, 1000); setInterval(syncPosition, 250);
