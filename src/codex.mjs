@@ -155,7 +155,7 @@ export class CodexBridge extends EventEmitter {
       }
       this.assertControlContext(context);
       this.emit('event', { type: 'connected', threadId: this.threadId, workspacePath: this.workspacePath, resumed: Boolean(selected) });
-      if (selected) this.emit('event', { type: 'history', threadId: this.threadId, available: history !== null, messages: history ?? [] });
+      if (selected) this.emit('event', { type: 'history', threadId: this.threadId, available: history !== null, ...(history ? { truncated: history.truncated } : {}), messages: history?.messages ?? [] });
       return { threadId: this.threadId, workspacePath: this.workspacePath, resumed: Boolean(selected), thread: result.thread };
     } catch (error) {
       this.stop();
@@ -165,10 +165,10 @@ export class CodexBridge extends EventEmitter {
 
   async readThreadHistory(context) {
     const messages = [], seen = new Set();
-    let cursor = null;
+    let cursor = null, pages = 0;
     do {
       const page = await this.request('thread/items/list', {
-        threadId: context.threadId, limit: 100, sortDirection: 'asc', ...(cursor ? { cursor } : {}),
+        threadId: context.threadId, limit: 100, sortDirection: 'desc', ...(cursor ? { cursor } : {}),
       });
       this.assertControlContext(context);
       if (!Array.isArray(page.data)) throw new Error('Codex returned an invalid conversation history page.');
@@ -185,10 +185,11 @@ export class CodexBridge extends EventEmitter {
       if (cursor !== null && typeof cursor !== 'string') throw new Error('Codex returned an invalid conversation history cursor.');
       if (cursor && seen.has(cursor)) throw new Error('Codex returned a repeating history cursor.');
       if (cursor) seen.add(cursor);
-    } while (cursor);
-    return messages;
+      pages++;
+    } while (cursor && pages < 10);
+    messages.reverse();
+    return { messages, truncated: Boolean(cursor) };
   }
-
   async send(text, options = {}, sceneSnapshot) {
     if (!this.threadId || !this.process) throw new Error('Connect Codex first.');
     if (typeof text !== 'string' || !text.trim() || text.length > 100_000) throw new Error('Enter a message of 1–100,000 characters.');

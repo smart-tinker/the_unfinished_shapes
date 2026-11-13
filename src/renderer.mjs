@@ -1417,6 +1417,7 @@ function codexEvent(event) {
         if (['user', 'assistant'].includes(message?.role) && typeof message.text === 'string' && message.text.trim()) addMessage(message.text, message.role);
       }
     } else addMessage('Saved Codex chat history is unavailable.', 'system');
+    if (event.truncated === true) addMessage('Showing recent game chat; older messages remain in Codex.', 'system');
   }
   if (event.type === 'tool-start' || event.type === 'tool-result') toolActivity(event);
   if (event.type === 'connected') { clearAgentBuildPreview('Codex conversation changed; this preview is no longer available.'); activityThread(event.threadId); connected = true; settings.threadId = event.threadId; agentControlState = null; goalMessageContextId = null; refreshAgentStatus(); void refreshAgentControls(); }
