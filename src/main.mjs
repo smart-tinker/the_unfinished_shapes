@@ -125,6 +125,9 @@ app.whenReady().then(async()=>{
       downloadedUpdate = { ...availableUpdate, ...result };
       win?.webContents.send('updates:progress', { state: 'verified', assetName: result.assetName, sha256: result.sha256 });
       return { assetName: result.assetName, sha256: result.sha256, distribution: availableUpdate.distribution };
+    } catch (error) {
+      if (controller.signal.aborted) return { cancelled: true };
+      throw error;
     } finally {
       if (updateDownloadController === controller) updateDownloadController = null;
     }
