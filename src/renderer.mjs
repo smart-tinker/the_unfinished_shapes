@@ -1124,13 +1124,13 @@ async function saveSettings({ reconnecting = false } = {}) {
         (state.turnId !== null && typeof state.turnId !== 'string') ||
         !Number.isInteger(state.pendingApprovals) || state.pendingApprovals < 0 ||
         typeof state.goalSupported !== 'boolean' || !Object.hasOwn(state, 'goal')) {
-      throw new Error('Cannot safely reconnect because the current Codex conversation could not be verified. The saved conversation is unchanged.');
+      throw new Error('Cannot verify the current Codex conversation, so reconnection is blocked. The saved conversation is unchanged.');
     }
     if (state.threadStatus === 'unknown') {
-      throw new Error('Current Codex activity is unknown. Wait for it to finish before reconnecting or changing connection settings; the saved conversation is unchanged.');
+      throw new Error('Codex activity could not be verified. Wait for it to finish before reconnecting or changing connection settings; the saved conversation is unchanged.');
     }
     if (busy || state.threadStatus !== 'idle' || state.turnId || state.pendingApprovals > 0 || state.goal) {
-      throw new Error('Codex is not confirmed idle. Finish its current turn, resolve pending approvals, and clear any active Goal before reconnecting or changing connection settings.');
+      throw new Error('Wait for Codex to become idle: finish its current turn, resolve pending approvals, and clear any active Goal before reconnecting or changing connection settings.');
     }
   }
   if (changed && (movePreview || dragCandidate || inspectorDirty) &&
