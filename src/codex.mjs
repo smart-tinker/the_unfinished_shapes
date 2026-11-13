@@ -283,6 +283,15 @@ export class CodexBridge extends EventEmitter {
     };
   }
 
+  async assertIdleForReconnect() {
+    const state = await this.readControlState();
+    if (state.thread.status?.type !== 'idle' || state.turnId || state.goal ||
+        this.turnId || this.sending || this.approvals.size || this.goalOperation) {
+      throw new Error('Codex conversation is not verifiably idle; reconnect is blocked.');
+    }
+    return true;
+  }
+
   async withGoalOperation(action) {
     if (this.goalOperation) throw new Error('A Goal operation is already in progress.');
     const context = this.controlContext();
