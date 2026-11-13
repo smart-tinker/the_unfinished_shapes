@@ -294,3 +294,13 @@ test('agent construction exposes preview and gated apply, never direct build',()
  assert.equal(WORLD_TOOLS.some(tool=>tool.name==='world_build'),false);
  assert.equal(WORLD_TOOLS.find(tool=>tool.name==='world_command').inputSchema.properties.command.properties.type.enum.includes('build'),false);
 });
+
+
+test('does not create a game conversation without explicit player choice', async () => {
+  const f = fixture();
+  await assert.rejects(f.start(), /Select New game conversation explicitly/);
+  assert.deepEqual(f.requests.map(request => request.method), ['initialize', 'initialized', 'thread/list']);
+  assert.equal(f.requests.some(request => request.method === 'thread/start'), false);
+  assert.equal(f.bridge.threadId, null);
+  assert.equal(f.child.killed, true);
+});
