@@ -1221,6 +1221,10 @@ $('updates-download').addEventListener('click', async () => {
   updateDownloading = true; updateBusy = true; updateButtons(); updateStatus('Downloading release package…');
   try {
     const result = await bridge.downloadUpdate();
+    if (result?.cancelled === true) {
+      updateStatus('Download cancelled. You can try again.');
+      return;
+    }
     updateDownloaded = true;
     updateStatus('Verified ' + result.assetName + ' (SHA-256 ' + result.sha256.slice(0, 12) + '…).');
   } catch (error) {
