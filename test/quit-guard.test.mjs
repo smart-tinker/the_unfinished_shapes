@@ -207,3 +207,29 @@ test('Windows installer smoke includes real native quit prompt acceptance', asyn
   assert.match(source, /quitPromptAcceptance/);
   assert.match(source, /realQuitPrompt:\s*true/);
 });
+
+
+test('a failed Codex start without a child is not treated as unknown activity', async () => {
+  const createReader = quitGuard.createQuitStateReader;
+  assert.equal(typeof createReader, 'function', 'the production quit-state reader is directly testable');
+  if (typeof createReader !== 'function') return;
+
+  let stateReads = 0;
+  const failedBridge = {
+    process: null, threadId: null, approvals: new Set(),
+    readControlState: async () => { stateReads++; throw new Error('should not query a failed startup'); },
+  };
+  const noSavedThread = createReader(() => failedBridge, async () => ({ threadId: '' }));
+  assert.deepEqual(await noSavedThread(), { connected: false, threadId: null });
+  assert.equal(stateReads, 0);
+
+  const savedThread = createReader(() => failedBridge, async () => ({ threadId: 'saved-thread' }));
+  assert.equal(await savedThread(), null, 'a saved thread remains unknown until Codex confirms it');
+
+  const startingBridge = {
+    ...failedBridge, process: {},
+    readControlState: async () => { stateReads++; throw new Error('startup state is not ready'); },
+  };
+  await assert.rejects(createReader(() => startingBridge, async () => ({ threadId: '' }))(), /startup state is not ready/);
+  assert.equal(stateReads, 1, 'a live child still requires a fresh state read');
+});
