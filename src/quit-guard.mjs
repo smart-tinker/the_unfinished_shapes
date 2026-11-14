@@ -61,3 +61,15 @@ export function installQuitGuard({ app, getWindow, readState, confirm, cleanup, 
   });
   return window => window.on('close', requestQuit);
 }
+
+export function createQuitStateReader(getBridge, loadSettings) {
+  return async () => {
+    const current = getBridge();
+    if (current?.process || current?.threadId) {
+      const state = await current.readControlState();
+      return { ...state, pendingApprovals: current.approvals.size };
+    }
+    const saved = await loadSettings();
+    return saved.threadId ? null : { connected: false, threadId: null };
+  };
+}
