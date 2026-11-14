@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { realpath } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { CodexBridge, WORLD_TOOLS } from '../src/codex.mjs';
 
 const cwd = await realpath(process.cwd());
@@ -331,4 +332,25 @@ test('does not create a game conversation without explicit player choice', async
   assert.equal(f.requests.some(request => request.method === 'thread/start'), false);
   assert.equal(f.bridge.threadId, null);
   assert.equal(f.child.killed, true);
+});
+
+
+test('a missing Codex executable reports guidance without exposing its local path', async () => {
+  const f = fixture(), marker = 'tus-private-codex-error-marker';
+  await assert.rejects(f.start({ codexPath: resolve(marker, 'codex.exe') }), error => {
+    assert.match(error.message, /Codex executable .*Check the selected path/i);
+    assert.equal(error.message.includes(marker), false);
+    return true;
+  });
+  assert.equal(f.options(), undefined);
+});
+
+test('a missing workspace reports guidance without exposing its local path', async () => {
+  const f = fixture(), marker = 'tus-private-workspace-error-marker';
+  await assert.rejects(f.start({ workspacePath: resolve(marker) }), error => {
+    assert.match(error.message, /workspace folder .*Check the selected path/i);
+    assert.equal(error.message.includes(marker), false);
+    return true;
+  });
+  assert.equal(f.options(), undefined);
 });
