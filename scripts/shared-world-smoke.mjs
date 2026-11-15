@@ -254,11 +254,15 @@ await withSmokeCleanup(async () => {
   alice.page.on('response', captureJumpMovement);
   await alice.page.evaluate(() => {
     window.__tusJumpKeyEvents = [];
-    for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
-      if ((event.code === 'Space' || event.key.toLowerCase() === 'd') && window.__tusJumpKeyEvents.length < 20) {
-        window.__tusJumpKeyEvents.push({ type, code: event.code, repeat: event.repeat });
+    const observe = (phase, type) => event => {
+      if ((event.code === 'Space' || event.key?.toLowerCase() === 'd') && window.__tusJumpKeyEvents.length < 20) {
+        window.__tusJumpKeyEvents.push({ phase, type, code: event.code, key: event.key, repeat: event.repeat, defaultPrevented: event.defaultPrevented, activeElement: document.activeElement?.tagName || '', focused: document.hasFocus(), dialogOpen: Boolean(document.querySelector('dialog[open]')) });
       }
-    }, true);
+    };
+    for (const type of ['keydown', 'keyup']) {
+      window.addEventListener(type, observe('capture', type), true);
+      window.addEventListener(type, observe('bubble', type));
+    }
   });
   await alice.page.keyboard.down('d');
   await alice.page.keyboard.down('Space');
