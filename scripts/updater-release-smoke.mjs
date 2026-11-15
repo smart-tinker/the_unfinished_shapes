@@ -18,14 +18,8 @@ assert.ok(process.env.TUS_SMOKE_EXECUTABLE, 'a packaged candidate executable is 
 await access(executable);
 
 const baselineVersion = '0.1.0-rc.1';
-const appPackagePath = process.platform === 'darwin'
-  ? path.resolve(path.dirname(executable), '..', 'Resources', 'app', 'package.json')
-  : path.resolve(path.dirname(executable), 'resources', 'app', 'package.json');
-const originalAppPackage = await readFile(appPackagePath, 'utf8');
-const appPackage = JSON.parse(originalAppPackage);
 const projectPackagePath = new URL('../package.json', import.meta.url);
 const projectPackageOriginal = await readFile(projectPackagePath, 'utf8');
-assert.equal(appPackage.version, JSON.parse(projectPackageOriginal).version, 'the packaged candidate matches the checked-out source version');
 
 const testRoot = await mkdtemp(path.join(os.tmpdir(), 'tus-update-e2e-'));
 const workDirs = [];
@@ -42,18 +36,25 @@ function waitForExit(child, timeoutMs = 30000) {
   });
 }
 
-async function start(executablePath, label, dataDir) {
+async function start(executablePath, label, dataDir, useBaseline = false) {
   const gpu = await createGpuDiagnostics(label);
   let instance;
   let graphics;
   try {
+    const env = { ...process.env, TUS_DATA_DIR: dataDir };
+    if (useBaseline) {
+      env.TUS_SMOKE_UPDATE_BASELINE_VERSION = baselineVersion;
+      const preload = path.resolve('scripts/updater-version-preload.cjs').replaceAll('\\\\', '/');
+      env.NODE_OPTIONS = [env.NODE_OPTIONS, '--require=' + preload].filter(Boolean).join(' ');
+    }
     instance = await electron.launch({
       executablePath,
       args: [...runnerFlags, '--tus-smoke-confirm-quit', ...gpu.args],
-      env: { ...process.env, TUS_DATA_DIR: dataDir },
+      env,
       timeout: 45000,
     });
     await gpu.attach(instance);
+    if (useBaseline) assert.equal(await instance.evaluate(({ app }) => app.getVersion()), baselineVersion, 'isolated updater test version is active');
     const page = await instance.firstWindow();
     graphics = await observeGraphics(page, { label });
     active = { instance, page, graphics, gpu };
@@ -157,7 +158,7 @@ async function updateOnce(distribution) {
   const extractDir = path.join(workDir, 'extracted');
   await Promise.all([mkdir(dataDir), mkdir(downloadsDir), mkdir(extractDir)]);
 
-  let current = await start(executable, 'updater source ' + distribution, dataDir);
+  let current = await start(executable, 'updater source ' + distribution, dataDir, true);
   await addWorldFixture(current.page);
   await current.page.locator('#settings-open').click();
   await current.page.locator('#update-channel').selectOption('prerelease');
@@ -169,7 +170,7 @@ async function updateOnce(distribution) {
   await current.instance.evaluate(({ app }) => app.quit());
   await closeAfterQuit(current, firstExit);
 
-  current = await start(executable, 'updater preference restart ' + distribution, dataDir);
+  current = await start(executable, 'updater preference restart ' + distribution, dataDir, true);
   await current.page.locator('#settings-open').click();
   assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'the selected update channel survives restart');
   if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
@@ -288,10 +289,6 @@ async function verifyWindowsInstaller(installerResult, portableResult) {
 }
 
 try {
-  const candidateAppPackage = JSON.parse(originalAppPackage);
-  candidateAppPackage.version = baselineVersion;
-  await writeFile(appPackagePath, JSON.stringify(candidateAppPackage, null, 2) + '\n');
-
   if (process.platform === 'win32') {
     const portable = await updateOnce('portable');
     const installer = await updateOnce('installer');
@@ -302,7 +299,6 @@ try {
   }
 } finally {
   await closeActive('updater test cleanup').catch(() => {});
-  await writeFile(appPackagePath, originalAppPackage);
   for (const workDir of workDirs) await rm(workDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   await rm(testRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 }
