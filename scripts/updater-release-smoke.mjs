@@ -1,0 +1,307 @@
+import { _electron as electron } from 'playwright-core';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import os from 'node:os';
+import path from 'node:path';
+import { compareReleaseVersions } from '../src/update-release.mjs';
+import { closeSmokeApp, observeGraphics, withSmokeCleanup } from './graphics-smoke.mjs';
+import { createGpuDiagnostics } from './gpu-smoke.mjs';
+
+const execute = promisify(execFile);
+const executable = path.resolve(process.env.TUS_SMOKE_EXECUTABLE || '');
+assert.ok(process.env.CI === 'true' && process.env.RUNNER_OS, 'updater package acceptance runs only on a GitHub Actions runner');
+assert.ok(process.env.TUS_SMOKE_EXECUTABLE, 'a packaged candidate executable is required');
+await access(executable);
+
+const baselineVersion = '0.1.0-rc.1';
+const appPackagePath = process.platform === 'darwin'
+  ? path.resolve(path.dirname(executable), '..', 'Resources', 'app', 'package.json')
+  : path.resolve(path.dirname(executable), 'resources', 'app', 'package.json');
+const originalAppPackage = await readFile(appPackagePath, 'utf8');
+const appPackage = JSON.parse(originalAppPackage);
+const projectPackagePath = new URL('../package.json', import.meta.url);
+const projectPackageOriginal = await readFile(projectPackagePath, 'utf8');
+assert.equal(appPackage.version, JSON.parse(projectPackageOriginal).version, 'the packaged candidate matches the checked-out source version');
+
+const testRoot = await mkdtemp(path.join(os.tmpdir(), 'tus-update-e2e-'));
+const workDirs = [];
+let active = null;
+const platform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
+const runnerFlags = process.platform === 'linux' || process.platform === 'win32'
+  ? ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader'] : [];
+
+function waitForExit(child, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    if (child.exitCode !== null) return resolve();
+    const timer = setTimeout(() => reject(new Error('The packaged updater process did not exit after confirmed launch.')), timeoutMs);
+    child.once('exit', () => { clearTimeout(timer); resolve(); });
+  });
+}
+
+async function start(executablePath, label, dataDir) {
+  const gpu = await createGpuDiagnostics(label);
+  let instance;
+  let graphics;
+  try {
+    instance = await electron.launch({
+      executablePath,
+      args: [...runnerFlags, '--tus-smoke-confirm-quit', ...gpu.args],
+      env: { ...process.env, TUS_DATA_DIR: dataDir },
+      timeout: 45000,
+    });
+    await gpu.attach(instance);
+    const page = await instance.firstWindow();
+    graphics = await observeGraphics(page, { label });
+    active = { instance, page, graphics, gpu };
+    graphics.phase('world connection');
+    await page.waitForFunction(() => document.querySelector('#connection')?.textContent.includes('World connected'), null, { timeout: 45000 });
+    await graphics.assertHealthy();
+    return active;
+  } catch (error) {
+    if (instance) await withSmokeCleanup(
+      () => closeSmokeApp(instance, graphics, label + ' cleanup'),
+      () => gpu.finish(),
+    );
+    else await gpu.finish();
+    throw error;
+  }
+}
+
+async function closeActive(label) {
+  if (!active) return;
+  const current = active;
+  active = null;
+  await withSmokeCleanup(
+    () => current.instance.process().exitCode === null
+      ? closeSmokeApp(current.instance, current.graphics, label)
+      : current.graphics?.assertNoErrors(),
+    () => current.gpu.finish(),
+  );
+}
+
+async function closeAfterQuit(current, wait) {
+  await wait;
+  await current.graphics.assertNoErrors();
+  await current.gpu.finish();
+  if (active === current) active = null;
+}
+
+async function addWorldFixture(page) {
+  await page.locator('[data-kind="bridge"]').click();
+  await page.locator('#build-x').fill('7');
+  await page.locator('#build-preview').click();
+  await page.locator('#build-apply').click();
+  await page.waitForFunction(() => document.querySelector('#world-message')?.textContent.includes('Shape added to the shared world.'));
+}
+
+async function worldObjects(page) {
+  return page.evaluate(async () => {
+    const settings = await window.tus.loadSettings();
+    return (await window.tus.request({ ...settings, path: '/state' })).objects;
+  });
+}
+
+async function fileDigest(filePath) {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+async function getManifest(tag) {
+  const filename = 'candidate-' + platform + '.json';
+  const url = 'https://github.com/smart-tinker/the_unfinished_shapes/releases/download/' +
+    encodeURIComponent(tag) + '/' + encodeURIComponent(filename);
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000), redirect: 'error' });
+  assert.equal(response.status, 200, 'the published release manifest is available');
+  const body = await response.text();
+  assert.ok(body.length <= 16384, 'the public release manifest is bounded');
+  const manifest = JSON.parse(body);
+  assert.equal(manifest.repository, 'smart-tinker/the_unfinished_shapes');
+  assert.equal(manifest.tag, tag);
+  assert.equal(manifest.platform, platform);
+  assert.match(manifest.sourceSha || '', /^[a-f0-9]{40}$/);
+  return manifest;
+}
+
+function expectedAssetName(version, distribution) {
+  const suffix = process.platform === 'win32'
+    ? (distribution === 'installer' ? 'Setup-x64.exe' : 'win32-x64.zip')
+    : process.platform === 'darwin' ? 'darwin-arm64.zip' : 'linux-x64.tar.gz';
+  return 'TheUnfinishedShapes-' + version + '-' + suffix;
+}
+
+async function configureUpdateDialogs(instance, { downloadsDir, extractDir, dialogMarker, relaunchMarker }) {
+  await instance.evaluate(async ({ app, dialog }, config) => {
+    const { writeFileSync } = await import('node:fs');
+    app.setPath('downloads', config.downloadsDir);
+    globalThis.__tusUpdateChoice = 0;
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [config.extractDir] });
+    dialog.showMessageBox = async (_window, options) => {
+      writeFileSync(config.dialogMarker, JSON.stringify({ title: options.title, buttons: options.buttons }));
+      return { response: globalThis.__tusUpdateChoice };
+    };
+    app.relaunch = ({ execPath, args }) => writeFileSync(config.relaunchMarker, JSON.stringify({ execPath, args }));
+  }, { downloadsDir, extractDir, dialogMarker, relaunchMarker });
+}
+
+async function updateOnce(distribution) {
+  const workDir = await mkdtemp(path.join(testRoot, 'package-'));
+  workDirs.push(workDir);
+  const dataDir = path.join(workDir, 'data');
+  const downloadsDir = path.join(workDir, 'downloads');
+  const extractDir = path.join(workDir, 'extracted');
+  await Promise.all([mkdir(dataDir), mkdir(downloadsDir), mkdir(extractDir)]);
+
+  let current = await start(executable, 'updater source ' + distribution, dataDir);
+  await addWorldFixture(current.page);
+  await current.page.locator('#settings-open').click();
+  await current.page.locator('#update-channel').selectOption('prerelease');
+  if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
+  await current.page.locator('#updates-save').click();
+  await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Update preference saved.');
+  const firstProcess = current.instance.process();
+  const firstExit = waitForExit(firstProcess);
+  await current.instance.evaluate(({ app }) => app.quit());
+  await closeAfterQuit(current, firstExit);
+
+  current = await start(executable, 'updater preference restart ' + distribution, dataDir);
+  await current.page.locator('#settings-open').click();
+  assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'the selected update channel survives restart');
+  if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
+  await current.page.waitForFunction(() => !document.querySelector('#updates-notice')?.hidden, null, { timeout: 30000 });
+  assert.match(await current.page.locator('#updates-notice').getAttribute('title'), /Prerelease .* available/, 'startup checks expose the newer published prerelease without installing it');
+
+  await current.page.locator('#updates-check').click();
+  await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.includes(' is available.'), null, { timeout: 30000 });
+  const availability = await current.page.locator('#updates-status').innerText();
+  assert.match(availability, /^Prerelease · may be unstable: /, 'manual check uses the saved prerelease channel');
+  const tag = availability.match(/(v\d+\.\d+\.\d+-rc\.?\d+)/)?.[1];
+  assert.ok(tag, 'the published candidate tag is shown in the update status');
+  assert.ok(compareReleaseVersions(tag, baselineVersion) > 0, 'the published prerelease is newer than the isolated test version');
+
+  const manifest = await getManifest(tag);
+  const assetName = expectedAssetName(manifest.version, distribution);
+  const manifestFile = manifest.files.find(file => file.name === assetName);
+  assert.ok(manifestFile, 'the exact platform and distribution package appears in the published manifest');
+
+  await configureUpdateDialogs(current.instance, {
+    downloadsDir, extractDir,
+    dialogMarker: path.join(workDir, 'update-dialog.json'),
+    relaunchMarker: path.join(workDir, 'relaunch.json'),
+  });
+  await current.page.locator('#updates-download').click();
+  await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.startsWith('Verified '), null, { timeout: 180000 });
+  const verified = await current.page.locator('#updates-status').innerText();
+  assert.ok(verified.startsWith('Verified ' + assetName + ' (SHA-256 '), 'the UI reports the exact selected package only after digest and provenance verification');
+  const downloadName = (await readdir(downloadsDir)).find(name => name.endsWith('-' + assetName));
+  assert.ok(downloadName, 'the verified package is saved in the isolated Downloads directory');
+  const downloadedPath = path.join(downloadsDir, downloadName);
+  assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'downloaded bytes match the published release manifest');
+
+  if (distribution !== 'installer') {
+    await current.page.locator('#updates-extract').click();
+    await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.includes('Verified archive extracted.'), null, { timeout: 120000 });
+  }
+
+  await current.page.locator('#updates-launch').click();
+  await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Update launch cancelled.');
+  assert.equal(current.instance.process().exitCode, null, 'cancel leaves the game open and the verified update available');
+  await current.instance.evaluate(() => { globalThis.__tusUpdateChoice = 1; });
+
+  const closing = current;
+  const exit = waitForExit(closing.instance.process());
+  const click = closing.page.locator('#updates-launch').click({ timeout: 10000 }).catch(error => {
+    if (closing.instance.process().exitCode === null) throw error;
+  });
+  await Promise.all([click, closeAfterQuit(closing, exit)]);
+
+  const prompt = JSON.parse(await readFile(path.join(workDir, 'update-dialog.json'), 'utf8'));
+  assert.equal(prompt.title, 'Start verified update');
+  assert.deepEqual(prompt.buttons, ['Cancel', 'Quit and launch']);
+  const relaunch = JSON.parse(await readFile(path.join(workDir, 'relaunch.json'), 'utf8'));
+  assert.deepEqual(relaunch.args, [], 'the update launches without carrying commands or conversation text');
+  const targetVersion = manifest.version;
+  const expectedExecutable = distribution === 'installer' ? downloadedPath : path.join(
+    extractDir,
+    'TheUnfinishedShapes-' + targetVersion + (process.platform === 'darwin' ? '.app' : ''),
+    ...(process.platform === 'darwin' ? ['Contents', 'MacOS', 'TheUnfinishedShapes'] : [process.platform === 'win32' ? 'TheUnfinishedShapes.exe' : 'TheUnfinishedShapes']),
+  );
+  assert.equal(path.resolve(relaunch.execPath), path.resolve(expectedExecutable), 'only the verified installer or extracted executable is passed to relaunch');
+  await access(relaunch.execPath);
+
+  let targetExecutable = null;
+  if (distribution !== 'installer') {
+    current = await start(relaunch.execPath, 'published update launch ' + distribution, dataDir);
+    targetExecutable = relaunch.execPath;
+    assert.equal(await current.instance.evaluate(({ app }) => app.getVersion()), targetVersion, 'the exact downloaded release package starts');
+    const objects = await worldObjects(current.page);
+    assert.equal(objects.length, 1, 'world data survives package update');
+    assert.equal(objects[0].type, 'bridge');
+    assert.equal(objects[0].position.x, 7);
+    assert.equal(await current.page.locator('#send').isDisabled(), true, 'the updater does not connect Codex or send a model turn');
+    await closeActive('updated package close');
+  }
+
+  console.log('Updater E2E passed: ' + platform + ' ' + distribution + ' -> ' + tag + ' (' + assetName + '), exact published digest and provenance, explicit cancel/launch, isolated world persistence.');
+  return { workDir, downloadedPath, assetName, tag, manifest, targetExecutable };
+}
+
+async function verifyWindowsInstaller(installerResult, portableResult) {
+  const rootPath = projectPackagePath;
+  const original = await readFile(rootPath, 'utf8');
+  const rootPackage = JSON.parse(original);
+  const targetVersion = installerResult.manifest.version;
+  assert.equal(installerResult.manifest.tag, portableResult.manifest.tag);
+  assert.equal(installerResult.manifest.sourceSha, portableResult.manifest.sourceSha);
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'tus-update-installer-'));
+  const appData = path.join(temp, 'Roaming');
+  const localData = path.join(temp, 'Local');
+  await Promise.all([mkdir(appData), mkdir(localData)]);
+  try {
+    rootPackage.version = targetVersion;
+    await writeFile(rootPath, JSON.stringify(rootPackage, null, 2) + '\n');
+    const result = await execute(process.execPath, ['scripts/windows-installer-smoke.mjs'], {
+      cwd: process.cwd(),
+      timeout: 1200000,
+      maxBuffer: 8 * 1024 * 1024,
+      env: {
+        ...process.env,
+        APPDATA: appData,
+        LOCALAPPDATA: localData,
+        GITHUB_SHA: installerResult.manifest.sourceSha,
+        TUS_DATA_DIR: '',
+        TUS_SMOKE_INSTALLER: installerResult.downloadedPath,
+        TUS_SMOKE_PORTABLE_EXECUTABLE: portableResult.targetExecutable,
+      },
+    });
+    console.log(result.stdout);
+    if (result.stderr) console.error(result.stderr);
+  } finally {
+    await writeFile(rootPath, original);
+    await rm(temp, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  }
+}
+
+try {
+  const candidateAppPackage = JSON.parse(originalAppPackage);
+  candidateAppPackage.version = baselineVersion;
+  await writeFile(appPackagePath, JSON.stringify(candidateAppPackage, null, 2) + '\n');
+
+  if (process.platform === 'win32') {
+    const portable = await updateOnce('portable');
+    const installer = await updateOnce('installer');
+    await verifyWindowsInstaller(installer, portable);
+    console.log('Windows updater acceptance passed for both portable and NSIS packages from the same published release.');
+  } else {
+    await updateOnce('archive');
+  }
+} finally {
+  await closeActive('updater test cleanup').catch(() => {});
+  await writeFile(appPackagePath, originalAppPackage);
+  for (const workDir of workDirs) await rm(workDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  await rm(testRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+}
