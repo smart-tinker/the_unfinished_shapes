@@ -233,6 +233,7 @@ await withSmokeCleanup(async () => {
   } finally {
     await alice.page.keyboard.up('Space');
   }
+  await focus(alice);
   await alice.page.keyboard.down('d');
   try {
     await waitForState(snapshot => {
