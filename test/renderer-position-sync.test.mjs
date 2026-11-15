@@ -191,7 +191,6 @@ test('world revision follows player-only server updates with unchanged objects',
 
 test('a grounded landing is synced when the server position differs below the two-decimal key precision', async () => {
   const h = syncHarness();
-  h.load('function positionKey(', 'async function command(');
   Object.assign(h.context, {
     meId: 'alice',
     playerPosition: { x: 2, y: 1.85, z: 0 },
