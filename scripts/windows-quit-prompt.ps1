@@ -114,26 +114,6 @@ public static class TusWindowLookup {
 
 }
 '@
-$script:uiPhase = 'loading-ui-automation'
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-function Test-ExactPromptText([IntPtr]$dialog, [string[]]$expectedMessages) {
-  try {
-    $root = [System.Windows.Automation.AutomationElement]::FromHandle($dialog)
-    if ($null -eq $root) { return $false }
-    $elements = @($root) + @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition))
-    foreach ($element in $elements) {
-      $name = [regex]::Replace([string]$element.Current.Name, '\s+', ' ').Trim()
-      foreach ($message in $expectedMessages) {
-        $expected = [regex]::Replace([string]$message, '\s+', ' ').Trim()
-        if ([string]::Equals($name, $expected, [StringComparison]::Ordinal)) { return $true }
-      }
-    }
-  } catch {
-    return $false
-  }
-  return $false
-}
 Write-Output 'TUS_UIA: window-api-ready'
 switch ($Action) {
   { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {
@@ -158,21 +138,16 @@ switch ($Action) {
             Write-Output 'TUS_UIA: foreground-title-matched'
             $reportedTitleMatch = $true
           }
-          $script:uiPhase = 'checking-exact-dialog-text'
-          if (Test-ExactPromptText $foregroundHandle $expectedMessages) {
-            $script:uiPhase = 'checking-exact-dialog-buttons'
-            $quitButton = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, $buttonName)
-            $promptStatus = [TusWindowLookup]::LastPromptStatus
-            if ($quitButton -ne [IntPtr]::Zero) {
-              Write-Output 'TUS_UIA: exact-foreground-prompt-matched'
-              Write-Output 'TUS_UIA: dialog-accessible'
-              $script:uiPhase = 'clicking-native-button'
-              if (-not [TusWindowLookup]::ClickNativePromptButton($quitButton)) { Write-Output 'TUS_UIA: quit-button-click-failed'; exit 2 }
-              Write-Output "Clicked native '$buttonName' button."
-              exit 0
-            }
-          } else {
-            $promptStatus = 'expected-message-mismatch'
+          $script:uiPhase = 'checking-exact-dialog-buttons'
+          $quitButton = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, $buttonName)
+          $promptStatus = [TusWindowLookup]::LastPromptStatus
+          if ($quitButton -ne [IntPtr]::Zero) {
+            Write-Output 'TUS_UIA: exact-foreground-prompt-matched'
+            Write-Output 'TUS_UIA: dialog-accessible'
+            $script:uiPhase = 'clicking-native-button'
+            if (-not [TusWindowLookup]::ClickNativePromptButton($quitButton)) { Write-Output 'TUS_UIA: quit-button-click-failed'; exit 2 }
+            Write-Output "Clicked native '$buttonName' button."
+            exit 0
           }
         } else {
           $promptStatus = 'foreground-title-mismatch'
