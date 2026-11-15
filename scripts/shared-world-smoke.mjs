@@ -218,16 +218,19 @@ await withSmokeCleanup(async () => {
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('X 14.7'));
   await focus(alice);
   await alice.page.keyboard.down('a');
-  await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < 14.5, 'Alice to walk back from the solid side');
-  await alice.page.keyboard.up('a');
-  await alice.page.waitForFunction(() => {
-    const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
-    return Number(xPart?.slice(2)) < 14.5 && Number(yPart?.slice(2)) === 0;
-  }, undefined, { polling: 'raf', timeout: 10000 });
+  try {
+    await alice.page.waitForFunction(() => {
+      const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
+      const x = Number(xPart?.slice(2)), y = Number(yPart?.slice(2));
+      return Number.isFinite(x) && x >= 14.3 && x < 14.7 && y === 0;
+    }, undefined, { polling: 'raf', timeout: 10000 });
+  } finally {
+    await alice.page.keyboard.up('a');
+  }
   let lastBackoffPosition = '', stableBackoffSamples = 0;
   const jumpStart = await waitForState(snapshot => {
     const player = snapshot.players.find(player => player.id === 'alice');
-    if (!player || player.position.x >= 14.5 || player.position.y !== 0 || player.velocityY !== 0) return false;
+    if (!player || player.position.x < 14.3 || player.position.x >= 14.7 || player.position.y !== 0 || player.velocityY !== 0) return false;
     const current = JSON.stringify({ position: player.position, velocityY: player.velocityY });
     stableBackoffSamples = current === lastBackoffPosition ? stableBackoffSamples + 1 : 0;
     lastBackoffPosition = current;
