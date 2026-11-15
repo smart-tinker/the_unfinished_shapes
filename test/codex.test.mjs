@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { realpath } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { CodexBridge, WORLD_TOOLS } from '../src/codex.mjs';
 
+const clientVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 const cwd = await realpath(process.cwd());
 function fixture(handler = () => undefined, timeoutMs = 500) {
   const child = new EventEmitter();
@@ -30,7 +31,7 @@ function fixture(handler = () => undefined, timeoutMs = 500) {
     }
   });
   let spawnOptions;
-  const bridge = new CodexBridge({timeoutMs, spawnProcess: (executable,args,options) => {
+  const bridge = new CodexBridge({timeoutMs, clientVersion, spawnProcess: (executable,args,options) => {
     assert.equal(executable, process.execPath); assert.deepEqual(args,['app-server']);
     spawnOptions = options; return child;
   }});
@@ -43,6 +44,7 @@ test('connect initializes, starts workspace without invoking a model, and whitel
   const result = await f.start({newGameThread:true,env:{TUS_WORLD_URL:'http://localhost:1234',TUS_WORLD_TOKEN:'test',UNSAFE_SETTING:'x'}});
   assert.equal(result.threadId,'new-thread');
   assert.deepEqual(f.requests.map(x=>x.method),['initialize','initialized','thread/start']);
+  assert.equal(f.requests.find(x=>x.method==='initialize').params.clientInfo.version, clientVersion);
   assert.equal(f.options().shell,false); assert.equal(f.options().env.TUS_WORLD_TOKEN,'test');
   assert.equal(f.options().env.UNSAFE_SETTING,undefined);
   assert.equal(events.at(-1).type,'connected');
