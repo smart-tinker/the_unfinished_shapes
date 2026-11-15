@@ -126,7 +126,7 @@ function Test-ExactPromptText([IntPtr]$dialog, [string[]]$expectedMessages) {
         [System.Windows.Automation.AutomationElement]::NameProperty,
         [string]$message
       )
-      $element = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+      $element = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
       if ($null -eq $element) { continue }
       $name = [regex]::Replace([string]$element.Current.Name, '\s+', ' ').Trim()
       $expected = [regex]::Replace([string]$message, '\s+', ' ').Trim()
