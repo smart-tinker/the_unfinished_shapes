@@ -216,17 +216,10 @@ await withSmokeCleanup(async () => {
   assert.equal(blocked.position.y, 0, 'client coordinates cannot grant unsupported height');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, blocked.revision);
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('X 14.7'));
-  await focus(alice);
-  await alice.page.keyboard.down('a');
-  try {
-    await alice.page.waitForFunction(() => {
-      const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
-      const x = Number(xPart?.slice(2)), y = Number(yPart?.slice(2));
-      return Number.isFinite(x) && x >= 14.3 && x < 14.7 && y === 0;
-    }, undefined, { polling: 'raf', timeout: 10000 });
-  } finally {
-    await alice.page.keyboard.up('a');
-  }
+  const backoff = await worldCommand('alice', { type: 'move', position: { x: 14.4, y: 0, z: 0 } });
+  assert.equal(backoff.position.x, 14.4, 'the jump setup places Alice close to the platform without frame-rate-dependent keyboard overshoot');
+  assert.equal(backoff.position.y, 0);
+  await Promise.all(clients.map(client => client.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, backoff.revision)));
   let lastBackoffPosition = '', stableBackoffSamples = 0;
   const jumpStart = await waitForState(snapshot => {
     const player = snapshot.players.find(player => player.id === 'alice');
