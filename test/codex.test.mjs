@@ -356,3 +356,49 @@ test('a missing workspace reports guidance without exposing its local path', asy
   });
   assert.equal(f.options(), undefined);
 });
+test('reconnects the saved game conversation after app-server exit without starting a turn', async () => {
+  const requests = [], children = [];
+  const bridge = new CodexBridge({ timeoutMs: 500, clientVersion, spawnProcess: (executable, args) => {
+    assert.equal(executable, process.execPath);
+    assert.deepEqual(args, ['app-server']);
+    const child = new EventEmitter();
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.kill = () => { child.killed = true; };
+    child.stdin.on('data', chunk => {
+      for (const line of chunk.toString().trim().split('\n')) {
+        const message = JSON.parse(line); requests.push(message);
+        if (!message.method || !('id' in message)) continue;
+        const result = ({
+          initialize: {},
+          'thread/read': { thread: { id: message.params.threadId, cwd, status: { type: 'idle' } } },
+          'thread/resume': { thread: { id: message.params.threadId, cwd, status: { type: 'idle' } } },
+          'thread/items/list': { data: [], nextCursor: null },
+        })[message.method];
+        queueMicrotask(() => child.stdout.write(JSON.stringify({ id: message.id, result }) + '\n'));
+      }
+    });
+    children.push(child);
+    return child;
+  }});
+  const events = [];
+  bridge.on('event', event => events.push(event));
+  const connection = { codexPath: process.execPath, workspacePath: cwd, threadId: 'saved' };
+
+  assert.equal((await bridge.start(connection)).resumed, true);
+  const firstChild = children[0];
+  firstChild.emit('exit', 1);
+  assert.equal(firstChild.killed, true);
+  assert.equal(bridge.process, null);
+
+  assert.equal((await bridge.start(connection)).threadId, 'saved');
+  assert.equal(children.length, 2);
+  assert.equal(bridge.process, children[1]);
+  assert.equal(events.filter(event => event.type === 'disconnected').length, 1);
+  assert.deepEqual(requests.filter(message => message.method === 'thread/resume').map(message => message.params.threadId), ['saved', 'saved']);
+  assert.equal(requests.some(message => message.method === 'turn/start'), false);
+
+  firstChild.emit('error', new Error('late exit from previous app-server'));
+  assert.equal(bridge.process, children[1], 'a stale child cannot disconnect the retry');
+  assert.equal(events.filter(event => event.type === 'disconnected').length, 1);
+  bridge.stop();
+});
