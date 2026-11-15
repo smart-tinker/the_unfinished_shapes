@@ -111,6 +111,11 @@ await withSmokeCleanup(async () => {
   });
   assert.deepEqual(testWindowSize, [1000, 700], 'the minimum supported window size is applied');
   await page.waitForFunction(() => innerWidth <= 1000 && innerHeight <= 700);
+  // shortcut: CDP emulates display scale, so verify OS DPI on real high-DPI hardware separately.
+  const dpiSession = await page.context().newCDPSession(page);
+  await dpiSession.send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 700, deviceScaleFactor: 1.5, mobile: false });
+  await page.waitForFunction(() => window.devicePixelRatio === 1.5);
+  assert.equal(await page.evaluate(() => window.devicePixelRatio), 1.5, '150% display scale is applied');
   await page.locator('#settings-open').click();
   const resultsStyle = await page.locator('#codex-results').evaluate(element => {
     const style = getComputedStyle(element);
@@ -136,6 +141,8 @@ await withSmokeCleanup(async () => {
   await page.locator('#settings-open').click();
   assert.equal(await page.locator('#server-url').inputValue(), originalServerUrl, 'Cancel discards unsaved settings');
   await page.locator('#settings-close').click();
+  await dpiSession.send('Emulation.clearDeviceMetricsOverride');
+  await dpiSession.detach();
   await instance.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size[0], size[1]), originalWindowSize);
   await page.waitForFunction(size => innerWidth === size.width && innerHeight === size.height, originalViewport);
   graphics.phase('manual UI create, select, edit and remove');
