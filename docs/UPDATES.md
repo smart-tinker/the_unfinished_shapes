@@ -14,6 +14,6 @@ Portable/archive packages are extracted to a user-selected directory with path a
 
 ## Packaged CI acceptance
 
-`scripts/updater-release-smoke.mjs` runs in the existing standard Linux, Windows, and macOS validation jobs. In the disposable runner copy only, it changes the candidate package's version metadata to `0.1.0-rc.1` so the current published prerelease can be exercised without publishing a test release. The product source and release branch version are not changed by this test.
+`scripts/updater-release-smoke.mjs` runs in the existing standard Linux, Windows, and macOS validation jobs. A runner-only preload makes the disposable candidate process report `0.1.0-rc.1` so the current published prerelease can be exercised without publishing a test release. It does not rewrite the packaged archive, product source, or release branch version.
 
 The smoke test drives the packaged UI, selects and persists the prerelease channel, verifies the exact platform asset against its public release manifest, downloads it through the application, and checks the explicit cancel/launch handoff. Linux and macOS launch the downloaded archive. Windows exercises both portable and installer selection; the downloaded installer and portable executable are then passed to the existing isolated installer/reinstall/data-preservation smoke test. No Codex profile, model turn, Actions artifact, cache, or release mutation is used.
