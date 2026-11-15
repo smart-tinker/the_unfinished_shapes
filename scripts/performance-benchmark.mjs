@@ -59,7 +59,10 @@ async function measureFrames(page,durationMs) {
     };
     requestAnimationFrame(frame);
   }),durationMs);
-  assert.ok(values.length>0,'the packaged renderer produced no animation-frame samples');
+  if (!values.length) {
+    const state = await page.evaluate(() => ({ hidden: document.hidden, visibilityState: document.visibilityState, focused: document.hasFocus(), readyState: document.readyState })).catch(error => ({ error: error.message }));
+    assert.fail('the packaged renderer produced no animation-frame samples; page=' + JSON.stringify(state));
+  }
   assert.ok(values.every(value=>Number.isFinite(value)&&value>0),'renderer frame samples must be finite and positive');
   return values;
 }
@@ -125,9 +128,16 @@ async function runScenario(root,scenario) {
     ctx.url='http://127.0.0.1:'+address.port;
     for(const id of scenario.clients===2?['alice','bob']:['alice'])await launch(ctx,id);
     const alice=clients.find(client=>client.id==='alice');
-    await alice.app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].focus());
-    await alice.page.evaluate(()=>document.activeElement?.blur());
-    await alice.page.waitForFunction(()=>document.hasFocus(),null,{timeout:5000});
+    const visible = await alice.app.evaluate(({BrowserWindow}) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+      return window.isVisible() && !window.isMinimized();
+    });
+    assert.equal(visible, true, 'the measured packaged window must be visible');
+    await alice.page.evaluate(() => document.activeElement?.blur());
+    await alice.page.waitForFunction(() => document.hasFocus() && document.visibilityState === 'visible', null, {timeout:5000});
     await sleep(2000);
     const gl=await alice.page.evaluate(()=>{
       const canvas=document.querySelector('#viewport canvas'),context=canvas?.getContext('webgl2');
