@@ -178,6 +178,17 @@ test('reconnect requires a verified idle Codex conversation even when settings a
   assert.equal(h.run('settings.threadId'), 'game-thread');
 });
 
+test('Codex-reported errors keep a safe recovery action visible', () => {
+  const h = rendererHarness();
+  const recovery = h.element('settings-codex-recovery');
+  h.context.connected = true;
+  h.run("setAgentStatus('Codex reported an error')");
+  assert.equal(h.element('settings-codex-status').textContent, 'Codex reported an error');
+  assert.equal(recovery.hidden, false);
+  assert.match(recovery.textContent, /Agent Controls/i);
+  assert.match(recovery.textContent, /saved conversation stays intact/i);
+});
+
 test('Codex recovery guidance follows the live connection state', () => {
   const h = rendererHarness();
   const recovery = h.element('settings-codex-recovery');
