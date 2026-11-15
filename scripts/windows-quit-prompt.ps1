@@ -78,7 +78,7 @@ public static class TusWindowLookup {
       if (control.ClassName != "Button") {
         var normalizedText = NormalizePromptText(control.Text);
         foreach (var message in expectedMessages) {
-          if (normalizedText.IndexOf(message, StringComparison.Ordinal) >= 0) hasExpectedMessage = true;
+          if (String.Equals(normalizedText, NormalizePromptText(message), StringComparison.Ordinal)) hasExpectedMessage = true;
         }
       } else if (control.ClassName == "Button") {
         buttons.Add(control);
@@ -100,8 +100,8 @@ public static class TusWindowLookup {
       return IntPtr.Zero;
     }
     if (!hasExpectedMessage) {
-      LastPromptStatus = "title-buttons-text-unavailable";
-      return requested;
+      LastPromptStatus = "expected-message-mismatch";
+      return IntPtr.Zero;
     }
     LastPromptStatus = "matched";
     return requested;
