@@ -229,7 +229,11 @@ await withSmokeCleanup(async () => {
   let lastBackoffPosition = '', stableBackoffSamples = 0;
   const jumpStart = await waitForState(snapshot => {
     const player = snapshot.players.find(player => player.id === 'alice');
-    if (!player || player.position.x !== 14.4 || player.position.y !== 0 || player.velocityY !== 0) return false;
+    if (!player || player.position.x !== 14.4 || player.position.y !== 0 || player.velocityY !== 0) {
+      stableBackoffSamples = 0;
+      lastBackoffPosition = '';
+      return false;
+    }
     const current = JSON.stringify({ position: player.position, velocityY: player.velocityY });
     stableBackoffSamples = current === lastBackoffPosition ? stableBackoffSamples + 1 : 0;
     lastBackoffPosition = current;
