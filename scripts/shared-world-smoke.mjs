@@ -237,6 +237,8 @@ await withSmokeCleanup(async () => {
   await focus(alice);
   await alice.page.keyboard.up('d');
   await alice.page.evaluate(() => {
+    window.__tusMovementDebugEnabled = true;
+    window.__tusMovementDebug = {};
     window.__tusJumpKeyEvents = [];
     const observe = (phase, type) => event => {
       if ((event.code === 'Space' || event.key?.toLowerCase() === 'd') && window.__tusJumpKeyEvents.length < 20) {
@@ -259,6 +261,8 @@ await withSmokeCleanup(async () => {
   } catch (error) {
     const client = await alice.page.evaluate(() => ({
       focused: document.hasFocus(),
+      visibilityState: document.visibilityState,
+      movementDebug: window.__tusMovementDebug || null,
       activeElement: document.activeElement?.tagName || '',
       coordinates: document.querySelector('#coordinates')?.textContent || '',
       connected: document.querySelector('#connection')?.textContent || '',
@@ -267,7 +271,7 @@ await withSmokeCleanup(async () => {
     }));
     const server = await state().catch(failure => ({ error: failure.message }));
     const serverPlayer = server.error ? server : server.players.find(player => player.id === 'alice');
-    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer));
+    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer) + '; movementDebug=' + JSON.stringify(client.movementDebug));
   } finally {
     await alice.page.keyboard.up('Space');
     await alice.page.keyboard.up('d');
