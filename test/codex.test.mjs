@@ -365,7 +365,7 @@ test('reconnects the saved game conversation after app-server exit without start
     child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
     child.kill = () => { child.killed = true; };
     child.stdin.on('data', chunk => {
-      for (const line of chunk.toString().trim().split('\\n')) {
+      for (const line of chunk.toString().trim().split('\n')) {
         const message = JSON.parse(line); requests.push(message);
         if (!message.method || !('id' in message)) continue;
         const result = ({
@@ -374,7 +374,7 @@ test('reconnects the saved game conversation after app-server exit without start
           'thread/resume': { thread: { id: message.params.threadId, cwd, status: { type: 'idle' } } },
           'thread/items/list': { data: [], nextCursor: null },
         })[message.method];
-        queueMicrotask(() => child.stdout.write(JSON.stringify({ id: message.id, result }) + '\\n'));
+        queueMicrotask(() => child.stdout.write(JSON.stringify({ id: message.id, result }) + '\n'));
       }
     });
     children.push(child);
