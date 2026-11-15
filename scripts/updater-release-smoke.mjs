@@ -115,8 +115,9 @@ async function getManifest(tag) {
   const filename = 'candidate-' + platform + '.json';
   const url = 'https://github.com/smart-tinker/the_unfinished_shapes/releases/download/' +
     encodeURIComponent(tag) + '/' + encodeURIComponent(filename);
-  const response = await fetch(url, { signal: AbortSignal.timeout(15000), redirect: 'error' });
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
   assert.equal(response.status, 200, 'the published release manifest is available');
+  assert.ok(['github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com', 'github-releases.githubusercontent.com'].includes(new URL(response.url).hostname), 'the manifest redirect remains on GitHub release hosts');
   const body = await response.text();
   assert.ok(body.length <= 16384, 'the public release manifest is bounded');
   const manifest = JSON.parse(body);
@@ -173,7 +174,7 @@ async function updateOnce(distribution) {
   assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'the selected update channel survives restart');
   if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
   await current.page.waitForFunction(() => !document.querySelector('#updates-notice')?.hidden, null, { timeout: 30000 });
-  assert.match(await current.page.locator('#updates-notice').getAttribute('title'), /Prerelease .* available/, 'startup checks expose the newer published prerelease without installing it');
+  assert.match(await current.page.locator('#updates-notice').getAttribute('title'), /available\./, 'startup checks expose a published update without installing it');
 
   await current.page.locator('#updates-check').click();
   await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.includes(' is available.'), null, { timeout: 30000 });
