@@ -240,6 +240,15 @@ await withSmokeCleanup(async () => {
       const player = snapshot.players.find(item => item.id === 'alice');
       return player?.position.x >= 15 && player.position.y > 0;
     }, 'Alice to move onto the platform while airborne');
+  } catch (error) {
+    const client = await alice.page.evaluate(() => ({
+      focused: document.hasFocus(),
+      activeElement: document.activeElement?.tagName || '',
+      coordinates: document.querySelector('#coordinates')?.textContent || '',
+      connected: document.querySelector('#connection')?.textContent || '',
+      dialogOpen: Boolean(document.querySelector('dialog[open]')),
+    }));
+    throw new Error(error.message + '; client=' + JSON.stringify(client));
   } finally {
     await alice.page.keyboard.up('d');
   }
