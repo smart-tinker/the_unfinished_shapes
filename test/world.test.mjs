@@ -161,6 +161,21 @@ test('jumping can land on an enabled top surface but not stand on a disabled one
  assert.equal(player(unsupported).position.y,0);
 });
 
+test('a jump from a blocked face can clear and land on a supported top',()=>{
+ let world=applyCommand(emptyWorld(),builder,{type:'build',objectType:'block',position:{x:16,y:1,z:0}}).state;
+ for(let i=0;i<12;i++) world=applyCommand(world,builder,{type:'move',position:{x:14.68,y:0,z:0}},.25).state;
+ assert.ok(Math.abs(player(world).position.x-14.68)<1e-6,JSON.stringify(player(world)));
+
+ world=applyCommand(world,builder,{type:'move',position:{x:15.93,y:0,z:0},jump:true},.25).state;
+ assert.equal(player(world).position.x,14.68,'the solid side blocks horizontal movement until the jump clears it');
+ assert.ok(player(world).position.y>0);
+ world=applyCommand(world,builder,{type:'move',position:{x:17.18,y:0,z:0}},.25).state;
+ assert.ok(player(world).position.x>15,JSON.stringify(player(world)));
+ assert.ok(player(world).position.y>2,JSON.stringify(player(world)));
+ world=applyCommand(world,builder,{type:'move',position:{x:17.18,y:0,z:0}},.25).state;
+ assert.equal(player(world).position.y,2,JSON.stringify(player(world)));
+});
+
 test('jump cannot restart in the air and falling from an edge reaches lower ground',()=>{
  let airborne=move(emptyWorld(),{x:0,y:0,z:0},true);
  const firstHeight=player(airborne).position.y;

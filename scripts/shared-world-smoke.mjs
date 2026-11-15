@@ -222,19 +222,26 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('a');
   await alice.page.waitForTimeout(300);
   await focus(alice);
-  await alice.page.keyboard.down('d');
-  await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 14.68, 'Alice to reach the solid face');
-  await alice.page.keyboard.down('Space');
-  await waitForState(snapshot => {
-    const player = snapshot.players.find(item => item.id === 'alice');
-    return player?.position.y > 0 && player.velocityY > 0;
-  }, 'the server to accept the jump while Alice is ascending');
-  await alice.page.keyboard.up('Space');
-  await waitForState(snapshot => {
-    const player = snapshot.players.find(item => item.id === 'alice');
-    return player?.position.x >= 15 && player.position.y > 0;
-  }, 'Alice to reach the platform while airborne');
   await alice.page.keyboard.up('d');
+  await alice.page.keyboard.down('Space');
+  try {
+    await waitForState(snapshot => {
+      const player = snapshot.players.find(item => item.id === 'alice');
+      return player?.position.y > 0 && player.velocityY > 0;
+    }, 'the server to accept the jump while Alice is ascending');
+    await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y > 2.1, 'Alice to clear the platform top while airborne');
+  } finally {
+    await alice.page.keyboard.up('Space');
+  }
+  await alice.page.keyboard.down('d');
+  try {
+    await waitForState(snapshot => {
+      const player = snapshot.players.find(item => item.id === 'alice');
+      return player?.position.x >= 15 && player.position.y > 0;
+    }, 'Alice to move onto the platform while airborne');
+  } finally {
+    await alice.page.keyboard.up('d');
+  }
   await alice.page.waitForFunction(() => {
     const yPart = document.querySelector('#coordinates')?.textContent.split(' · ')[1];
     return Number(yPart?.slice(2)) > 0;
