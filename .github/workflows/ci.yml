@@ -24,7 +24,7 @@ jobs:
   linux-client:
     needs: test
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,6 +48,10 @@ jobs:
           TUS_BENCHMARK_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes
         run: xvfb-run --auto-servernum node scripts/performance-benchmark.mjs
+      - name: Published update download, provenance, extraction and relaunch
+        env:
+          TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes
+        run: xvfb-run --auto-servernum node scripts/updater-release-smoke.mjs
   model:
     needs: test
     uses: ./.github/workflows/local-cpu-model.yml
@@ -58,7 +62,7 @@ jobs:
     if: github.event.repository.private == false
     # Standard public runner: Apple Silicon, not a paid -large/-xlarge label.
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -81,11 +85,15 @@ jobs:
         run: |
           test "$(lipo -archs "$TUS_SMOKE_EXECUTABLE")" = arm64
           node scripts/electron-smoke.mjs
+      - name: Published update download, provenance, extraction and relaunch
+        env:
+          TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-darwin-arm64/TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes
+        run: node scripts/updater-release-smoke.mjs
   windows-installer:
     needs: test
     if: github.event.repository.private == false
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -113,3 +121,7 @@ jobs:
         env:
           TUS_SMOKE_PORTABLE_EXECUTABLE: dist/TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe
         run: node scripts/windows-installer-smoke.mjs
+      - name: Published update download and exact installer/portable acceptance
+        env:
+          TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe
+        run: node scripts/updater-release-smoke.mjs
