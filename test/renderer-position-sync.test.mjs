@@ -187,3 +187,28 @@ test('world revision follows player-only server updates with unchanged objects',
   h.run('renderWorld(moved)');
   assert.equal(h.run('worldRevision'), 2);
 });
+
+
+test('a grounded landing is synced when the server position differs below the two-decimal key precision', async () => {
+  const h = syncHarness();
+  Object.assign(h.context, {
+    meId: 'alice',
+    playerPosition: { x: 2, y: 1.85, z: 0 },
+    playerVelocityY: -3.78,
+    latestStateRevision: 10,
+  });
+  const responses = [
+    { revision: 11, position: { x: 2, y: 2.0002596, z: 0 }, velocityY: -3.78 },
+    { revision: 12, position: { x: 2, y: 2, z: 0 }, velocityY: 0 },
+  ];
+  h.context.request = async (...args) => { h.context.sent.push(args); return responses.shift(); };
+
+  await h.run('syncPosition()');
+  h.context.playerPosition = { x: 2, y: 2, z: 0 };
+  h.context.playerVelocityY = 0;
+  await h.run('syncPosition()');
+
+  const sent = JSON.parse(h.run('JSON.stringify(sent)'));
+  assert.equal(sent.length, 2, 'the grounded correction must reach the server');
+  assert.equal(sent[1][2].position.y, 2);
+});
