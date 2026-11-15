@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { realpath } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { CodexBridge } from '../src/codex.mjs';
 
+const clientVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 const cwd = await realpath(process.cwd());
 function fixture(handler = () => undefined) {
   const child = new EventEmitter();
@@ -34,7 +35,7 @@ function fixture(handler = () => undefined) {
       queueMicrotask(() => reply({ id: message.id, result }));
     }
   });
-  const bridge = new CodexBridge({ timeoutMs: 800, spawnProcess: (executable, args) => {
+  const bridge = new CodexBridge({ timeoutMs: 800, clientVersion, spawnProcess: (executable, args) => {
     assert.equal(executable, process.execPath); assert.deepEqual(args, ['app-server']); return child;
   }});
   return { bridge, requests, child, reply, start: extra => bridge.start({ codexPath: process.execPath, workspacePath: cwd, ...extra }) };
