@@ -233,6 +233,7 @@ await withSmokeCleanup(async () => {
     lastBackoffPosition = current;
     return stableBackoffSamples >= 5;
   }, 'Alice server position to settle at the grounded jump start');
+  assert.ok(jumpStart.players.find(player => player.id === 'alice').position.x >= 14.3, 'the jump starts close to the walkable top, not a full server movement tick away');
   await alice.page.waitForFunction(expected => {
     const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
     return Number(xPart?.slice(2)) === Number(expected.x.toFixed(1)) && Number(yPart?.slice(2)) === 0;
