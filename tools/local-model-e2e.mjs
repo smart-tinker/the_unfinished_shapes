@@ -24,6 +24,7 @@ assert.ok(llamaPath && path.isAbsolute(llamaPath),'Set TUS_TEST_LLAMA to the off
 assert.ok(modelPath && path.isAbsolute(modelPath),'Set TUS_TEST_GGUF to the local GGUF file absolute path.');
 assert.ok(base.protocol==='http:' && ['127.0.0.1','[::1]'].includes(base.hostname) && !base.username && !base.password,'Only literal loopback model endpoints are allowed.');
 const timeoutMs=Number(process.env.TUS_TEST_TIMEOUT_MS || 300000);
+const clientVersion=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')).version;
 assert.ok(timeoutMs>=1000 && timeoutMs<=600000,'Timeout must be 1–600 seconds.');
 const hash=createHash('sha256');
 for await(const chunk of createReadStream(modelPath))hash.update(chunk);
@@ -98,7 +99,7 @@ try {
  const address=await server.start();
  const connection={url:`http://127.0.0.1:${address.port}`,token,connectionId:randomBytes(16).toString('hex')};
  gameToolSession=createGameToolSession(connection);
- bridge=new CodexBridge({timeoutMs:30000,spawnProcess:(exe,args,options)=>(codexProcess=spawn(exe,args,{...options,env:{PATH:process.env.PATH,HOME:dir,USERPROFILE:dir,TMPDIR:dir,TEMP:dir,TMP:dir,CODEX_HOME:home,NO_PROXY:'127.0.0.1,localhost',no_proxy:'127.0.0.1,localhost'}}))});
+ bridge=new CodexBridge({clientVersion,timeoutMs:30000,spawnProcess:(exe,args,options)=>(codexProcess=spawn(exe,args,{...options,env:{PATH:process.env.PATH,HOME:dir,USERPROFILE:dir,TMPDIR:dir,TEMP:dir,TMP:dir,CODEX_HOME:home,NO_PROXY:'127.0.0.1,localhost',no_proxy:'127.0.0.1,localhost'}}))});
  let resolveDone,rejectDone;
  const done=new Promise((resolve,reject)=>{resolveDone=resolve;rejectDone=reject;});
  // A handler is attached before any operation can reject the completion promise.

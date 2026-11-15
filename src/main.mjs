@@ -186,7 +186,7 @@ app.whenReady().then(async()=>{
     gameToolSession?.clear();
     if(bridge)await bridge.stop();
     connectedWorld={url:serverUrl(s.serverUrl),token:String(s.token||''),connectionId:randomBytes(16).toString('hex')};
-    bridge=new CodexBridge();
+    bridge=new CodexBridge({clientVersion:app.getVersion()});
     const currentBridge=bridge,world={...connectedWorld},session=createGameToolSession(world);
     gameToolSession=session;
     bridge.on('event',async event=>{
