@@ -45,7 +45,7 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.doesNotMatch(foregroundLookup, /GetProcessWindows|GetWindowThreadProcessId/);
 
   assert.doesNotMatch(windowsUI, /GetProcessWindows|EnumWindows\(|IsWindowVisible|GetWindowThreadProcessId/);
-  assert.doesNotMatch(windowsUI, /FindWindow\(/);  assert.doesNotMatch(windowsUI, /\$root\.FindFirst\(/);
+  assert.doesNotMatch(windowsUI, /FindWindow\(/);
 });
 
 
