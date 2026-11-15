@@ -237,31 +237,6 @@ await withSmokeCleanup(async () => {
     const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
     return Number(xPart?.slice(2)) === Number(expected.x.toFixed(1)) && Number(yPart?.slice(2)) === 0;
   }, jumpStart.players.find(player => player.id === 'alice').position, { polling: 'raf', timeout: 10000 });
-  const jumpMoveTrace = [];
-  const jumpMoveByRequest = new WeakMap();
-  let captureJumpMoves = false;
-  alice.page.on('request', request => {
-    if (!captureJumpMoves || request.method() !== 'POST' || !request.url().endsWith('/command')) return;
-    let command;
-    try { command = JSON.parse(request.postData() || '{}'); } catch { return; }
-    if (command.type !== 'move') return;
-    const entry = { sent: { position: command.position, jump: command.jump === true }, status: null, result: null };
-    jumpMoveTrace.push(entry);
-    if (jumpMoveTrace.length > 24) jumpMoveTrace.shift();
-    jumpMoveByRequest.set(request, entry);
-  });
-  alice.page.on('response', response => {
-    const entry = jumpMoveByRequest.get(response.request());
-    if (!entry) return;
-    entry.status = response.status();
-    response.json().then(body => {
-      entry.result = { position: body.position, velocityY: body.velocityY, error: body.error };
-    }).catch(() => { entry.result = { unreadable: true }; });
-  });
-  alice.page.on('requestfailed', request => {
-    const entry = jumpMoveByRequest.get(request);
-    if (entry) entry.result = { failure: request.failure()?.errorText || 'request failed' };
-  });
   await focus(alice);
   await alice.page.keyboard.up('d');
   await alice.page.evaluate(() => {
@@ -272,7 +247,6 @@ await withSmokeCleanup(async () => {
       }
     }, true);
   });
-  captureJumpMoves = true;
   await alice.page.keyboard.down('d');
   await alice.page.keyboard.down('Space');
   try {
@@ -292,8 +266,7 @@ await withSmokeCleanup(async () => {
     }));
     const server = await state().catch(failure => ({ error: failure.message }));
     const serverPlayer = server.error ? server : server.players.find(player => player.id === 'alice');
-    captureJumpMoves = false;
-    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer) + '; moveTrace=' + JSON.stringify(jumpMoveTrace));
+    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer));
   } finally {
     await alice.page.keyboard.up('Space');
     await alice.page.keyboard.up('d');
