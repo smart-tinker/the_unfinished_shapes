@@ -98,6 +98,7 @@ test('native prompt acceptance uses bounded exact title, text and button checks'
   assert.match(windowsUI, /PropertyCondition/);
   assert.match(windowsUI, /AutomationElement\]::NameProperty/);
   assert.match(windowsUI, /FindFirst\(/);
+  assert.match(windowsUI, /FindFirst\(\[System\.Windows\.Automation\.TreeScope\]::Children, \$condition\)/);
   assert.doesNotMatch(windowsUI, /\.FindAll\(/);
   assert.match(windowsUI, /SMTO_ABORTIFHUNG\s*\|\s*SMTO_BLOCK,\s*1000/);
   assert.match(windowsUI, /GetWindowTitle\(dialog\) != "Codex activity may continue"/);
