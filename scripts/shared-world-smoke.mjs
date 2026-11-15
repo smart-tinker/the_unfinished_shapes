@@ -239,6 +239,19 @@ await withSmokeCleanup(async () => {
   }, jumpStart.players.find(player => player.id === 'alice').position, { polling: 'raf', timeout: 10000 });
   await focus(alice);
   await alice.page.keyboard.up('d');
+  const jumpMovementRequests = [], jumpMovementResponses = [];
+  const captureJumpMovement = response => {
+    const request = response.request();
+    if (request.url() !== url + '/command' || request.method() !== 'POST') return;
+    let command;
+    try { command = JSON.parse(request.postData() || '{}'); } catch { return; }
+    if (command.type !== 'move') return;
+    const entry = { command: { position: command.position, jump: command.jump === true } };
+    jumpMovementRequests.push(entry);
+    const pending = response.json().then(result => { entry.result = result; }, error => { entry.responseError = error.message; });
+    jumpMovementResponses.push(pending);
+  };
+  alice.page.on('response', captureJumpMovement);
   await alice.page.evaluate(() => {
     window.__tusJumpKeyEvents = [];
     for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
@@ -264,10 +277,12 @@ await withSmokeCleanup(async () => {
       dialogOpen: Boolean(document.querySelector('dialog[open]')),
       jumpKeyEvents: window.__tusJumpKeyEvents || [],
     }));
+    await Promise.allSettled(jumpMovementResponses);
     const server = await state().catch(failure => ({ error: failure.message }));
     const serverPlayer = server.error ? server : server.players.find(player => player.id === 'alice');
-    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer));
+    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer) + '; moveRequests=' + JSON.stringify(jumpMovementRequests));
   } finally {
+    alice.page.off('response', captureJumpMovement);
     await alice.page.keyboard.up('Space');
     await alice.page.keyboard.up('d');
   }
