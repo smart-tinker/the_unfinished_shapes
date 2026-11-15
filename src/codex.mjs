@@ -60,10 +60,11 @@ export function toolResult(success, value) {
 
 /** Local Codex transport only: no model loop, credentials, or session-file access. */
 export class CodexBridge extends EventEmitter {
-  constructor({ spawnProcess = spawn, timeoutMs = 30_000 } = {}) {
+  constructor({ spawnProcess = spawn, timeoutMs = 30_000, clientVersion } = {}) {
     super();
     this.spawnProcess = spawnProcess;
     this.timeoutMs = timeoutMs;
+    this.clientVersion = clientVersion;
     this.pending = new Map();
     this.approvals = new Set();
     this.sequence = 0;
@@ -81,6 +82,7 @@ export class CodexBridge extends EventEmitter {
     this.starting = true;
     const generation = this.generation;
     try {
+      if (typeof this.clientVersion !== 'string' || !this.clientVersion) throw new Error('TUS client version is unavailable.');
       if (typeof codexPath !== 'string' || !isAbsolute(codexPath)) throw new Error('Choose an absolute path to the Codex executable.');
       if (typeof workspacePath !== 'string' || !isAbsolute(workspacePath)) throw new Error('Choose an absolute workspace path.');
       let executableInfo;
@@ -125,7 +127,7 @@ export class CodexBridge extends EventEmitter {
       child.stdin.on('error', () => { if (this.process === child) this.fail(new Error('Codex input stream closed.')); });
       child.on('error', () => { if (this.process === child) this.fail(new Error('Could not start the Codex executable.')); });
       child.on('exit', (code) => { if (this.process === child) this.fail(new Error(`Codex exited (${code ?? 'signal'}).`)); });
-      const initialized = await this.request('initialize', { clientInfo: { name: 'the_unfinished_shapes', title: 'The Unfinished Shapes', version: '0.1.0-rc.3' }, capabilities: { experimentalApi: true } });
+      const initialized = await this.request('initialize', { clientInfo: { name: 'the_unfinished_shapes', title: 'The Unfinished Shapes', version: this.clientVersion }, capabilities: { experimentalApi: true } });
       this.serverInfo = initialized.serverInfo ?? null;
       this.write({ method: 'initialized', params: {} });
       let selected;
