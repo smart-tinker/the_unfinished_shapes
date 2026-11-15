@@ -83,10 +83,19 @@ export class CodexBridge extends EventEmitter {
     try {
       if (typeof codexPath !== 'string' || !isAbsolute(codexPath)) throw new Error('Choose an absolute path to the Codex executable.');
       if (typeof workspacePath !== 'string' || !isAbsolute(workspacePath)) throw new Error('Choose an absolute workspace path.');
-      if (!(await stat(codexPath)).isFile()) throw new Error('Codex path must be a file.');
-      await access(codexPath, process.platform === 'win32' ? constants.F_OK : constants.X_OK);
-      this.workspacePath = await realpath(workspacePath);
-      if (!(await stat(this.workspacePath)).isDirectory()) throw new Error('Workspace must be a directory.');
+      let executableInfo;
+      try { executableInfo = await stat(codexPath); }
+      catch { throw new Error('Codex executable could not be accessed. Check the selected path and permissions.'); }
+      if (!executableInfo.isFile()) throw new Error('Codex path must be a file.');
+      try { await access(codexPath, process.platform === 'win32' ? constants.F_OK : constants.X_OK); }
+      catch { throw new Error('Codex executable could not be accessed. Check the selected path and permissions.'); }
+      let resolvedWorkspace, workspaceInfo;
+      try {
+        resolvedWorkspace = await realpath(workspacePath);
+        workspaceInfo = await stat(resolvedWorkspace);
+      } catch { throw new Error('Workspace folder could not be accessed. Check the selected path and permissions.'); }
+      if (!workspaceInfo.isDirectory()) throw new Error('Workspace must be a directory.');
+      this.workspacePath = resolvedWorkspace;
       if (threadId !== undefined && (typeof threadId !== 'string' || !threadId.trim())) throw new Error('Invalid thread ID.');
       if (generation !== this.generation) throw new Error('Codex connection cancelled.');
       const child = this.spawnProcess(codexPath, ['app-server'], {

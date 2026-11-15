@@ -9,7 +9,7 @@ import { createGameToolSession, captureSceneSnapshot } from './game-tools.mjs';
 import { createWorldServer } from './server.mjs';
 import { DATA_DIRECTORY, loadSettings, saveSettings, agentModelForThread } from './settings.mjs';
 import { findCodex } from './codex-discovery.mjs';
-import { createQuitConfirmation, installQuitGuard, isSmokeAutoConfirmQuit } from './quit-guard.mjs';
+import { createQuitConfirmation, createQuitStateReader, installQuitGuard, isSmokeAutoConfirmQuit } from './quit-guard.mjs';
 import { listPublishedReleases, releaseRelation, selectReleaseAsset, startupUpdateOptions } from './update-release.mjs';
 const userData = process.env.TUS_DATA_DIR ? path.resolve(process.env.TUS_DATA_DIR) : path.join(app.getPath('appData'),DATA_DIRECTORY);
 mkdirSync(userData,{recursive:true});
@@ -36,14 +36,7 @@ const confirmQuit = createQuitConfirmation({
 const attachQuitGuard = installQuitGuard({
   app,
   getWindow: getMainWindow,
-  readState: async () => {
-    if (bridge) {
-      const state = await bridge.readControlState();
-      return { ...state, pendingApprovals: bridge.approvals.size };
-    }
-    const saved = await settings();
-    return saved.threadId ? null : { connected: false, threadId: null };
-  },
+  readState: createQuitStateReader(() => bridge, settings),
   confirm: confirmQuit,
   onQuitApproved: () => { if (pendingRelaunch) app.relaunch({ execPath: pendingRelaunch, args: [] }); pendingRelaunch = null; },
   onQuitCancelled: () => { pendingRelaunch = null; win?.webContents.send('updates:progress', { state: 'launch-cancelled' }); },
