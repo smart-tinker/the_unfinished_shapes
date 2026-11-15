@@ -229,13 +229,11 @@ await withSmokeCleanup(async () => {
       const player = snapshot.players.find(item => item.id === 'alice');
       return player?.position.y > 0 && player.velocityY > 0;
     }, 'the server to accept the jump while Alice is ascending');
-    await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y > 2.1, 'Alice to clear the platform top while airborne');
-  } finally {
-    await alice.page.keyboard.up('Space');
-  }
-  await focus(alice);
-  await alice.page.keyboard.down('d');
-  try {
+    await alice.page.keyboard.down('d');
+    await alice.page.waitForFunction(() => {
+      const parts = document.querySelector('#coordinates')?.textContent.split(' · ');
+      return Number(parts?.[0]?.slice(2)) > 14.7 && Number(parts?.[1]?.slice(2)) > 0;
+    }, undefined, { polling: 'raf', timeout: 5000 });
     await waitForState(snapshot => {
       const player = snapshot.players.find(item => item.id === 'alice');
       return player?.position.x >= 15 && player.position.y > 0;
@@ -250,6 +248,7 @@ await withSmokeCleanup(async () => {
     }));
     throw new Error(error.message + '; client=' + JSON.stringify(client));
   } finally {
+    await alice.page.keyboard.up('Space');
     await alice.page.keyboard.up('d');
   }
   await alice.page.waitForFunction(() => {
