@@ -876,7 +876,7 @@ async function poll() {
   catch (error) { if (generation !== settingsGeneration) return; $('connection').textContent = '○ World offline'; $('connection').classList.add('offline'); feedback(error.message, true); }
   finally { pollRunning = false; }
 }
-function positionKey(position) { return `${position.x.toFixed(2)},${position.y.toFixed(8)},${position.z.toFixed(2)}`; }
+function positionKey(position) { return `${position.x.toFixed(2)},${position.y.toFixed(2)},${position.z.toFixed(2)}`; }
 let lastPosition = '';
 async function syncPosition() {
   const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration, movementVersion = localMovementVersion, jump = jumpRequested;
