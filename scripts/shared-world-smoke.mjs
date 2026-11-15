@@ -220,9 +220,20 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.down('a');
   await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < 14.5, 'Alice to walk back from the solid side');
   await alice.page.keyboard.up('a');
-  await alice.page.waitForTimeout(300);
+  await alice.page.waitForFunction(() => {
+    const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
+    return Number(xPart?.slice(2)) < 14.5 && Number(yPart?.slice(2)) === 0;
+  }, undefined, { polling: 'raf', timeout: 10000 });
   await focus(alice);
   await alice.page.keyboard.up('d');
+  await alice.page.evaluate(() => {
+    window.__tusJumpKeyEvents = [];
+    for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
+      if ((event.code === 'Space' || event.key.toLowerCase() === 'd') && window.__tusJumpKeyEvents.length < 20) {
+        window.__tusJumpKeyEvents.push({ type, code: event.code, repeat: event.repeat });
+      }
+    }, true);
+  });
   await alice.page.keyboard.down('d');
   await alice.page.keyboard.down('Space');
   try {
@@ -238,8 +249,11 @@ await withSmokeCleanup(async () => {
       coordinates: document.querySelector('#coordinates')?.textContent || '',
       connected: document.querySelector('#connection')?.textContent || '',
       dialogOpen: Boolean(document.querySelector('dialog[open]')),
+      jumpKeyEvents: window.__tusJumpKeyEvents || [],
     }));
-    throw new Error(error.message + '; client=' + JSON.stringify(client));
+    const server = await state().catch(failure => ({ error: failure.message }));
+    const serverPlayer = server.error ? server : server.players.find(player => player.id === 'alice');
+    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer));
   } finally {
     await alice.page.keyboard.up('Space');
     await alice.page.keyboard.up('d');
