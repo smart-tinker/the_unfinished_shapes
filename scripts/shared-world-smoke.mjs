@@ -216,18 +216,24 @@ await withSmokeCleanup(async () => {
   assert.equal(blocked.position.y, 0, 'client coordinates cannot grant unsupported height');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, blocked.revision);
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('X 14.7'));
-  await focus(alice);
-  await alice.page.keyboard.down('a');
-  await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x < 14.5, 'Alice to walk back from the solid side');
-  await alice.page.keyboard.up('a');
-  await alice.page.waitForFunction(() => {
-    const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
-    return Number(xPart?.slice(2)) < 14.5 && Number(yPart?.slice(2)) === 0;
-  }, undefined, { polling: 'raf', timeout: 10000 });
+  // Movement is time-capped; retry until the server accepts the exact jump setup position.
+  let backoff;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    backoff = await worldCommand('alice', { type: 'move', position: { x: 14.4, y: 0, z: 0 } });
+    if (backoff.position.x === 14.4) break;
+    if (attempt < 19) await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.equal(backoff.position.x, 14.4, 'the jump setup places Alice close to the platform without frame-rate-dependent keyboard overshoot');
+  assert.equal(backoff.position.y, 0);
+  await Promise.all(clients.map(client => client.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, backoff.revision)));
   let lastBackoffPosition = '', stableBackoffSamples = 0;
   const jumpStart = await waitForState(snapshot => {
     const player = snapshot.players.find(player => player.id === 'alice');
-    if (!player || player.position.x >= 14.5 || player.position.y !== 0 || player.velocityY !== 0) return false;
+    if (!player || player.position.x !== 14.4 || player.position.y !== 0 || player.velocityY !== 0) {
+      stableBackoffSamples = 0;
+      lastBackoffPosition = '';
+      return false;
+    }
     const current = JSON.stringify({ position: player.position, velocityY: player.velocityY });
     stableBackoffSamples = current === lastBackoffPosition ? stableBackoffSamples + 1 : 0;
     lastBackoffPosition = current;
@@ -239,27 +245,6 @@ await withSmokeCleanup(async () => {
   }, jumpStart.players.find(player => player.id === 'alice').position, { polling: 'raf', timeout: 10000 });
   await focus(alice);
   await alice.page.keyboard.up('d');
-  const jumpMovementRequests = [], jumpMovementResponses = [];
-  const captureJumpMovement = response => {
-    const request = response.request();
-    if (request.url() !== url + '/command' || request.method() !== 'POST') return;
-    let command;
-    try { command = JSON.parse(request.postData() || '{}'); } catch { return; }
-    if (command.type !== 'move') return;
-    const entry = { command: { position: command.position, jump: command.jump === true } };
-    jumpMovementRequests.push(entry);
-    const pending = response.json().then(result => { entry.result = result; }, error => { entry.responseError = error.message; });
-    jumpMovementResponses.push(pending);
-  };
-  alice.page.on('response', captureJumpMovement);
-  await alice.page.evaluate(() => {
-    window.__tusJumpKeyEvents = [];
-    for (const type of ['keydown', 'keyup']) window.addEventListener(type, event => {
-      if ((event.code === 'Space' || event.key.toLowerCase() === 'd') && window.__tusJumpKeyEvents.length < 20) {
-        window.__tusJumpKeyEvents.push({ type, code: event.code, repeat: event.repeat });
-      }
-    }, true);
-  });
   await alice.page.keyboard.down('d');
   await alice.page.keyboard.down('Space');
   try {
@@ -271,18 +256,13 @@ await withSmokeCleanup(async () => {
   } catch (error) {
     const client = await alice.page.evaluate(() => ({
       focused: document.hasFocus(),
-      activeElement: document.activeElement?.tagName || '',
       coordinates: document.querySelector('#coordinates')?.textContent || '',
       connected: document.querySelector('#connection')?.textContent || '',
-      dialogOpen: Boolean(document.querySelector('dialog[open]')),
-      jumpKeyEvents: window.__tusJumpKeyEvents || [],
     }));
-    await Promise.allSettled(jumpMovementResponses);
     const server = await state().catch(failure => ({ error: failure.message }));
     const serverPlayer = server.error ? server : server.players.find(player => player.id === 'alice');
-    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer) + '; moveRequests=' + JSON.stringify(jumpMovementRequests));
+    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer));
   } finally {
-    alice.page.off('response', captureJumpMovement);
     await alice.page.keyboard.up('Space');
     await alice.page.keyboard.up('d');
   }
