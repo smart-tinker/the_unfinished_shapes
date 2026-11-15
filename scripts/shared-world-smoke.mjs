@@ -216,40 +216,31 @@ await withSmokeCleanup(async () => {
   assert.equal(blocked.position.y, 0, 'client coordinates cannot grant unsupported height');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, blocked.revision);
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('X 14.7'));
-  const backoff = await worldCommand('alice', { type: 'move', position: { x: 14.4, y: 0, z: 0 } });
+  // Movement is time-capped; retry until the server accepts the exact jump setup position.
+  let backoff;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    backoff = await worldCommand('alice', { type: 'move', position: { x: 14.4, y: 0, z: 0 } });
+    if (backoff.position.x === 14.4) break;
+    if (attempt < 19) await new Promise(resolve => setTimeout(resolve, 25));
+  }
   assert.equal(backoff.position.x, 14.4, 'the jump setup places Alice close to the platform without frame-rate-dependent keyboard overshoot');
   assert.equal(backoff.position.y, 0);
   await Promise.all(clients.map(client => client.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, backoff.revision)));
   let lastBackoffPosition = '', stableBackoffSamples = 0;
   const jumpStart = await waitForState(snapshot => {
     const player = snapshot.players.find(player => player.id === 'alice');
-    if (!player || player.position.x < 14.3 || player.position.x >= 14.7 || player.position.y !== 0 || player.velocityY !== 0) return false;
+    if (!player || player.position.x !== 14.4 || player.position.y !== 0 || player.velocityY !== 0) return false;
     const current = JSON.stringify({ position: player.position, velocityY: player.velocityY });
     stableBackoffSamples = current === lastBackoffPosition ? stableBackoffSamples + 1 : 0;
     lastBackoffPosition = current;
     return stableBackoffSamples >= 5;
   }, 'Alice server position to settle at the grounded jump start');
-  assert.ok(jumpStart.players.find(player => player.id === 'alice').position.x >= 14.3, 'the jump starts close to the walkable top, not a full server movement tick away');
   await alice.page.waitForFunction(expected => {
     const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
     return Number(xPart?.slice(2)) === Number(expected.x.toFixed(1)) && Number(yPart?.slice(2)) === 0;
   }, jumpStart.players.find(player => player.id === 'alice').position, { polling: 'raf', timeout: 10000 });
   await focus(alice);
   await alice.page.keyboard.up('d');
-  await alice.page.evaluate(() => {
-    window.__tusMovementDebugEnabled = true;
-    window.__tusMovementDebug = {};
-    window.__tusJumpKeyEvents = [];
-    const observe = (phase, type) => event => {
-      if ((event.code === 'Space' || event.key?.toLowerCase() === 'd') && window.__tusJumpKeyEvents.length < 20) {
-        window.__tusJumpKeyEvents.push({ at: performance.now(), phase, type, code: event.code, key: event.key, repeat: event.repeat, defaultPrevented: event.defaultPrevented, activeElement: document.activeElement?.tagName || '', focused: document.hasFocus(), dialogOpen: Boolean(document.querySelector('dialog[open]')) });
-      }
-    };
-    for (const type of ['keydown', 'keyup']) {
-      window.addEventListener(type, observe('capture', type), true);
-      window.addEventListener(type, observe('bubble', type));
-    }
-  });
   await alice.page.keyboard.down('d');
   await alice.page.keyboard.down('Space');
   try {
@@ -261,17 +252,12 @@ await withSmokeCleanup(async () => {
   } catch (error) {
     const client = await alice.page.evaluate(() => ({
       focused: document.hasFocus(),
-      visibilityState: document.visibilityState,
-      movementDebug: window.__tusMovementDebug || null,
-      activeElement: document.activeElement?.tagName || '',
       coordinates: document.querySelector('#coordinates')?.textContent || '',
       connected: document.querySelector('#connection')?.textContent || '',
-      dialogOpen: Boolean(document.querySelector('dialog[open]')),
-      jumpKeyEvents: window.__tusJumpKeyEvents || [],
     }));
     const server = await state().catch(failure => ({ error: failure.message }));
     const serverPlayer = server.error ? server : server.players.find(player => player.id === 'alice');
-    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer) + '; movementDebug=' + JSON.stringify(client.movementDebug));
+    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer));
   } finally {
     await alice.page.keyboard.up('Space');
     await alice.page.keyboard.up('d');
