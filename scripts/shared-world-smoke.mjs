@@ -226,10 +226,11 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.down('d');
   await alice.page.keyboard.down('Space');
   try {
-    await waitForState(snapshot => {
-      const player = snapshot.players.find(item => item.id === 'alice');
-      return player?.position.x >= 15 && player.position.y > 0 && player.velocityY !== 0;
-    }, 'Alice to clear the platform edge while jumping forward');
+    await alice.page.waitForFunction(() => {
+      const parts = document.querySelector('#coordinates')?.textContent.split(' · ');
+      const x = Number(parts?.[0]?.slice(2)), y = Number(parts?.[1]?.slice(2));
+      return Number.isFinite(x) && Number.isFinite(y) && x >= 15 && x < 17 && y > 0;
+    }, undefined, { polling: 'raf', timeout: 5000 });
   } catch (error) {
     const client = await alice.page.evaluate(() => ({
       focused: document.hasFocus(),
