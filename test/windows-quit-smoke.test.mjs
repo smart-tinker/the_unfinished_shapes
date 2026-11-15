@@ -96,6 +96,14 @@ test('native prompt acceptance uses bounded exact title and button checks', asyn
   assert.match(windowsUI, /buttons\.Count != 2/);
   assert.match(windowsUI, /control\.Text == "Keep the game open"/);
   assert.match(windowsUI, /control\.Text == "Quit anyway"/);
+  assert.match(windowsUI, /String\.Equals\(normalizedText, NormalizePromptText\(message\), StringComparison\.Ordinal\)/);
+  assert.doesNotMatch(windowsUI, /title-buttons-text-unavailable/);
+  const bodyGateStart = windowsUI.indexOf('if (!hasExpectedMessage) {');
+  const bodyGateEnd = windowsUI.indexOf('\n    LastPromptStatus = "matched";', bodyGateStart);
+  const bodyGate = windowsUI.slice(bodyGateStart, bodyGateEnd);
+  assert.match(bodyGate, /LastPromptStatus = "expected-message-mismatch"/);
+  assert.match(bodyGate, /return IntPtr\.Zero/);
+  assert.doesNotMatch(bodyGate, /return requested/);
   assert.ok(prompt.indexOf('FindExpectedQuitButton') >= 0 && prompt.indexOf('FindExpectedQuitButton') < prompt.indexOf('ClickNativePromptButton'));
   assert.match(prompt, /TUS_UIA: exact-foreground-prompt-matched/);
   assert.doesNotMatch(prompt, /GetProcessWindows/);
