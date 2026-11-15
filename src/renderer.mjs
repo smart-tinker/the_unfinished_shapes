@@ -884,7 +884,7 @@ function positionKey(position) { return `${position.x.toFixed(2)},${position.y.t
 let lastPosition = '';
 async function syncPosition() {
   const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration, movementVersion = localMovementVersion, jump = jumpRequested;
-  const debug = window.__tusMovementDebugEnabled ? (window.__tusMovementDebug ??= {}) : null;
+  const debug = typeof window !== 'undefined' && window.__tusMovementDebugEnabled ? (window.__tusMovementDebug ??= {}) : null;
   if (debug) debug.sync = { at: performance.now(), position, jump, velocityY: playerVelocityY, moving: moveRunning, hasPlayer: Boolean(meId), hasBridge: Boolean(bridge) };
   if (moveRunning || (key === lastPosition && !jump && playerVelocityY === 0) || !meId || !bridge) {
     if (debug) debug.sync.skipped = moveRunning ? 'move-running' : !meId ? 'missing-player' : !bridge ? 'missing-bridge' : 'unchanged';
