@@ -68,10 +68,13 @@ function setAgentStatus(status) {
   $('settings-codex-status').textContent = status;
   const recovery = $('settings-codex-recovery');
   const activityUnknown = connected && status === 'Connected · activity unknown';
-  recovery.hidden = connected && !activityUnknown;
+  const reportedError = connected && status === 'Codex reported an error';
+  recovery.hidden = connected && !activityUnknown && !reportedError;
   recovery.textContent = activityUnknown
     ? 'Current Codex activity is unknown. TUS will not restart Codex or change its workspace until the conversation is confirmed idle; wait for it to finish, then retry Connect. Your conversation is preserved.'
-    : 'Check the Codex executable path, then select Connect. The saved conversation stays intact.';
+    : reportedError
+      ? 'Codex reported an error. Close Settings and open Agent Controls to review the conversation status. The saved conversation stays intact.'
+      : 'Check the Codex executable path, then select Connect. The saved conversation stays intact.';
 }
 function updateAgentControlButtons() {
   const state = agentControlState, live = connected && state?.connected === true && state.threadId === settings.threadId;
