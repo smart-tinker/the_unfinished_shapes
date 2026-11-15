@@ -222,19 +222,35 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('a');
   await alice.page.waitForTimeout(300);
   await focus(alice);
-  await alice.page.keyboard.down('d');
-  await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 14.68, 'Alice to reach the solid face');
-  await alice.page.keyboard.down('Space');
-  await waitForState(snapshot => {
-    const player = snapshot.players.find(item => item.id === 'alice');
-    return player?.position.y > 0 && player.velocityY > 0;
-  }, 'the server to accept the jump while Alice is ascending');
-  await alice.page.keyboard.up('Space');
-  await waitForState(snapshot => {
-    const player = snapshot.players.find(item => item.id === 'alice');
-    return player?.position.x >= 15 && player.position.y > 0;
-  }, 'Alice to reach the platform while airborne');
   await alice.page.keyboard.up('d');
+  await alice.page.keyboard.down('Space');
+  try {
+    await waitForState(snapshot => {
+      const player = snapshot.players.find(item => item.id === 'alice');
+      return player?.position.y > 0 && player.velocityY > 0;
+    }, 'the server to accept the jump while Alice is ascending');
+    await alice.page.keyboard.down('d');
+    await alice.page.waitForFunction(() => {
+      const parts = document.querySelector('#coordinates')?.textContent.split(' · ');
+      return Number(parts?.[0]?.slice(2)) > 14.7 && Number(parts?.[1]?.slice(2)) > 0;
+    }, undefined, { polling: 'raf', timeout: 5000 });
+    await waitForState(snapshot => {
+      const player = snapshot.players.find(item => item.id === 'alice');
+      return player?.position.x >= 15 && player.position.y > 0;
+    }, 'Alice to move onto the platform while airborne');
+  } catch (error) {
+    const client = await alice.page.evaluate(() => ({
+      focused: document.hasFocus(),
+      activeElement: document.activeElement?.tagName || '',
+      coordinates: document.querySelector('#coordinates')?.textContent || '',
+      connected: document.querySelector('#connection')?.textContent || '',
+      dialogOpen: Boolean(document.querySelector('dialog[open]')),
+    }));
+    throw new Error(error.message + '; client=' + JSON.stringify(client));
+  } finally {
+    await alice.page.keyboard.up('Space');
+    await alice.page.keyboard.up('d');
+  }
   await alice.page.waitForFunction(() => {
     const yPart = document.querySelector('#coordinates')?.textContent.split(' · ')[1];
     return Number(yPart?.slice(2)) > 0;
