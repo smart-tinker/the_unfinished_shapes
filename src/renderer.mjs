@@ -885,16 +885,22 @@ let lastPosition = '';
 async function syncPosition() {
   const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration, movementVersion = localMovementVersion, jump = jumpRequested;
   const debug = typeof window !== 'undefined' && window.__tusMovementDebugEnabled ? (window.__tusMovementDebug ??= {}) : null;
-  if (debug) debug.sync = { at: performance.now(), position, jump, velocityY: playerVelocityY, moving: moveRunning, hasPlayer: Boolean(meId), hasBridge: Boolean(bridge) };
+  const syncRecord = { at: performance.now(), position, jump, velocityY: playerVelocityY, moving: moveRunning, hasPlayer: Boolean(meId), hasBridge: Boolean(bridge) };
+  if (debug) {
+    debug.syncHistory ??= [];
+    debug.syncHistory.push(syncRecord);
+    if (debug.syncHistory.length > 20) debug.syncHistory.shift();
+    debug.sync = syncRecord;
+  }
   if (moveRunning || (key === lastPosition && !jump && playerVelocityY === 0) || !meId || !bridge) {
-    if (debug) debug.sync.skipped = moveRunning ? 'move-running' : !meId ? 'missing-player' : !bridge ? 'missing-bridge' : 'unchanged';
+    syncRecord.skipped = moveRunning ? 'move-running' : !meId ? 'missing-player' : !bridge ? 'missing-bridge' : 'unchanged';
     return;
   }
   moveRunning = true;
-  if (debug) debug.sync.sent = true;
+  syncRecord.sent = true;
   try {
     const result = await request('/command', 'POST', { type: 'move', position, jump });
-    if (debug) debug.sync.result = { error: Boolean(result.error), revision: result.revision, position: result.position, velocityY: result.velocityY };
+    syncRecord.result = { error: Boolean(result.error), revision: result.revision, position: result.position, velocityY: result.velocityY };
     if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && result.revision >= latestStateRevision) {
       latestStateRevision = result.revision;
       if (movementVersion === localMovementVersion && result.position) { playerPosition = result.position; playerVelocityY = result.velocityY ?? 0; }
@@ -904,11 +910,11 @@ async function syncPosition() {
       lastPosition = positionKey(playerPosition);
     }
   } catch (error) {
-    if (debug) debug.sync.error = error?.name || 'Error';
+    syncRecord.error = error?.name || 'Error';
     /* The status poll reports connectivity failures. */
   } finally {
     moveRunning = false;
-    if (debug) debug.sync.completed = true;
+    syncRecord.completed = true;
   }
 }
 async function command(body) { const result = await request('/command', 'POST', body); if (result.error) throw new Error(result.message || result.error); await poll(); return result; }

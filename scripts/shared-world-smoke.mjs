@@ -245,7 +245,7 @@ await withSmokeCleanup(async () => {
     window.__tusJumpKeyEvents = [];
     const observe = (phase, type) => event => {
       if ((event.code === 'Space' || event.key?.toLowerCase() === 'd') && window.__tusJumpKeyEvents.length < 20) {
-        window.__tusJumpKeyEvents.push({ phase, type, code: event.code, key: event.key, repeat: event.repeat, defaultPrevented: event.defaultPrevented, activeElement: document.activeElement?.tagName || '', focused: document.hasFocus(), dialogOpen: Boolean(document.querySelector('dialog[open]')) });
+        window.__tusJumpKeyEvents.push({ at: performance.now(), phase, type, code: event.code, key: event.key, repeat: event.repeat, defaultPrevented: event.defaultPrevented, activeElement: document.activeElement?.tagName || '', focused: document.hasFocus(), dialogOpen: Boolean(document.querySelector('dialog[open]')) });
       }
     };
     for (const type of ['keydown', 'keyup']) {
