@@ -44,7 +44,7 @@ async function start(executablePath, label, dataDir, useBaseline = false) {
     const env = { ...process.env, TUS_DATA_DIR: dataDir };
     if (useBaseline) {
       env.TUS_SMOKE_UPDATE_BASELINE_VERSION = baselineVersion;
-      const preload = path.resolve('scripts/updater-version-preload.cjs').replaceAll('\\\\', '/');
+      const preload = path.resolve('scripts/updater-version-preload.cjs').split(path.sep).join('/');
       env.NODE_OPTIONS = [env.NODE_OPTIONS, '--require=' + preload].filter(Boolean).join(' ');
     }
     instance = await electron.launch({
