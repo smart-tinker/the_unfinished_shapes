@@ -224,6 +224,19 @@ await withSmokeCleanup(async () => {
     const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
     return Number(xPart?.slice(2)) < 14.5 && Number(yPart?.slice(2)) === 0;
   }, undefined, { polling: 'raf', timeout: 10000 });
+  let lastBackoffPosition = '', stableBackoffSamples = 0;
+  const jumpStart = await waitForState(snapshot => {
+    const player = snapshot.players.find(player => player.id === 'alice');
+    if (!player || player.position.x >= 14.5 || player.position.y !== 0 || player.velocityY !== 0) return false;
+    const current = JSON.stringify({ position: player.position, velocityY: player.velocityY });
+    stableBackoffSamples = current === lastBackoffPosition ? stableBackoffSamples + 1 : 0;
+    lastBackoffPosition = current;
+    return stableBackoffSamples >= 5;
+  }, 'Alice server position to settle at the grounded jump start');
+  await alice.page.waitForFunction(expected => {
+    const [xPart, yPart] = document.querySelector('#coordinates')?.textContent.split(' · ') ?? [];
+    return Number(xPart?.slice(2)) === Number(expected.x.toFixed(1)) && Number(yPart?.slice(2)) === 0;
+  }, jumpStart.players.find(player => player.id === 'alice').position, { polling: 'raf', timeout: 10000 });
   const jumpMoveTrace = [];
   const jumpMoveByRequest = new WeakMap();
   let captureJumpMoves = false;
