@@ -78,7 +78,7 @@ public static class TusWindowLookup {
       if (control.ClassName != "Button") {
         var normalizedText = NormalizePromptText(control.Text);
         foreach (var message in expectedMessages) {
-          if (normalizedText.IndexOf(message, StringComparison.Ordinal) >= 0) hasExpectedMessage = true;
+          if (String.Equals(normalizedText, NormalizePromptText(message), StringComparison.Ordinal)) hasExpectedMessage = true;
         }
       } else if (control.ClassName == "Button") {
         buttons.Add(control);
@@ -121,13 +121,16 @@ function Test-ExactPromptText([IntPtr]$dialog, [string[]]$expectedMessages) {
   try {
     $root = [System.Windows.Automation.AutomationElement]::FromHandle($dialog)
     if ($null -eq $root) { return $false }
-    $elements = @($root) + @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition))
-    foreach ($element in $elements) {
+    foreach ($message in $expectedMessages) {
+      $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        [string]$message
+      )
+      $element = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+      if ($null -eq $element) { continue }
       $name = [regex]::Replace([string]$element.Current.Name, '\s+', ' ').Trim()
-      foreach ($message in $expectedMessages) {
-        $expected = [regex]::Replace([string]$message, '\s+', ' ').Trim()
-        if ([string]::Equals($name, $expected, [StringComparison]::Ordinal)) { return $true }
-      }
+      $expected = [regex]::Replace([string]$message, '\s+', ' ').Trim()
+      if ([string]::Equals($name, $expected, [StringComparison]::Ordinal)) { return $true }
     }
   } catch {
     return $false
