@@ -156,8 +156,8 @@ function expectedAssetName(version, distribution) {
 }
 
 async function configureUpdateDialogs(instance, { downloadsDir, extractDir, dialogMarker, relaunchMarker }) {
-  await instance.evaluate(async ({ app, dialog }, config) => {
-    const { writeFileSync } = await import('node:fs');
+  await instance.evaluate(({ app, dialog }, config) => {
+    const { writeFileSync } = process.getBuiltinModule('node:fs');
     app.setPath('downloads', config.downloadsDir);
     globalThis.__tusUpdateChoice = 0;
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [config.extractDir] });
