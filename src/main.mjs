@@ -125,7 +125,7 @@ app.whenReady().then(async()=>{
       return { assetName: result.assetName, sha256: result.sha256, distribution: availableUpdate.distribution };
     } catch (error) {
       if (!failureReported) {
-        win?.webContents.send('updates:progress', { state: 'failed', phase: 'download', verifierCode: 'OTHER' });
+        win?.webContents.send('updates:progress', { state: 'failed', phase: 'download', failureCode: 'OTHER', verifierCode: 'OTHER', httpStatus: null });
       }
       throw error;
     } finally {

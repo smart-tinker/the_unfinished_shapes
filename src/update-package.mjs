@@ -23,6 +23,23 @@ const sigstoreVerifierCodes = new Set([
 export function safeVerifierCode(code) {
   return typeof code === 'string' && sigstoreVerifierCodes.has(code) ? code : 'OTHER';
 }
+
+const updaterFailureCodes = new Set([
+  'PROVENANCE_FETCH_ERROR', 'PROVENANCE_HTTP_ERROR', 'PROVENANCE_RESPONSE_ERROR',
+  'MISSING_PROVENANCE', 'NO_MATCHING_PROVENANCE', 'INVALID_ATTESTATION',
+  'INVALID_ATTESTATION_PAYLOAD', 'SIGNATURE_REJECTED', 'ATTESTATION_MISMATCH',
+]);
+
+export function safeUpdaterFailureCode(code) {
+  return typeof code === 'string' && updaterFailureCodes.has(code) ? code : 'OTHER';
+}
+
+function updaterFailure(message, failureCode, httpStatus) {
+  const error = new Error(message);
+  error.failureCode = safeUpdaterFailureCode(failureCode);
+  if (Number.isInteger(httpStatus) && httpStatus >= 400 && httpStatus <= 599) error.httpStatus = httpStatus;
+  return error;
+}
 const downloadHosts = new Set(['github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com', 'github-releases.githubusercontent.com']);
 
 function releaseVersion(tag) {
@@ -44,16 +61,16 @@ function validateAsset(asset, tag) {
 }
 
 async function readJsonLimited(response) {
-  if (!response.body) throw new Error('Empty GitHub provenance response.');
+  if (!response.body) throw updaterFailure('Empty GitHub provenance response.', 'PROVENANCE_RESPONSE_ERROR');
   const chunks = [];
   let size = 0;
   for await (const chunk of response.body) {
     size += chunk.length;
-    if (size > maxJsonBytes) throw new Error('GitHub provenance response is too large.');
+    if (size > maxJsonBytes) throw updaterFailure('GitHub provenance response is too large.', 'PROVENANCE_RESPONSE_ERROR');
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-  catch { throw new Error('Invalid GitHub provenance response.'); }
+  catch { throw updaterFailure('Invalid GitHub provenance response.', 'PROVENANCE_RESPONSE_ERROR'); }
 }
 
 function exactRegex(value) {
@@ -62,7 +79,7 @@ function exactRegex(value) {
 
 export async function verifyReleaseAttestation({ bundle, asset, tag }, verifySignature = verify) {
   const digest = validateAsset(asset, tag);
-  if (!bundle || typeof verifySignature !== 'function') throw new Error('Invalid release attestation.');
+  if (!bundle || typeof verifySignature !== 'function') throw updaterFailure('Invalid release attestation.', 'INVALID_ATTESTATION');
   const releaseBranch = 'refs/heads/release/' + tag.replace(/^v/, '');
   const identity = repositoryUrl + '/.github/workflows/stage-release.yml@' + releaseBranch;
   try {
@@ -72,7 +89,7 @@ export async function verifyReleaseAttestation({ bundle, asset, tag }, verifySig
     });
   } catch (error) {
     const code = safeVerifierCode(error?.code);
-    const rejection = new Error('Release attestation signature rejected [verifier=' + code + '].');
+    const rejection = updaterFailure('Release attestation signature rejected [verifier=' + code + '].', 'SIGNATURE_REJECTED');
     rejection.code = code;
     throw rejection;
   }
@@ -81,11 +98,11 @@ export async function verifyReleaseAttestation({ bundle, asset, tag }, verifySig
       envelope?.payloadType !== 'application/vnd.in-toto+json' ||
       typeof envelope.payload !== 'string' || envelope.payload.length > maxJsonBytes * 2 ||
       !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(envelope.payload)) {
-    throw new Error('Invalid release attestation payload.');
+    throw updaterFailure('Invalid release attestation payload.', 'INVALID_ATTESTATION_PAYLOAD');
   }
   let statement;
   try { statement = JSON.parse(Buffer.from(envelope.payload, 'base64').toString('utf8')); }
-  catch { throw new Error('Invalid release attestation payload.'); }
+  catch { throw updaterFailure('Invalid release attestation payload.', 'INVALID_ATTESTATION_PAYLOAD'); }
   const workflow = statement?.predicate?.buildDefinition?.externalParameters?.workflow;
   const dependencies = statement?.predicate?.buildDefinition?.resolvedDependencies;
   const builder = statement?.predicate?.runDetails?.builder?.id;
@@ -101,7 +118,7 @@ export async function verifyReleaseAttestation({ bundle, asset, tag }, verifySig
       workflow?.path !== '.github/workflows/stage-release.yml' ||
       builder !== identity ||
       !/^[a-f0-9]{40}$/.test(source?.digest?.gitCommit || '')) {
-    throw new Error('Release attestation does not match this asset and release workflow.');
+    throw updaterFailure('Release attestation does not match this asset and release workflow.', 'ATTESTATION_MISMATCH');
   }
   return { sourceSha: source.digest.gitCommit, assetName: asset.name };
 }
@@ -124,22 +141,31 @@ export async function verifyDownloadedFile({ filePath, sha256 }) {
 }
 
 async function fetchAttestation({ fetcher, digest, tag, asset, signal, verifySignature }) {
-  const response = await fetcher('https://api.github.com/repos/' + repository + '/attestations/sha256:' + digest, {
-    headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' },
-    signal, redirect: 'error',
-  });
-  if (!response?.ok) throw new Error('GitHub release provenance check failed (HTTP ' + response?.status + ').');
-  const body = await readJsonLimited(response);
-  if (!Array.isArray(body?.attestations) || body.attestations.length < 1 || body.attestations.length > 20) {
-    throw new Error('No GitHub release provenance was found.');
+  let response;
+  try {
+    response = await fetcher('https://api.github.com/repos/' + repository + '/attestations/sha256:' + digest, {
+      headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' },
+      signal, redirect: 'error',
+    });
+  } catch (error) {
+    if (signal?.aborted && (error?.name === 'AbortError' || error?.code === 'ABORT_ERR')) throw error;
+    throw updaterFailure('GitHub release provenance request failed.', 'PROVENANCE_FETCH_ERROR');
   }
+  if (!response?.ok) throw updaterFailure(
+    'GitHub release provenance check failed (HTTP ' + response?.status + ').',
+    'PROVENANCE_HTTP_ERROR', response?.status,
+  );
+  const body = await readJsonLimited(response);
+  if (!Array.isArray(body?.attestations)) throw updaterFailure('Invalid GitHub provenance response.', 'PROVENANCE_RESPONSE_ERROR');
+  if (body.attestations.length < 1) throw updaterFailure('No GitHub release provenance was found.', 'MISSING_PROVENANCE');
+  if (body.attestations.length > 20) throw updaterFailure('Invalid GitHub provenance response.', 'PROVENANCE_RESPONSE_ERROR');
   let lastError;
   for (const item of body.attestations) {
     if (!item?.bundle) continue;
     try { return await verifyReleaseAttestation({ bundle: item.bundle, asset, tag }, verifySignature); }
     catch (error) { lastError = error; }
   }
-  throw lastError || new Error('No matching GitHub release provenance was found.');
+  throw lastError || updaterFailure('No matching GitHub release provenance was found.', 'NO_MATCHING_PROVENANCE');
 }
 
 export async function downloadVerifiedAsset({
@@ -223,7 +249,13 @@ export async function downloadVerifiedAsset({
     if (partPath) await rm(partPath, { force: true }).catch(() => {});
     if (created) await rm(finalPath, { force: true }).catch(() => {});
     if (signal?.aborted && (error?.name === 'AbortError' || error?.code === 'ABORT_ERR')) return { cancelled: true };
-    onProgress({ state: 'failed', phase, verifierCode: safeVerifierCode(error?.code) });
+    const httpStatus = Number.isInteger(error?.httpStatus) && error.httpStatus >= 400 && error.httpStatus <= 599 ? error.httpStatus : null;
+    onProgress({
+      state: 'failed', phase,
+      failureCode: safeUpdaterFailureCode(error?.failureCode),
+      verifierCode: safeVerifierCode(error?.code),
+      httpStatus,
+    });
     throw error;
   }
 }

@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import { compareReleaseVersions } from '../src/update-release.mjs';
-import { safeVerifierCode } from '../src/update-package.mjs';
+import { safeUpdaterFailureCode, safeVerifierCode } from '../src/update-package.mjs';
 import { closeSmokeApp, observeGraphics, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 
@@ -270,8 +270,9 @@ async function updateOnce(distribution) {
         state,
         receivedMB: progress ? mb(progress[1]) : null,
         totalMB: progress ? mb(progress[2]) : null,
-        httpStatus,
+        httpStatus: Number(status?.dataset.updateHttpStatus) || httpStatus,
         phase: status?.dataset.updatePhase || null,
+        failureCode: status?.dataset.updateFailureCode || null,
         verifierCode: status?.dataset.verifierCode || null,
         cancelEnabled: !document.querySelector('#updates-cancel')?.disabled,
       };
@@ -279,7 +280,9 @@ async function updateOnce(distribution) {
     const safeDiagnostic = {
       ...diagnostic,
       phase: ['download', 'provenance'].includes(diagnostic.phase) ? diagnostic.phase : 'unknown',
+      failureCode: safeUpdaterFailureCode(diagnostic.failureCode),
       verifierCode: safeVerifierCode(diagnostic.verifierCode),
+      httpStatus: Number.isInteger(diagnostic.httpStatus) && diagnostic.httpStatus >= 400 && diagnostic.httpStatus <= 599 ? diagnostic.httpStatus : null,
     };
     assert.ok([diagnostic.receivedMB, diagnostic.totalMB].every(value => value === null || value >= 0 && value <= 500), 'timeout progress diagnostic stays bounded');
     throw new Error(error.message + '; update=' + JSON.stringify(safeDiagnostic));
@@ -287,13 +290,20 @@ async function updateOnce(distribution) {
   const terminalFailure = await current.page.evaluate(() => {
     const status = document.querySelector('#updates-status');
     return status?.dataset.updateFailure === 'true'
-      ? { phase: status.dataset.updatePhase, verifierCode: status.dataset.verifierCode }
+      ? {
+          phase: status.dataset.updatePhase,
+          failureCode: status.dataset.updateFailureCode,
+          verifierCode: status.dataset.verifierCode,
+          httpStatus: Number(status.dataset.updateHttpStatus) || null,
+        }
       : null;
   });
   if (terminalFailure) {
     const diagnostic = {
       phase: ['download', 'provenance'].includes(terminalFailure.phase) ? terminalFailure.phase : 'unknown',
+      failureCode: safeUpdaterFailureCode(terminalFailure.failureCode),
       verifierCode: safeVerifierCode(terminalFailure.verifierCode),
+      httpStatus: Number.isInteger(terminalFailure.httpStatus) && terminalFailure.httpStatus >= 400 && terminalFailure.httpStatus <= 599 ? terminalFailure.httpStatus : null,
     };
     throw new Error('Updater failed before verification; update=' + JSON.stringify(diagnostic));
   }

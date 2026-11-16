@@ -1225,6 +1225,8 @@ $('updates-download').addEventListener('click', async () => {
   delete status.dataset.updateFailure;
   delete status.dataset.updatePhase;
   delete status.dataset.verifierCode;
+  delete status.dataset.updateFailureCode;
+  delete status.dataset.updateHttpStatus;
   updateDownloading = true; updateBusy = true; updateButtons(); updateStatus('Downloading release package…');
   try {
     const result = await bridge.downloadUpdate();
@@ -1270,7 +1272,9 @@ bridge?.onUpdateProgress(progress => {
     const status = $('updates-status');
     status.dataset.updateFailure = 'true';
     status.dataset.updatePhase = progress.phase === 'provenance' ? 'provenance' : 'download';
+    status.dataset.updateFailureCode = typeof progress.failureCode === 'string' ? progress.failureCode : 'OTHER';
     status.dataset.verifierCode = typeof progress.verifierCode === 'string' ? progress.verifierCode : 'OTHER';
+    status.dataset.updateHttpStatus = Number.isInteger(progress.httpStatus) && progress.httpStatus >= 400 && progress.httpStatus <= 599 ? String(progress.httpStatus) : '';
   } else if (progress?.state === 'verified') {
     updateStatus('Verified ' + progress.assetName + ' (SHA-256 ' + progress.sha256.slice(0, 12) + '…).');
   } else if (progress?.state === 'extracted') {
