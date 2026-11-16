@@ -41,7 +41,6 @@ async function assertModifiedPromptIsNotClicked(app, pid, process) {
       const result = await state.original(window, {
         ...options,
         message: 'Modified activity message.',
-        detail: 'Modified activity detail.',
       });
       state.response = result.response;
       state.resolved = true;
@@ -56,12 +55,12 @@ async function assertModifiedPromptIsNotClicked(app, pid, process) {
 
   const nativeMatcherResult = await ui('assert-body-mismatch-rejected', pid);
   assert.match(nativeMatcherResult, /^TUS_UIA: modified-body-rejected$/m,
-    'the bounded native matcher rejects exact-title/exact-button dialogs with an unknown body');
+    'the bounded matcher rejects a changed message even when the production detail and buttons remain exact');
 
   let failure;
   try { await ui('keep-open', pid); }
   catch (error) { failure = error; }
-  assert.match(failure?.message || '', /expected-message-(?:mismatch|missing|unavailable|combined)/,
+  assert.match(failure?.message || '', /expected-message-(?:mismatch|missing|unavailable|timeout)/,
     'a modified native prompt is rejected without clicking either button');
   assert.equal(process.exitCode, null, 'rejecting a modified prompt leaves TUS running');
 
@@ -113,7 +112,7 @@ export async function quitPromptAcceptance(app, page, graphics) {
     await assertModifiedPromptIsNotClicked(app, pid, process);
     await app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; if (!window) throw new Error('The packaged TUS window is unavailable.'); window.close(); });
     const exactPromptEvidence = await ui('assert-exact-body-recognized', pid);
-    assert.match(exactPromptEvidence, /^TUS_UIA: expected-body-recognized$/m, 'the exact native prompt body is recognized before clicking');
+    assert.match(exactPromptEvidence, /^TUS_UIA: expected-body-recognized$/m, 'the exact production message is recognized before clicking');
     const closePrompt = await ui('keep-open', pid);
     assert.match(closePrompt, /^TUS_UIA: exact-foreground-prompt-matched$/m, 'window-close prompt is the exact TUS dialog');
     assert.equal(process.exitCode, null, 'Keep the game open leaves the packaged process running');

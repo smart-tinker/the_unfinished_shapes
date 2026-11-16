@@ -37,7 +37,7 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   const foregroundEnd = windowsUI.indexOf("\n  'file-menu-open' {", foregroundStart);
   const foregroundLookup = windowsUI.slice(foregroundStart, foregroundEnd);
   const exactTitleGate = foregroundLookup.indexOf("GetWindowTitle($foregroundHandle) -eq 'Codex activity may continue'");
-  const nativeButtonFind = foregroundLookup.indexOf('[TusWindowLookup]::FindExpectedQuitButton');
+  const nativeButtonFind = foregroundLookup.indexOf('Find-ValidatedPromptButton');
   const nativeButtonClick = foregroundLookup.indexOf('[TusWindowLookup]::ClickNativePromptButton');
   assert.ok(exactTitleGate >= 0 && exactTitleGate < nativeButtonFind && nativeButtonFind < nativeButtonClick,
     'only the exact TUS dialog title and native prompt match reach the click');
@@ -89,6 +89,27 @@ test('Windows quit UI reports its latest safe phase when native automation times
 });
 
 
+test('native quit prompt body uses exact message text and bounded STA UI Automation', async () => {
+  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
+  const expectedBlock = windowsUI.slice(windowsUI.indexOf('$expectedMessages ='), windowsUI.indexOf('switch ($Action)'));
+  assert.match(expectedBlock, /Codex may still be working in this conversation/);
+  assert.match(expectedBlock, /The current Codex activity is unknown/);
+  assert.doesNotMatch(expectedBlock, /Quitting TUS closes|Codex state could not be confirmed/);
+
+  const uiaStart = windowsUI.indexOf('function Get-UiaPromptBodyResult');
+  const uiaEnd = windowsUI.indexOf('function Find-ValidatedPromptButton', uiaStart);
+  const uia = windowsUI.slice(uiaStart, uiaEnd);
+  assert.match(uia, /TreeScope\]::Children/);
+  assert.match(uia, /\.FindFirst\(/);
+  assert.match(uia, /-STA -EncodedCommand/);
+  assert.match(uia, /UseShellExecute = \$false/);
+  assert.match(uia, /RedirectStandardInput = \$true/);
+  assert.match(uia, /WaitForExit\(\$remaining\)/);
+  assert.match(uia, /3000 - \[int\]\$watch\.ElapsedMilliseconds/);
+  assert.match(uia, /\.Kill\(\)/);
+  assert.doesNotMatch(uia, /TreeScope\]::Descendants|\.FindAll\(/);
+});
+
 test('native prompt acceptance uses bounded exact title, text and button checks', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
   const promptStart = windowsUI.indexOf("  { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {");
@@ -99,8 +120,8 @@ test('native prompt acceptance uses bounded exact title, text and button checks'
   assert.match(windowsUI, /buttons\.Count != 2/);
   assert.match(windowsUI, /control\.Text == "Keep the game open"/);
   assert.match(windowsUI, /control\.Text == "Quit anyway"/);
-  assert.ok(prompt.indexOf('[TusWindowLookup]::FindExpectedQuitButton') >= 0 &&
-    prompt.indexOf('[TusWindowLookup]::FindExpectedQuitButton') < prompt.indexOf('[TusWindowLookup]::ClickNativePromptButton'));
+  assert.ok(prompt.indexOf('Find-ValidatedPromptButton') >= 0 &&
+    prompt.indexOf('Find-ValidatedPromptButton') < prompt.indexOf('[TusWindowLookup]::ClickNativePromptButton'));
   assert.match(prompt, /TUS_UIA: exact-foreground-prompt-matched/);
   assert.doesNotMatch(prompt, /GetProcessWindows/);
 });
@@ -133,8 +154,8 @@ test('native prompt buttons require the exact foreground TUS dialog title', asyn
   const promptStart = windowsUI.indexOf("  { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {");
   const promptEnd = windowsUI.indexOf("\n  'file-menu-open' {", promptStart);
   const prompt = windowsUI.slice(promptStart, promptEnd);
-  assert.ok(prompt.indexOf('[TusWindowLookup]::FindExpectedQuitButton') >= 0 &&
-    prompt.indexOf('[TusWindowLookup]::FindExpectedQuitButton') < prompt.indexOf('[TusWindowLookup]::ClickNativePromptButton'));
+  assert.ok(prompt.indexOf('Find-ValidatedPromptButton') >= 0 &&
+    prompt.indexOf('Find-ValidatedPromptButton') < prompt.indexOf('[TusWindowLookup]::ClickNativePromptButton'));
   assert.doesNotMatch(windowsUI, /\.FindAll\(/);
 });
 

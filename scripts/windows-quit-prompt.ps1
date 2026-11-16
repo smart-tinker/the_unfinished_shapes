@@ -71,11 +71,9 @@ public static class TusWindowLookup {
   private static string ExpectedFieldToken(int index) {
     if (index == 0) return "known-message";
     if (index == 1) return "unknown-message";
-    if (index == 2) return "known-detail";
-    if (index == 3) return "unknown-detail";
     return "candidate";
   }
-  public static IntPtr FindExpectedQuitButton(IntPtr dialog, string[] expectedMessages, string requestedButton) {
+  public static IntPtr FindExpectedQuitButton(IntPtr dialog, string[] expectedMessages, string requestedButton, int uiaMessageIndex) {
     LastPromptStatus = "invalid-window";
     LastPromptEvidence.Clear();
     LastPromptEvidenceText = "";
@@ -104,8 +102,9 @@ public static class TusWindowLookup {
       return true;
     }, IntPtr.Zero);
     var buttons = new List<PromptControl>();
-    bool hasExpectedMessage = false, hasReadableMessage = false, hasCombinedExpectedBody = false, hasKeepOpen = false, hasQuitAnyway = false;
-    var messageTexts = new List<string>();
+    bool hasExpectedMessage = uiaMessageIndex >= 0 && uiaMessageIndex < expectedMessages.Length;
+    bool hasReadableMessage = false, hasKeepOpen = false, hasQuitAnyway = false;
+    if (hasExpectedMessage) LastPromptEvidence.Add("uia-" + ExpectedFieldToken(uiaMessageIndex));
     IntPtr requested = IntPtr.Zero;
     foreach (var control in controls) {
       var classToken = SafeClassToken(control.ClassName);
@@ -121,7 +120,6 @@ public static class TusWindowLookup {
         var normalizedText = NormalizePromptText(control.Text);
         if (normalizedText.Length > 0) {
           hasReadableMessage = true;
-          messageTexts.Add(normalizedText);
         }
         int candidate = -1;
         for (int i = 0; i < expectedMessages.Length; i++) {
@@ -156,22 +154,8 @@ public static class TusWindowLookup {
       LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
       return IntPtr.Zero;
     }
-    if (!hasExpectedMessage && expectedMessages.Length >= 4) {
-      var knownBody = NormalizePromptText(expectedMessages[0] + " " + expectedMessages[2]);
-      var unknownBody = NormalizePromptText(expectedMessages[1] + " " + expectedMessages[3]);
-      foreach (var text in messageTexts) {
-        if (String.Equals(text, knownBody, StringComparison.Ordinal)) {
-          hasCombinedExpectedBody = true;
-          LastPromptEvidence.Add("candidate-combined-known-exact");
-        } else if (String.Equals(text, unknownBody, StringComparison.Ordinal)) {
-          hasCombinedExpectedBody = true;
-          LastPromptEvidence.Add("candidate-combined-unknown-exact");
-        }
-      }
-    }
     if (!hasExpectedMessage) {
-      LastPromptStatus = hasCombinedExpectedBody ? "expected-message-combined" :
-        hasReadableMessage ? "expected-message-mismatch" : "expected-message-unavailable";
+      LastPromptStatus = hasReadableMessage ? "expected-message-mismatch" : "expected-message-unavailable";
       LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
       return IntPtr.Zero;
     }
@@ -194,11 +178,118 @@ function Write-PromptEvidence {
   if ($evidence.Length -gt 512) { $evidence = $evidence.Substring(0, 512) }
   Write-Output "TUS_UIA: evidence-$evidence"
 }
+function Get-UiaPromptBodyResult {
+  param(
+    [Parameter(Mandatory=$true)][IntPtr]$WindowHandle,
+    [Parameter(Mandatory=$true)][string[]]$ExpectedMessages
+  )
+  $childScript = @'
+$ErrorActionPreference = 'Stop'
+try {
+  $payloadLine = [Console]::In.ReadLine()
+  if ([string]::IsNullOrWhiteSpace($payloadLine)) { throw 'payload-unavailable' }
+  $payloadJson = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($payloadLine))
+  $payload = ConvertFrom-Json -InputObject $payloadJson
+  Add-Type -AssemblyName UIAutomationTypes
+  Add-Type -AssemblyName UIAutomationClient
+  $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]([long]$payload.handle))
+  if ($null -eq $root) { throw 'window-unavailable' }
+  $expected = @($payload.expectedMessages)
+  for ($index = 0; $index -lt $expected.Length; $index++) {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      [string]$expected[$index])
+    $element = $root.FindFirst(
+      [System.Windows.Automation.TreeScope]::Children,
+      $condition)
+    if ($null -ne $element) {
+      $name = [string]$element.GetCurrentPropertyValue(
+        [System.Windows.Automation.AutomationElement]::NameProperty)
+      if ([string]::Equals($name, [string]$expected[$index], [StringComparison]::Ordinal)) {
+        [Console]::Out.WriteLine('matched-' + $index)
+        exit 0
+      }
+    }
+  }
+  [Console]::Out.WriteLine('mismatch')
+  exit 0
+} catch {
+  [Console]::Out.WriteLine('unavailable')
+  exit 1
+}
+'@
+  $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childScript))
+  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+  $startInfo.FileName = Join-Path $PSHOME 'powershell.exe'
+  $startInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -STA -EncodedCommand ' + $encodedScript
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardInput = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $process = New-Object System.Diagnostics.Process
+  $process.StartInfo = $startInfo
+  $watch = [Diagnostics.Stopwatch]::StartNew()
+  try {
+    if (-not $process.Start()) { return 'unavailable' }
+    $payload = ConvertTo-Json -InputObject @{ handle = $WindowHandle.ToInt64(); expectedMessages = $ExpectedMessages } -Compress
+    $payloadLine = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload))
+    $process.StandardInput.WriteLine($payloadLine)
+    $process.StandardInput.Close()
+    $remaining = 3000 - [int]$watch.ElapsedMilliseconds
+    if ($remaining -le 0 -or -not $process.WaitForExit($remaining)) {
+      try { $process.Kill() } catch {}
+      try { [void]$process.WaitForExit(1000) } catch {}
+      return 'timeout'
+    }
+    $result = $process.StandardOutput.ReadToEnd().Trim()
+    if ($process.ExitCode -eq 0 -and $result -match '^matched-([01])$') { return $result }
+    if ($process.ExitCode -eq 0 -and $result -eq 'mismatch') { return 'mismatch' }
+    return 'unavailable'
+  } catch {
+    return 'unavailable'
+  } finally {
+    try {
+      if (-not $process.HasExited) {
+        $process.Kill()
+        [void]$process.WaitForExit(1000)
+      }
+    } catch {}
+    $process.Dispose()
+  }
+}
+$script:uiaPromptResults = @{}
+function Find-ValidatedPromptButton {
+  param(
+    [Parameter(Mandatory=$true)][IntPtr]$WindowHandle,
+    [Parameter(Mandatory=$true)][string[]]$ExpectedMessages,
+    [Parameter(Mandatory=$true)][string]$RequestedButton
+  )
+  $button = [TusWindowLookup]::FindExpectedQuitButton($WindowHandle, $ExpectedMessages, $RequestedButton, -1)
+  if ($button -ne [IntPtr]::Zero -or
+      [TusWindowLookup]::LastPromptStatus -notin @('expected-message-mismatch', 'expected-message-unavailable')) {
+    return $button
+  }
+  $cacheKey = $WindowHandle.ToInt64().ToString()
+  if (-not $script:uiaPromptResults.ContainsKey($cacheKey)) {
+    $script:uiPhase = 'checking-accessible-prompt-body'
+    $script:uiaPromptResults[$cacheKey] = Get-UiaPromptBodyResult $WindowHandle $ExpectedMessages
+  }
+  $script:uiPhase = 'checking-exact-dialog-buttons'
+  $uiaResult = [string]$script:uiaPromptResults[$cacheKey]
+  if ($uiaResult -match '^matched-([01])$') {
+    return [TusWindowLookup]::FindExpectedQuitButton($WindowHandle, $ExpectedMessages, $RequestedButton, [int]$Matches[1])
+  }
+  switch ($uiaResult) {
+    'mismatch' { [TusWindowLookup]::LastPromptStatus = 'expected-message-mismatch' }
+    'timeout' { [TusWindowLookup]::LastPromptStatus = 'expected-message-timeout' }
+    default { [TusWindowLookup]::LastPromptStatus = 'expected-message-unavailable' }
+  }
+  return [IntPtr]::Zero
+}
 $expectedMessages = [string[]]@(
   'Codex may still be working in this conversation.',
-  'The current Codex activity is unknown.',
-  'Quitting TUS closes its Codex connection but does not confirm that a Goal or turn stopped.',
-  'Codex state could not be confirmed. Keep the game open and reconnect to check the conversation, or quit anyway.'
+  'The current Codex activity is unknown.'
 )
 switch ($Action) {
   { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {
@@ -218,7 +309,7 @@ switch ($Action) {
             $reportedTitleMatch = $true
           }
           $script:uiPhase = 'checking-exact-dialog-buttons'
-          $quitButton = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, $buttonName)
+          $quitButton = Find-ValidatedPromptButton $foregroundHandle $expectedMessages $buttonName
           $promptStatus = [TusWindowLookup]::LastPromptStatus
           if ($quitButton -ne [IntPtr]::Zero) {
             Write-PromptEvidence
@@ -247,7 +338,7 @@ switch ($Action) {
       Write-Output 'TUS_UIA: expected-foreground-prompt-unavailable'
       exit 2
     }
-    $button = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, 'Keep the game open')
+    $button = Find-ValidatedPromptButton $foregroundHandle $expectedMessages 'Keep the game open'
     Write-PromptEvidence
     if ($button -eq [IntPtr]::Zero) {
       Write-Output "TUS_UIA: expected-body-$([TusWindowLookup]::LastPromptStatus)"
@@ -262,14 +353,14 @@ switch ($Action) {
       Write-Output 'TUS_UIA: expected-foreground-prompt-unavailable'
       exit 2
     }
-    $button = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, 'Keep the game open')
+    $button = Find-ValidatedPromptButton $foregroundHandle $expectedMessages 'Keep the game open'
     Write-PromptEvidence
     if ($button -ne [IntPtr]::Zero) {
       Write-Output 'TUS_UIA: modified-body-button-returned'
       exit 2
     }
     $status = [TusWindowLookup]::LastPromptStatus
-    if ($status -ne 'expected-message-mismatch' -and $status -ne 'expected-message-unavailable') {
+    if ($status -notin @('expected-message-mismatch', 'expected-message-unavailable', 'expected-message-timeout')) {
       Write-Output "TUS_UIA: prompt-$status"
       exit 2
     }
