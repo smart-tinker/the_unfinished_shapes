@@ -533,7 +533,7 @@ switch ($Action) {
 [Console]::Out.Flush()
 Start-Sleep -Seconds 10
 '@
-    $result = Get-UiaPromptBodyResult -WindowHandle ([IntPtr]::Zero) -ExpectedMessages @() -ExpectedDetails @() -GoalStatusPrefix '' -ChildScriptOverride $testChildScript
+    $result = Get-UiaPromptBodyResult -WindowHandle ([IntPtr]::Zero) -ExpectedMessages @('fixture-message') -ExpectedDetails @('fixture-detail') -GoalStatusPrefix 'fixture-prefix' -ChildScriptOverride $testChildScript
     if ($result -eq 'timeout-phase-child-start') {
       Write-Output 'TUS_UIA_TEST: safe-phase-preserved'
     } else {
