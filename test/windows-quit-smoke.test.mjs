@@ -312,9 +312,12 @@ test('UIA child wait and cleanup phases are fixed safe diagnostics', async () =>
     windowsUI.indexOf('function Find-ValidatedPromptButton'),
   );
   for (const phase of phases) assert.ok(uia.includes("Write-UiaPhaseMarker '" + phase + "'"), phase + ' is emitted');
-  assert.match(uia, /Write-UiaPhaseMarker 'ui-child-killing'\\s+try \\{ \\$process\\.Kill\\(\\) \\} catch \\{\\}/);
-  assert.match(uia, /Write-UiaPhaseMarker 'ui-child-kill-waiting'\\s+try \\{ \\[void\\]\\$process\\.WaitForExit\\(1000\\) \\} catch \\{\\}/);
-  assert.match(uia, /Write-UiaPhaseMarker 'ui-child-output-draining'\\s+\\$process\\.WaitForExit\\(\\)/);
+  const killing = uia.indexOf("Write-UiaPhaseMarker 'ui-child-killing'");
+  assert.ok(killing >= 0 && killing < uia.indexOf('try { $process.Kill() } catch {}', killing));
+  const killWait = uia.indexOf("Write-UiaPhaseMarker 'ui-child-kill-waiting'");
+  assert.ok(killWait >= 0 && killWait < uia.indexOf('[void]$process.WaitForExit(1000)', killWait));
+  const draining = uia.indexOf("Write-UiaPhaseMarker 'ui-child-output-draining'");
+  assert.ok(draining >= 0 && draining < uia.indexOf('$process.WaitForExit()', draining));
 
   const mutationProbe = automation.slice(
     automation.indexOf('async function assertModifiedPromptIsNotClicked'),
