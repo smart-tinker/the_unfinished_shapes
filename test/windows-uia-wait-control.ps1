@@ -38,6 +38,7 @@ $killReturned = $false
 $reapCompleted = $false
 $processExited = $false
 $drainObserved = $false
+$drainComplete = $false
 try {
   Write-ControlMarker 'control-start'
   if ($process.Start()) {
@@ -100,8 +101,9 @@ try {
       Write-ControlMarker 'process-exited'
       Write-ControlMarker 'stdout-eof-started'
       try {
+        $drainComplete = $outputReadComplete.WaitOne(0)
         $drainObserved = $true
-        if ($outputReadComplete.WaitOne(0)) { Write-ControlMarker 'stdout-eof-completed' }
+        if ($drainComplete) { Write-ControlMarker 'stdout-eof-completed' }
         else { Write-ControlMarker 'stdout-eof-pending' }
       } catch {
         $drainObserved = $false
@@ -114,7 +116,7 @@ try {
   } catch {
     Write-ControlMarker 'control-failed'
   }
-  try { $outputReadComplete.Dispose() } catch {}
+  try { if ($drainComplete) { $outputReadComplete.Dispose() } } catch {}
   try { $process.Dispose() } catch {}
 }
 if ($waitCallReturned -and $waitTimedOut -and $waitWithinBound -and
