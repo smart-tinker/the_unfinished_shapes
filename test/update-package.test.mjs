@@ -380,16 +380,21 @@ test('extracts Windows portable and macOS app archives under the selected folder
   }
 });
 
-test('reports terminal verifier failures with a safe provenance phase and allowlisted code', async t => {
-  async function expectFailure(inputCode, expectedCode) {
+test('reports terminal updater failures with safe provenance and verifier codes', async t => {
+  async function expectFailure({
+    responseStatus = 200, responseBody, verifySignature = async () => ({}),
+    failureCode, verifierCode = 'OTHER', httpStatus = null, noRawError = false,
+  }) {
     const bytes = Buffer.from('unverified update package');
     const digest = createHash('sha256').update(bytes).digest('hex');
     const downloadAsset = { ...asset, size: bytes.length, digest: 'sha256:' + digest };
     const provenance = statement();
     provenance.subject[0].digest.sha256 = digest;
+    const body = responseBody || { attestations: [{ bundle: bundle(provenance) }] };
     const directory = await mkdtemp(path.join(os.tmpdir(), 'tus-update-verifier-failure-'));
     const progress = [];
     try {
+      let caught;
       await assert.rejects(downloadVerifiedAsset({
         asset: downloadAsset, tag, directory,
         onProgress: event => progress.push(event),
@@ -398,23 +403,41 @@ test('reports terminal verifier failures with a safe provenance phase and allowl
             return new Response(bytes, { status: 200, headers: { 'content-length': String(bytes.length) } });
           }
           if (url.startsWith('https://api.github.com/')) {
-            return new Response(JSON.stringify({ attestations: [{ bundle: bundle(provenance) }] }), { status: 200 });
+            return new Response(JSON.stringify(body), { status: responseStatus });
           }
           throw new Error('Unexpected destination');
         },
-        verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code: inputCode }); },
-      }), error => {
-        assert.deepEqual(progress.at(-1), {
-          state: 'failed', phase: 'provenance', verifierCode: expectedCode,
-        });
-        assert.doesNotMatch(error.message, /private verifier detail/);
-        return true;
+        verifySignature,
+      }), error => { caught = error; return true; });
+      assert.deepEqual(progress.at(-1), {
+        state: 'failed', phase: 'provenance', failureCode, verifierCode, httpStatus,
       });
+      if (noRawError) assert.doesNotMatch(caught.message, /private verifier detail/);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
   }
 
-  await t.test('retains a known Sigstore verifier code', () => expectFailure('SIGNATURE_ERROR', 'SIGNATURE_ERROR'));
-  await t.test('maps an unknown verifier code to OTHER', () => expectFailure('PRIVATE_CODE', 'OTHER'));
+  await t.test('preserves a known Sigstore verifier code', () => expectFailure({
+    verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code: 'SIGNATURE_ERROR' }); },
+    failureCode: 'SIGNATURE_REJECTED', verifierCode: 'SIGNATURE_ERROR', noRawError: true,
+  }));
+  await t.test('maps unknown verifier codes to OTHER', () => expectFailure({
+    verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code: 'PRIVATE_CODE' }); },
+    failureCode: 'SIGNATURE_REJECTED', verifierCode: 'OTHER', noRawError: true,
+  }));
+  await t.test('reports provenance HTTP failures separately', () => expectFailure({
+    responseStatus: 503, responseBody: {}, failureCode: 'PROVENANCE_HTTP_ERROR', httpStatus: 503,
+  }));
+  await t.test('reports a missing attestation separately', () => expectFailure({
+    responseBody: { attestations: [] }, failureCode: 'MISSING_PROVENANCE',
+  }));
+  await t.test('reports a claims mismatch separately', () => {
+    const mismatched = statement();
+    mismatched.subject[0].digest.sha256 = 'f'.repeat(64);
+    return expectFailure({
+      responseBody: { attestations: [{ bundle: bundle(mismatched) }] },
+      failureCode: 'ATTESTATION_MISMATCH',
+    });
+  });
 });
