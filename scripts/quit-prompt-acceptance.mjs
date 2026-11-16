@@ -112,6 +112,8 @@ export async function quitPromptAcceptance(app, page, graphics) {
   try {
     await assertModifiedPromptIsNotClicked(app, pid, process);
     await app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; if (!window) throw new Error('The packaged TUS window is unavailable.'); window.close(); });
+    const exactPromptEvidence = await ui('assert-exact-body-recognized', pid);
+    assert.match(exactPromptEvidence, /^TUS_UIA: expected-body-recognized$/m, 'the exact native prompt body is recognized before clicking');
     const closePrompt = await ui('keep-open', pid);
     assert.match(closePrompt, /^TUS_UIA: exact-foreground-prompt-matched$/m, 'window-close prompt is the exact TUS dialog');
     assert.equal(process.exitCode, null, 'Keep the game open leaves the packaged process running');

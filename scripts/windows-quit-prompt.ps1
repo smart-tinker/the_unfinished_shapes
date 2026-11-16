@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory=$true)][ValidateSet('keep-open','quit-anyway','assert-body-mismatch-rejected','dismiss-test-prompt','file-menu-open','file-menu-exit')][string]$Action,
+  [Parameter(Mandatory=$true)][ValidateSet('keep-open','quit-anyway','assert-body-mismatch-rejected','assert-exact-body-recognized','dismiss-test-prompt','file-menu-open','file-menu-exit')][string]$Action,
   [Parameter(Mandatory=$true)][int]$ProcessId,
   [string]$MenuKey
 )
@@ -18,17 +18,25 @@ using System.Runtime.InteropServices;
 using System.Text;
 public static class TusWindowLookup {
   public static string LastPromptStatus = "not-checked";
+  public static List<string> LastPromptEvidence = new List<string>();
+  public static string LastPromptEvidenceText = "";
   private const uint WM_GETTEXT = 0x000D;
   private const uint BM_CLICK = 0x00F5;
   private const uint SMTO_ABORTIFHUNG = 0x0002;
   private const uint SMTO_BLOCK = 0x0001;
   private delegate bool EnumWindowsCallback(IntPtr window, IntPtr extraData);
   private sealed class PromptControl {
+    public int Index;
     public IntPtr Handle;
     public string ClassName;
+    public bool ClassRead;
     public string Text;
-    public PromptControl(IntPtr handle, string className, string text) {
-      Handle = handle; ClassName = className; Text = text;
+    public bool TextRead;
+    public int TextLength;
+    public bool TextCapHit;
+    public PromptControl(int index, IntPtr handle, string className, bool classRead, string text, bool textRead, int textLength, bool textCapHit) {
+      Index = index; Handle = handle; ClassName = className; ClassRead = classRead;
+      Text = text; TextRead = textRead; TextLength = textLength; TextCapHit = textCapHit;
     }
   }
   [DllImport("user32.dll")]
@@ -51,8 +59,26 @@ public static class TusWindowLookup {
     if (String.IsNullOrWhiteSpace(text)) return "";
     return String.Join(" ", text.Split((char[])null, StringSplitOptions.RemoveEmptyEntries));
   }
+  private static string SafeClassToken(string value) {
+    var token = new StringBuilder(24);
+    foreach (char c in value) {
+      if (c >= 'A' && c <= 'Z') token.Append((char)(c + ('a' - 'A')));
+      else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) token.Append(c);
+      if (token.Length == 24) break;
+    }
+    return token.Length == 0 ? "unknown" : token.ToString();
+  }
+  private static string ExpectedFieldToken(int index) {
+    if (index == 0) return "known-message";
+    if (index == 1) return "unknown-message";
+    if (index == 2) return "known-detail";
+    if (index == 3) return "unknown-detail";
+    return "candidate";
+  }
   public static IntPtr FindExpectedQuitButton(IntPtr dialog, string[] expectedMessages, string requestedButton) {
     LastPromptStatus = "invalid-window";
+    LastPromptEvidence.Clear();
+    LastPromptEvidenceText = "";
     if (dialog == IntPtr.Zero) return IntPtr.Zero;
     if (GetWindowTitle(dialog) != "Codex activity may continue") {
       LastPromptStatus = "title-mismatch";
@@ -60,14 +86,21 @@ public static class TusWindowLookup {
     }
     if (expectedMessages == null) return IntPtr.Zero;
     var controls = new List<PromptControl>();
+    int childIndex = 0;
     EnumChildWindows(dialog, (child, extraData) => {
+      int index = childIndex++;
       var className = new StringBuilder(64);
-      if (GetClassName(child, className, className.Capacity) == 0) return true;
+      int classLength = GetClassName(child, className, className.Capacity);
       var name = className.ToString();
       var text = new StringBuilder(512);
-      IntPtr ignored;
-      if (SendMessageTimeoutText(child, WM_GETTEXT, new IntPtr(text.Capacity), text, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out ignored) == IntPtr.Zero) return true;
-      controls.Add(new PromptControl(child, name, text.ToString()));
+      IntPtr returnedLength;
+      bool textRead = SendMessageTimeoutText(child, WM_GETTEXT, new IntPtr(text.Capacity), text,
+        SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out returnedLength) != IntPtr.Zero;
+      long length = returnedLength.ToInt64();
+      int textLength = length <= 0 ? 0 : length > Int32.MaxValue ? Int32.MaxValue : (int)length;
+      bool textCapHit = textLength >= text.Capacity - 1;
+      controls.Add(new PromptControl(index, child, name, classLength > 0,
+        textRead ? text.ToString() : "", textRead, textLength, textCapHit));
       return true;
     }, IntPtr.Zero);
     var buttons = new List<PromptControl>();
@@ -75,48 +108,75 @@ public static class TusWindowLookup {
     var messageTexts = new List<string>();
     IntPtr requested = IntPtr.Zero;
     foreach (var control in controls) {
+      var classToken = SafeClassToken(control.ClassName);
+      LastPromptEvidence.Add("child-" + control.Index + "-class-" + classToken +
+        "-" + (control.ClassRead ? "classread" : "classunread") +
+        "-" + (control.TextRead ? "textread" : "textunread") +
+        "-len-" + control.TextLength + "-" + (control.TextCapHit ? "capped" : "uncapped"));
+      if (!control.ClassRead) {
+        LastPromptEvidence.Add("child-" + control.Index + "-candidate-class-unread");
+        continue;
+      }
       if (control.ClassName != "Button") {
         var normalizedText = NormalizePromptText(control.Text);
         if (normalizedText.Length > 0) {
           hasReadableMessage = true;
           messageTexts.Add(normalizedText);
         }
-        foreach (var message in expectedMessages) {
-          if (String.Equals(normalizedText, NormalizePromptText(message), StringComparison.Ordinal)) hasExpectedMessage = true;
+        int candidate = -1;
+        for (int i = 0; i < expectedMessages.Length; i++) {
+          if (String.Equals(normalizedText, NormalizePromptText(expectedMessages[i]), StringComparison.Ordinal)) {
+            hasExpectedMessage = true;
+            candidate = i;
+            break;
+          }
         }
-      } else if (control.ClassName == "Button") {
+        LastPromptEvidence.Add("child-" + control.Index + "-candidate-" +
+          (candidate < 0 ? (control.TextRead ? "none" : "unreadable") : ExpectedFieldToken(candidate)));
+      } else {
         buttons.Add(control);
         if (control.Text == "Keep the game open") hasKeepOpen = true;
         if (control.Text == "Quit anyway") hasQuitAnyway = true;
         if (control.Text == requestedButton) requested = control.Handle;
+        LastPromptEvidence.Add("child-" + control.Index + "-candidate-button");
       }
     }
     if (buttons.Count != 2) {
       LastPromptStatus = "button-count-mismatch";
+      LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
       return IntPtr.Zero;
     }
     if (!hasKeepOpen || !hasQuitAnyway) {
       LastPromptStatus = "expected-buttons-missing";
+      LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
       return IntPtr.Zero;
     }
     if (requested == IntPtr.Zero) {
       LastPromptStatus = "requested-button-missing";
+      LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
       return IntPtr.Zero;
     }
     if (!hasExpectedMessage && expectedMessages.Length >= 4) {
       var knownBody = NormalizePromptText(expectedMessages[0] + " " + expectedMessages[2]);
       var unknownBody = NormalizePromptText(expectedMessages[1] + " " + expectedMessages[3]);
       foreach (var text in messageTexts) {
-        if (String.Equals(text, knownBody, StringComparison.Ordinal) ||
-            String.Equals(text, unknownBody, StringComparison.Ordinal)) hasCombinedExpectedBody = true;
+        if (String.Equals(text, knownBody, StringComparison.Ordinal)) {
+          hasCombinedExpectedBody = true;
+          LastPromptEvidence.Add("candidate-combined-known-exact");
+        } else if (String.Equals(text, unknownBody, StringComparison.Ordinal)) {
+          hasCombinedExpectedBody = true;
+          LastPromptEvidence.Add("candidate-combined-unknown-exact");
+        }
       }
     }
     if (!hasExpectedMessage) {
       LastPromptStatus = hasCombinedExpectedBody ? "expected-message-combined" :
         hasReadableMessage ? "expected-message-mismatch" : "expected-message-unavailable";
+      LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
       return IntPtr.Zero;
     }
     LastPromptStatus = "matched";
+    LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
     return requested;
   }
   public static bool ClickNativePromptButton(IntPtr button) {
@@ -128,6 +188,12 @@ public static class TusWindowLookup {
 }
 '@
 Write-Output 'TUS_UIA: window-api-ready'
+function Write-PromptEvidence {
+  $evidence = [TusWindowLookup]::LastPromptEvidenceText
+  if ([string]::IsNullOrWhiteSpace($evidence)) { $evidence = 'none' }
+  if ($evidence.Length -gt 512) { $evidence = $evidence.Substring(0, 512) }
+  Write-Output "TUS_UIA: evidence-$evidence"
+}
 $expectedMessages = [string[]]@(
   'Codex may still be working in this conversation.',
   'The current Codex activity is unknown.',
@@ -155,6 +221,7 @@ switch ($Action) {
           $quitButton = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, $buttonName)
           $promptStatus = [TusWindowLookup]::LastPromptStatus
           if ($quitButton -ne [IntPtr]::Zero) {
+            Write-PromptEvidence
             Write-Output 'TUS_UIA: exact-foreground-prompt-matched'
             Write-Output 'TUS_UIA: dialog-accessible'
             $script:uiPhase = 'clicking-native-button'
@@ -168,9 +235,25 @@ switch ($Action) {
       }
       Start-Sleep -Milliseconds 100
     }
+    Write-PromptEvidence
     Write-Output 'TUS_UIA: quit-dialog-not-found'
     Write-Output "TUS_UIA: prompt-$promptStatus"
     exit 2
+  }
+  'assert-exact-body-recognized' {
+    $script:uiPhase = 'checking-exact-prompt-body'
+    $foregroundHandle = [TusWindowLookup]::GetForegroundWindow()
+    if ($foregroundHandle -eq [IntPtr]::Zero -or [TusWindowLookup]::GetWindowTitle($foregroundHandle) -ne 'Codex activity may continue') {
+      Write-Output 'TUS_UIA: expected-foreground-prompt-unavailable'
+      exit 2
+    }
+    $button = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, 'Keep the game open')
+    Write-PromptEvidence
+    if ($button -eq [IntPtr]::Zero) {
+      Write-Output "TUS_UIA: expected-body-$([TusWindowLookup]::LastPromptStatus)"
+      exit 2
+    }
+    Write-Output 'TUS_UIA: expected-body-recognized'
   }
   'assert-body-mismatch-rejected' {
     $script:uiPhase = 'checking-modified-prompt-body'
@@ -180,6 +263,7 @@ switch ($Action) {
       exit 2
     }
     $button = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, 'Keep the game open')
+    Write-PromptEvidence
     if ($button -ne [IntPtr]::Zero) {
       Write-Output 'TUS_UIA: modified-body-button-returned'
       exit 2
