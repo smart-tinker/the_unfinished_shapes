@@ -535,13 +535,15 @@ switch ($Action) {
 [Console]::Out.Flush()
 [Console]::Out.Write('TUS_UIA_CHILD: phase-payload-read-start-partial')
 [Console]::Out.Flush()
-Start-Sleep -Seconds 10
+Start-Sleep -Seconds 5
 '@
     $result = Get-UiaPromptBodyResult -WindowHandle ([IntPtr]::Zero) -ExpectedMessages @('fixture-message') -ExpectedDetails @('fixture-detail') -GoalStatusPrefix 'fixture-prefix' -ChildScriptOverride $testChildScript
     if ($result -eq 'timeout-phase-child-start') {
       Write-Output 'TUS_UIA_TEST: safe-phase-preserved'
+    } elseif ($result -like 'timeout-*') {
+      Write-Output 'TUS_UIA_TEST: timeout-phase-not-preserved'
     } else {
-      Write-Output 'TUS_UIA_TEST: safe-phase-missing'
+      Write-Output 'TUS_UIA_TEST: process-timeout-not-observed'
     }
   }
   'file-menu-open' {
