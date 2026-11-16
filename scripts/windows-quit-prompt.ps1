@@ -188,13 +188,31 @@ function Get-UiaPromptBodyResult {
   )
   $childScript = @'
 $ErrorActionPreference = 'Stop'
+[Console]::Out.WriteLine('TUS_UIA_CHILD: phase-child-start')
+[Console]::Out.Flush()
 try {
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-payload-read-start')
+  [Console]::Out.Flush()
   $payloadLine = [Console]::In.ReadLine()
   if ([string]::IsNullOrWhiteSpace($payloadLine)) { throw 'payload-unavailable' }
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-payload-read-done')
+  [Console]::Out.Flush()
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-payload-parse-start')
+  [Console]::Out.Flush()
   $payloadJson = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($payloadLine))
   $payload = ConvertFrom-Json -InputObject $payloadJson
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-payload-parse-done')
+  [Console]::Out.Flush()
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-addtype-types-start')
+  [Console]::Out.Flush()
   Add-Type -AssemblyName UIAutomationTypes
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-addtype-types-done')
+  [Console]::Out.Flush()
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-addtype-client-start')
+  [Console]::Out.Flush()
   Add-Type -AssemblyName UIAutomationClient
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-addtype-client-done')
+  [Console]::Out.Flush()
   [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-fromhandle-start')
   [Console]::Out.Flush()
   $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]([long]$payload.handle))
@@ -435,8 +453,8 @@ switch ($Action) {
     if ($script:uiaPromptTimeoutPhase -ne 'none') {
       Write-Output "TUS_UIA: prompt-reader-timeout-$script:uiaPromptTimeoutPhase"
     }
-    if ($status -notin @('expected-body-mismatch', 'expected-body-unavailable', 'expected-body-timeout')) {
-      Write-Output "TUS_UIA: prompt-$status"
+    if ($status -ne 'expected-body-mismatch') {
+      Write-Output 'TUS_UIA: modified-body-unverified'
       exit 2
     }
     Write-Output 'TUS_UIA: modified-body-rejected'

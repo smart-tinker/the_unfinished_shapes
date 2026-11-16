@@ -106,6 +106,9 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
   assert.match(uia, /GetNextSibling/);
   assert.match(uia, /detail/);
   assert.match(uia, /TUS_UIA_CHILD: phase-fromhandle-start/);
+  for (const marker of ['phase-child-start', 'phase-payload-read-start', 'phase-payload-parse-start', 'phase-addtype-types-start', 'phase-addtype-client-start']) {
+    assert.ok(uia.includes('TUS_UIA_CHILD: ' + marker), 'UIA child reports ' + marker);
+  }
   assert.match(uia, /TUS_UIA_CHILD: phase-findfirst-\' \+ \$index \+ \'-start/);
   assert.match(uia, /TUS_UIA_CHILD: phase-current-name-\' \+ \$index \+ \'-start/);
   assert.match(uia, /TUS_UIA_CHILD: phase-next-sibling-/);
