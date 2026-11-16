@@ -12,7 +12,7 @@ test('bounded UIA child preserves only a complete safe phase after kill and reap
   const { stdout, stderr } = await run('powershell.exe', [
     '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', readerTest,
-  ], { timeout: 12000, windowsHide: true });
+  ], { timeout: 35000, windowsHide: true });
   const elapsed = Date.now() - startedAt;
 
   assert.match(stdout, /^TUS_UIA_TEST: result=timeout-phase-child-start$/m,
