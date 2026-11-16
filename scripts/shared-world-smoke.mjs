@@ -9,6 +9,7 @@ import { observeGraphics, closeSmokeApp, withSmokeCleanup } from './graphics-smo
 
 import { stopServerProcess } from './server-smoke-process.mjs';
 import { selectObject } from './ui-acceptance.mjs';
+import { safeJumpTrace } from './shared-world-trace.mjs';
 
 const dir = await mkdtemp(path.join(os.tmpdir(), 'tus-shared-'));
 const tokens = { alice: randomBytes(24).toString('hex'), bob: randomBytes(24).toString('hex') };
@@ -44,6 +45,19 @@ async function worldCommand(id, command) {
   const response = await fetch(url + '/command', { method: 'POST', headers: { Authorization: 'Bearer ' + tokens[id], 'Content-Type': 'application/json' }, body: JSON.stringify(command), signal: AbortSignal.timeout(5000) });
   assert.equal(response.status, 200);
   return response.json();
+}
+async function reportJumpTrace(client) {
+  const observed = await client.page.evaluate(() => {
+    const trace = window.__TUS_SMOKE_JUMP_TRACE_STATE;
+    return trace && typeof trace === 'object'
+      ? { spaceKeydown: trace.spaceKeydown, jumpRequested: trace.jumpRequested, firstMoveJump: trace.firstMoveJump }
+      : {};
+  }).catch(() => ({}));
+  const snapshot = await state(client.id).catch(() => null);
+  const serverPlayer = Array.isArray(snapshot?.players) ? snapshot.players.find(player => player.id === client.id) : null;
+  const trace = safeJumpTrace({ ...observed, serverPlayer });
+  console.log('TUS_JUMP_TRACE ' + JSON.stringify(trace));
+  return trace;
 }
 async function waitForState(predicate, description, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
@@ -246,6 +260,17 @@ await withSmokeCleanup(async () => {
   await focus(alice);
   await alice.page.keyboard.up('d');
   await alice.page.keyboard.down('d');
+  await alice.page.evaluate(() => {
+    const trace = { spaceKeydown: false, jumpRequested: null, firstMoveJump: null };
+    window.__TUS_SMOKE_JUMP_TRACE_STATE = trace;
+    window.__TUS_SMOKE_JUMP_TRACE = (event, value) => {
+      if (event === 'jumpRequested') trace.jumpRequested = value;
+      if (event === 'move.jump' && trace.spaceKeydown && trace.firstMoveJump === null) trace.firstMoveJump = value;
+    };
+    window.addEventListener('keydown', event => {
+      if (event.code === 'Space') trace.spaceKeydown = true;
+    }, { capture: true, once: true });
+  });
   await alice.page.keyboard.down('Space');
   try {
     await alice.page.waitForFunction(() => {
@@ -253,16 +278,18 @@ await withSmokeCleanup(async () => {
       const x = Number(parts?.[0]?.slice(2)), y = Number(parts?.[1]?.slice(2));
       return Number.isFinite(x) && Number.isFinite(y) && x >= 15 && x < 17 && y > 0;
     }, undefined, { polling: 'raf', timeout: 5000 });
-  } catch (error) {
-    const client = await alice.page.evaluate(() => ({
-      focused: document.hasFocus(),
-      coordinates: document.querySelector('#coordinates')?.textContent || '',
-      connected: document.querySelector('#connection')?.textContent || '',
-    }));
-    const server = await state().catch(failure => ({ error: failure.message }));
-    const serverPlayer = server.error ? server : server.players.find(player => player.id === 'alice');
-    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer));
+    await reportJumpTrace(alice);
+  } catch {
+    const trace = await reportJumpTrace(alice);
+    assert.equal(trace.spaceKeydown, true, 'Space keydown trace is missing');
+    assert.equal(trace.jumpRequested, true, 'local jumpRequested trace is missing');
+    assert.equal(typeof trace.firstMoveJump, 'boolean', 'first move.jump trace is missing');
+    throw new Error('Shared-world jump did not reach airborne acceptance within the existing 5000ms timeout.');
   } finally {
+    await alice.page.evaluate(() => {
+      delete window.__TUS_SMOKE_JUMP_TRACE;
+      delete window.__TUS_SMOKE_JUMP_TRACE_STATE;
+    }).catch(() => {});
     await alice.page.keyboard.up('Space');
     await alice.page.keyboard.up('d');
   }
