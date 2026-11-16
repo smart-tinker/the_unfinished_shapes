@@ -286,3 +286,39 @@ test('UIA wrapper phases are flushed and safely reach mutation evidence', async 
     'only allowlisted wrapper phases reach the mutation outcome parser');
   assert.match(mutationProbe, /console\.log\('TUS_UIA_TEST: detail-probe-' \+ matcherOutcome\)/);
 });
+
+
+
+test('UIA child wait and cleanup phases are fixed safe diagnostics', async () => {
+  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
+  const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
+  const { safeUiFailureOutcome } = await import('../scripts/quit-prompt-acceptance.mjs');
+  const phases = [
+    'ui-child-killing', 'ui-child-kill-waiting', 'ui-child-exit-checking',
+    'ui-child-output-draining', 'ui-child-finally-exit-checking',
+    'ui-child-finally-killing', 'ui-child-finally-waiting', 'ui-child-disposing',
+  ];
+  for (const phase of phases) {
+    assert.equal(safeUiFailureOutcome([phase]), phase, phase + ' is a fixed safe failure outcome');
+  }
+
+  const writerStart = windowsUI.indexOf('function Write-UiaPhaseMarker');
+  const writerEnd = windowsUI.indexOf('function Write-PromptEvidence', writerStart);
+  const markerWriter = windowsUI.slice(writerStart, writerEnd);
+  for (const phase of phases) assert.ok(markerWriter.includes("'" + phase + "'"), phase + ' is allowlisted');
+
+  const uia = windowsUI.slice(
+    windowsUI.indexOf('function Get-UiaPromptBodyResult'),
+    windowsUI.indexOf('function Find-ValidatedPromptButton'),
+  );
+  for (const phase of phases) assert.ok(uia.includes("Write-UiaPhaseMarker '" + phase + "'"), phase + ' is emitted');
+  assert.match(uia, /Write-UiaPhaseMarker 'ui-child-killing'\\s+try \\{ \\$process\\.Kill\\(\\) \\} catch \\{\\}/);
+  assert.match(uia, /Write-UiaPhaseMarker 'ui-child-kill-waiting'\\s+try \\{ \\[void\\]\\$process\\.WaitForExit\\(1000\\) \\} catch \\{\\}/);
+  assert.match(uia, /Write-UiaPhaseMarker 'ui-child-output-draining'\\s+\\$process\\.WaitForExit\\(\\)/);
+
+  const mutationProbe = automation.slice(
+    automation.indexOf('async function assertModifiedPromptIsNotClicked'),
+    automation.indexOf('async function assertKnownStatusDetailIsRecognized'),
+  );
+  for (const phase of phases) assert.ok(mutationProbe.includes(phase), phase + ' is allowlisted in mutation evidence');
+});
