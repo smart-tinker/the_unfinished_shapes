@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory=$true)][ValidateSet('keep-open','quit-anyway','dismiss-test-prompt','file-menu-open','file-menu-exit')][string]$Action,
+  [Parameter(Mandatory=$true)][ValidateSet('keep-open','quit-anyway','assert-body-mismatch-rejected','dismiss-test-prompt','file-menu-open','file-menu-exit')][string]$Action,
   [Parameter(Mandatory=$true)][int]$ProcessId,
   [string]$MenuKey
 )
@@ -138,15 +138,15 @@ function Test-ExactPromptText([IntPtr]$dialog, [string[]]$expectedMessages) {
   return $false
 }
 Write-Output 'TUS_UIA: window-api-ready'
+$expectedMessages = [string[]]@(
+  'Codex may still be working in this conversation.',
+  'The current Codex activity is unknown.',
+  'Quitting TUS closes its Codex connection but does not confirm that a Goal or turn stopped.',
+  'Codex state could not be confirmed. Keep the game open and reconnect to check the conversation, or quit anyway.'
+)
 switch ($Action) {
   { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {
     $buttonName = if ($Action -eq 'keep-open') { 'Keep the game open' } else { 'Quit anyway' }
-    $expectedMessages = [string[]]@(
-      'Codex may still be working in this conversation.',
-      'The current Codex activity is unknown.',
-      'Quitting TUS closes its Codex connection but does not confirm that a Goal or turn stopped.',
-      'Codex state could not be confirmed. Keep the game open and reconnect to check the conversation, or quit anyway.'
-    )
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     $promptStatus = 'foreground-window-unavailable'
     $reportedTitleMatch = $false
@@ -186,6 +186,24 @@ switch ($Action) {
     Write-Output 'TUS_UIA: quit-dialog-not-found'
     Write-Output "TUS_UIA: prompt-$promptStatus"
     exit 2
+  }
+  'assert-body-mismatch-rejected' {
+    $script:uiPhase = 'checking-modified-prompt-body'
+    $foregroundHandle = [TusWindowLookup]::GetForegroundWindow()
+    if ($foregroundHandle -eq [IntPtr]::Zero -or [TusWindowLookup]::GetWindowTitle($foregroundHandle) -ne 'Codex activity may continue') {
+      Write-Output 'TUS_UIA: expected-foreground-prompt-unavailable'
+      exit 2
+    }
+    $button = [TusWindowLookup]::FindExpectedQuitButton($foregroundHandle, $expectedMessages, 'Keep the game open')
+    if ($button -ne [IntPtr]::Zero) {
+      Write-Output 'TUS_UIA: modified-body-button-returned'
+      exit 2
+    }
+    if ([TusWindowLookup]::LastPromptStatus -ne 'expected-message-missing') {
+      Write-Output "TUS_UIA: prompt-$([TusWindowLookup]::LastPromptStatus)"
+      exit 2
+    }
+    Write-Output 'TUS_UIA: modified-body-rejected'
   }
   'dismiss-test-prompt' {
     $script:uiPhase = 'dismissing-test-prompt'

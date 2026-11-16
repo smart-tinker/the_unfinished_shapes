@@ -54,6 +54,10 @@ async function assertModifiedPromptIsNotClicked(app, pid, process) {
     window.close();
   });
 
+  const nativeMatcherResult = await ui('assert-body-mismatch-rejected', pid);
+  assert.match(nativeMatcherResult, /^TUS_UIA: modified-body-rejected$/m,
+    'the bounded native matcher rejects exact-title/exact-button dialogs with an unknown body');
+
   let failure;
   try { await ui('keep-open', pid); }
   catch (error) { failure = error; }
