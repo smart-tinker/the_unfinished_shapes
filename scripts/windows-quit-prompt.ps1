@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory=$true)][ValidateSet('keep-open','quit-anyway','assert-body-mismatch-rejected','assert-exact-body-recognized','dismiss-test-prompt','file-menu-open','file-menu-exit')][string]$Action,
+  [Parameter(Mandatory=$true)][ValidateSet('keep-open','quit-anyway','assert-body-mismatch-rejected','assert-exact-body-recognized','dismiss-test-prompt','assert-bounded-child-timeout','file-menu-open','file-menu-exit')][string]$Action,
   [Parameter(Mandatory=$true)][int]$ProcessId,
   [string]$MenuKey
 )
@@ -198,7 +198,8 @@ function Get-UiaPromptBodyResult {
     [Parameter(Mandatory=$true)][IntPtr]$WindowHandle,
     [Parameter(Mandatory=$true)][string[]]$ExpectedMessages,
     [Parameter(Mandatory=$true)][string[]]$ExpectedDetails,
-    [Parameter(Mandatory=$true)][string]$GoalStatusPrefix
+    [Parameter(Mandatory=$true)][string]$GoalStatusPrefix,
+    [string]$ChildScriptOverride = ''
   )
   $childScript = @'
 $ErrorActionPreference = 'Stop'
@@ -300,6 +301,7 @@ try {
   exit 1
 }
 '@
+  if (-not [string]::IsNullOrEmpty($ChildScriptOverride)) { $childScript = $ChildScriptOverride }
   $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childScript))
   $startInfo = New-Object System.Diagnostics.ProcessStartInfo
   $startInfo.FileName = Join-Path $PSHOME 'powershell.exe'
@@ -520,6 +522,23 @@ switch ($Action) {
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
     Write-Output 'TUS_UIA: test-prompt-dismissed'
+  }
+  'assert-bounded-child-timeout' {
+    $testChildScript = @'
+[Console]::Out.WriteLine('TUS_UIA_CHILD: phase-child-start')
+[Console]::Out.Flush()
+[Console]::Out.WriteLine('UNAPPROVED_PROMPT_TEST_PAYLOAD')
+[Console]::Out.Flush()
+[Console]::Out.Write('TUS_UIA_CHILD: phase-payload-read-start-partial')
+[Console]::Out.Flush()
+Start-Sleep -Seconds 10
+'@
+    $result = Get-UiaPromptBodyResult -WindowHandle ([IntPtr]::Zero) -ExpectedMessages @() -ExpectedDetails @() -GoalStatusPrefix '' -ChildScriptOverride $testChildScript
+    if ($result -eq 'timeout-phase-child-start') {
+      Write-Output 'TUS_UIA_TEST: safe-phase-preserved'
+    } else {
+      Write-Output 'TUS_UIA_TEST: safe-phase-missing'
+    }
   }
   'file-menu-open' {
     $script:uiPhase = 'locating-main-window'
