@@ -322,7 +322,7 @@ test('UIA child wait and cleanup phases are fixed safe diagnostics', async () =>
   const killWait = uia.indexOf("Write-UiaPhaseMarker 'ui-child-kill-waiting'");
   assert.ok(killWait >= 0 && killWait < uia.indexOf('[void]$process.WaitForExit(1000)', killWait));
   const draining = uia.indexOf("Write-UiaPhaseMarker 'ui-child-output-draining'");
-  assert.ok(draining >= 0 && draining < uia.indexOf('$process.WaitForExit()', draining));
+  assert.ok(draining >= 0, 'the child output-drain phase remains visible');
 
   const mutationProbe = automation.slice(
     automation.indexOf('async function assertModifiedPromptIsNotClicked'),
@@ -332,4 +332,22 @@ test('UIA child wait and cleanup phases are fixed safe diagnostics', async () =>
   assert.ok(safeOutcomeSource, 'mutation probe retains a fixed safe outcome parser');
   const safeOutcomeMatcher = new RegExp(safeOutcomeSource[1], 'i');
   for (const phase of phases) assert.ok(safeOutcomeMatcher.test(phase), phase + ' is allowlisted in mutation evidence');
+});
+
+
+test('UIA process and output drain share the bounded three-second budget', async () => {
+  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
+  const uia = windowsUI.slice(
+    windowsUI.indexOf('function Get-UiaPromptBodyResult'),
+    windowsUI.indexOf('function Find-ValidatedPromptButton'),
+  );
+  assert.ok(!uia.includes('$process.WaitForExit()'), 'no process wait is unbounded');
+  assert.ok(!uia.includes('$process.WaitForExit(1000)'), 'cleanup does not add a fixed wait outside the budget');
+  assert.ok(uia.includes('$outputReadComplete.Set()'), 'stdout EOF signals completion');
+  assert.ok(uia.includes('$outputReadComplete.WaitOne($remaining)'), 'output drain uses the remaining budget');
+  assert.ok(uia.includes("if ($remaining -le 0 -or -not $outputReadComplete.WaitOne($remaining)) { return 'unavailable' }"),
+    'an incomplete output drain remains fail-closed');
+  assert.ok(uia.includes('$process.WaitForExit($remaining)'), 'process exit uses the remaining budget');
+  const deadline = '$remaining = 3000 - [int]$watch.ElapsedMilliseconds';
+  assert.ok(uia.split(deadline).length - 1 >= 3, 'each cleanup wait recomputes the original three-second deadline');
 });
