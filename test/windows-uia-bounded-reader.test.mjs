@@ -5,16 +5,22 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const run = promisify(execFile);
-const automationScript = fileURLToPath(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url));
+const readerTest = fileURLToPath(new URL('./windows-uia-bounded-reader.ps1', import.meta.url));
 
-test('bounded UIA child keeps only a complete safe phase captured before timeout', { skip: process.platform !== 'win32' }, async () => {
+test('bounded UIA child preserves only a complete safe phase after kill and reap', { skip: process.platform !== 'win32' }, async () => {
+  const startedAt = Date.now();
   const { stdout, stderr } = await run('powershell.exe', [
     '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-    '-File', automationScript, '-Action', 'assert-bounded-child-timeout', '-ProcessId', '0',
-  ], { timeout: 10000, windowsHide: true });
+    '-File', readerTest,
+  ], { timeout: 12000, windowsHide: true });
+  const elapsed = Date.now() - startedAt;
 
-  assert.match(stdout, /^TUS_UIA_TEST: safe-phase-preserved$/m,
-    'a complete allowlisted phase survives timeout and bounded child reap');
-  assert.doesNotMatch(stdout + stderr, /UNAPPROVED_PROMPT_TEST_PAYLOAD|phase-payload-read-start-partial/,
-    'unapproved or partial child output is never surfaced');
+  assert.match(stdout, /^TUS_UIA_TEST: result=timeout-phase-child-start$/m,
+    'the complete allowlisted phase is retained after the timed-out child is reaped');
+  for (const phase of ['ui-child-killing', 'ui-child-kill-waiting', 'ui-child-exit-checking']) {
+    assert.match(stdout, new RegExp('^TUS_UIA: ' + phase + '$', 'm'), phase + ' is exercised');
+  }
+  assert.doesNotMatch(stdout + stderr, /UNAPPROVED_PROMPT_TEST_PAYLOAD|phase-unapproved-test-output|phase-payload-read-start-partial/,
+    'arbitrary and unterminated child output is never surfaced');
+  assert.ok(elapsed < 8000, 'the timeout, kill, reap and output drain remain bounded');
 });

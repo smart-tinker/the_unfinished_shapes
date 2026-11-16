@@ -95,9 +95,7 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
   assert.match(expectedBlock, /Codex state could not be confirmed/);
   assert.match(expectedBlock, /Native Goal status:/);
 
-  const uiaStart = windowsUI.indexOf('function Get-UiaPromptBodyResult');
-  const uiaEnd = windowsUI.indexOf('function Find-ValidatedPromptButton', uiaStart);
-  const uia = windowsUI.slice(uiaStart, uiaEnd);
+  const uia = await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8');
   assert.match(uia, /TreeScope\]::Children/);
   assert.match(uia, /\.FindFirst\(/);
   assert.match(uia, /GetNextSibling/);
@@ -266,10 +264,7 @@ test('UIA wrapper phases are flushed and safely reach mutation evidence', async 
   assert.match(markerWriter, /\[Console\]::Out\.Flush\(\)/);
   assert.doesNotMatch(markerWriter, /Write-Output/);
 
-  const uia = windowsUI.slice(
-    windowsUI.indexOf('function Get-UiaPromptBodyResult'),
-    windowsUI.indexOf('function Find-ValidatedPromptButton'),
-  );
+  const uia = await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8');
   const phaseIndexes = [
     'ui-child-starting', 'ui-child-started', 'ui-payload-preparing', 'ui-payload-ready',
     'ui-payload-writing', 'ui-payload-written', 'ui-child-waiting', 'ui-child-finished',
@@ -312,10 +307,7 @@ test('UIA child wait and cleanup phases are fixed safe diagnostics', async () =>
   const markerWriter = windowsUI.slice(writerStart, writerEnd);
   for (const phase of phases) assert.ok(markerWriter.includes("'" + phase + "'"), phase + ' is allowlisted');
 
-  const uia = windowsUI.slice(
-    windowsUI.indexOf('function Get-UiaPromptBodyResult'),
-    windowsUI.indexOf('function Find-ValidatedPromptButton'),
-  );
+  const uia = await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8');
   for (const phase of phases) assert.ok(uia.includes("Write-UiaPhaseMarker '" + phase + "'"), phase + ' is emitted');
   const killing = uia.indexOf("Write-UiaPhaseMarker 'ui-child-killing'");
   assert.ok(killing >= 0 && killing < uia.indexOf('try { $process.Kill() } catch {}', killing));
@@ -337,10 +329,7 @@ test('UIA child wait and cleanup phases are fixed safe diagnostics', async () =>
 
 test('UIA output drain stays bounded and cleanup reaps remain capped', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
-  const uia = windowsUI.slice(
-    windowsUI.indexOf('function Get-UiaPromptBodyResult'),
-    windowsUI.indexOf('function Find-ValidatedPromptButton'),
-  );
+  const uia = await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8');
   assert.ok(!uia.includes('$process.WaitForExit()'), 'no process wait is unbounded');
   assert.equal(uia.split('$process.WaitForExit(1000)').length - 1, 2, 'both bounded child-reap waits remain');
 
