@@ -241,3 +241,46 @@ test('safe UIA failure classification distinguishes a child that reached the win
   assert.equal(safeUiFailureOutcome(['script-start', 'window-api-ready', 'private dialog text']) === 'window-api-ready-no-status', true,
     'only allowlisted tokens can become CI evidence');
 });
+
+
+test('UIA wrapper phases are flushed and safely reach mutation evidence', async () => {
+  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
+  const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
+  const { safeUiFailureOutcome } = await import('../scripts/quit-prompt-acceptance.mjs');
+  assert.equal(safeUiFailureOutcome(['ui-child-starting']), 'ui-child-starting',
+    'a fixed UIA process phase is retained by the safe whitelist');
+
+  const writerStart = windowsUI.indexOf('function Write-UiaPhaseMarker');
+  const writerEnd = windowsUI.indexOf('function Write-PromptEvidence', writerStart);
+  assert.ok(writerStart >= 0 && writerEnd > writerStart, 'the UIA wrapper emits fixed phase markers');
+  const markerWriter = windowsUI.slice(writerStart, writerEnd);
+  for (const phase of [
+    'ui-child-starting', 'ui-child-started', 'ui-payload-preparing', 'ui-payload-ready',
+    'ui-payload-writing', 'ui-payload-written', 'ui-child-waiting', 'ui-child-finished',
+  ]) {
+    assert.ok(markerWriter.includes("'" + phase + "'"), 'the marker writer allows ' + phase);
+  }
+  assert.match(markerWriter, /\[Console\]::Out\.WriteLine/);
+  assert.match(markerWriter, /\[Console\]::Out\.Flush\(\)/);
+  assert.doesNotMatch(markerWriter, /Write-Output/);
+
+  const uia = windowsUI.slice(
+    windowsUI.indexOf('function Get-UiaPromptBodyResult'),
+    windowsUI.indexOf('function Find-ValidatedPromptButton'),
+  );
+  const phaseIndexes = [
+    'ui-child-starting', 'ui-child-started', 'ui-payload-preparing', 'ui-payload-ready',
+    'ui-payload-writing', 'ui-payload-written', 'ui-child-waiting', 'ui-child-finished',
+  ].map(phase => uia.indexOf("Write-UiaPhaseMarker '" + phase + "'"));
+  assert.ok(phaseIndexes.every((index, i) => index >= 0 && (i === 0 || index > phaseIndexes[i - 1])),
+    'flushed wrapper markers bracket start, payload and wait operations in order');
+
+  const ui = automation.slice(automation.indexOf('async function ui'), automation.indexOf('async function assertModifiedPromptIsNotClicked'));
+  const mutationProbe = automation.slice(automation.indexOf('async function assertModifiedPromptIsNotClicked'), automation.indexOf('async function assertKnownStatusDetailIsRecognized'));
+  assert.match(ui, /safeUiFailureOutcome\(markers\.slice\(-3\)/,
+    'UI errors reduce captured markers through the safe classifier');
+  assert.doesNotMatch(ui, /stderrLine|error\.message/);
+  assert.ok(mutationProbe.includes('ui-(?:child-(?:starting|started|waiting|finished)|payload-(?:preparing|ready|writing|written))'),
+    'only allowlisted wrapper phases reach the mutation outcome parser');
+  assert.match(mutationProbe, /console\.log\('TUS_UIA_TEST: detail-probe-' \+ matcherOutcome\)/);
+});
