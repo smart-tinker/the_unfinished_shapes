@@ -22,11 +22,12 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.doesNotMatch(windowsUI, /GetForegroundOwnedWindow|foreground-window-not-owned/);
 
   assert.match(windowsUI, /\$foregroundHandle = \[TusWindowLookup\]::GetForegroundWindow\(\)/);
-  assert.match(windowsUI, /AutomationElement\]::FromHandle/);
-  assert.match(windowsUI, /PropertyCondition/);
-  assert.match(windowsUI, /AutomationElement\]::NameProperty/);
-  assert.match(windowsUI, /FindFirst\(/);
-  assert.doesNotMatch(windowsUI, /\.FindAll\(/);
+  const titleStart = windowsUI.indexOf('public static string GetWindowTitle');
+  const titleEnd = windowsUI.indexOf('private static string NormalizePromptText', titleStart);
+  const titleReader = windowsUI.slice(titleStart, titleEnd);
+  assert.match(titleReader, /SendMessageTimeoutText/);
+  assert.match(titleReader, /WM_GETTEXT/);
+  assert.match(titleReader, /SMTO_ABORTIFHUNG\s*\|\s*SMTO_BLOCK,\s*1000/);
   assert.match(windowsUI, /SendMessageTimeoutText/);
   assert.match(windowsUI, /SMTO_ABORTIFHUNG\s*\|\s*SMTO_BLOCK,\s*1000/);
   assert.match(windowsUI, /FindExpectedQuitButton/);
@@ -36,11 +37,10 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   const foregroundEnd = windowsUI.indexOf("\n  'file-menu-open' {", foregroundStart);
   const foregroundLookup = windowsUI.slice(foregroundStart, foregroundEnd);
   const exactTitleGate = foregroundLookup.indexOf("GetWindowTitle($foregroundHandle) -eq 'Codex activity may continue'");
-  const exactTextGate = foregroundLookup.indexOf('if (Test-ExactPromptText');
   const nativeButtonFind = foregroundLookup.indexOf('[TusWindowLookup]::FindExpectedQuitButton');
   const nativeButtonClick = foregroundLookup.indexOf('[TusWindowLookup]::ClickNativePromptButton');
-  assert.ok(exactTitleGate >= 0 && exactTitleGate < exactTextGate && exactTextGate < nativeButtonFind && nativeButtonFind < nativeButtonClick,
-    'only the exact TUS dialog title and body reach native button automation');
+  assert.ok(exactTitleGate >= 0 && exactTitleGate < nativeButtonFind && nativeButtonFind < nativeButtonClick,
+    'only the exact TUS dialog title and native prompt match reach the click');
   assert.match(windowsUI, /TUS_UIA: exact-foreground-prompt-matched/);
   assert.doesNotMatch(foregroundLookup, /GetProcessWindows|GetWindowThreadProcessId/);
 
@@ -79,7 +79,6 @@ test('Windows quit UI reports its latest safe phase when native automation times
   assert.match(windowsUI, /automation-error-\$errorType-at-\$script:uiPhase/);
   assert.match(windowsUI, /\$script:uiPhase = 'checking-foreground-window'/);
   assert.match(windowsUI, /\$script:uiPhase = 'reading-foreground-title'/);
-  assert.match(windowsUI, /\$script:uiPhase = 'checking-exact-dialog-text'/);
   assert.match(windowsUI, /\$script:uiPhase = 'checking-exact-dialog-buttons'/);
   assert.match(windowsUI, /TUS_UIA: prompt-\$promptStatus/);
   assert.doesNotMatch(windowsUI, /GetProcessWindows|reading-owned-window/);
@@ -95,18 +94,13 @@ test('native prompt acceptance uses bounded exact title, text and button checks'
   const promptStart = windowsUI.indexOf("  { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {");
   const promptEnd = windowsUI.indexOf("\n  'file-menu-open' {", promptStart);
   const prompt = windowsUI.slice(promptStart, promptEnd);
-  assert.match(windowsUI, /PropertyCondition/);
-  assert.match(windowsUI, /AutomationElement\]::NameProperty/);
-  assert.match(windowsUI, /FindFirst\(/);
-  assert.match(windowsUI, /FindFirst\(\[System\.Windows\.Automation\.TreeScope\]::Children, \$condition\)/);
-  assert.doesNotMatch(windowsUI, /\.FindAll\(/);
   assert.match(windowsUI, /SMTO_ABORTIFHUNG\s*\|\s*SMTO_BLOCK,\s*1000/);
   assert.match(windowsUI, /GetWindowTitle\(dialog\) != "Codex activity may continue"/);
   assert.match(windowsUI, /buttons\.Count != 2/);
   assert.match(windowsUI, /control\.Text == "Keep the game open"/);
   assert.match(windowsUI, /control\.Text == "Quit anyway"/);
-  assert.ok(prompt.indexOf('if (Test-ExactPromptText') >= 0 && prompt.indexOf('if (Test-ExactPromptText') < prompt.indexOf('FindExpectedQuitButton'));
-  assert.ok(prompt.indexOf('FindExpectedQuitButton') < prompt.indexOf('ClickNativePromptButton'));
+  assert.ok(prompt.indexOf('[TusWindowLookup]::FindExpectedQuitButton') >= 0 &&
+    prompt.indexOf('[TusWindowLookup]::FindExpectedQuitButton') < prompt.indexOf('[TusWindowLookup]::ClickNativePromptButton'));
   assert.match(prompt, /TUS_UIA: exact-foreground-prompt-matched/);
   assert.doesNotMatch(prompt, /GetProcessWindows/);
 });
@@ -139,8 +133,8 @@ test('native prompt buttons require the exact foreground TUS dialog title', asyn
   const promptStart = windowsUI.indexOf("  { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {");
   const promptEnd = windowsUI.indexOf("\n  'file-menu-open' {", promptStart);
   const prompt = windowsUI.slice(promptStart, promptEnd);
-  assert.ok(prompt.indexOf('if (Test-ExactPromptText') >= 0 && prompt.indexOf('if (Test-ExactPromptText') < prompt.indexOf('FindExpectedQuitButton'));
-  assert.ok(prompt.indexOf('FindExpectedQuitButton') < prompt.indexOf('ClickNativePromptButton'));
+  assert.ok(prompt.indexOf('[TusWindowLookup]::FindExpectedQuitButton') >= 0 &&
+    prompt.indexOf('[TusWindowLookup]::FindExpectedQuitButton') < prompt.indexOf('[TusWindowLookup]::ClickNativePromptButton'));
   assert.doesNotMatch(windowsUI, /\.FindAll\(/);
 });
 
