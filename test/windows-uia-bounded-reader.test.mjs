@@ -65,10 +65,11 @@ const safeDiagnosticMarkers = new Set([
 ]);
 
 test('allowlist output drops an unapproved sentinel', () => {
-  const rawOutput = 'TUS_UIA_CONTROL: control-start\\nUNAPPROVED_SENTINEL';
+  const rawOutput = 'TUS_UIA_CONTROL: control-start\nUNAPPROVED_SENTINEL';
   const filterAllowlistedOutput = undefined;
   const filteredOutput = filterAllowlistedOutput?.(rawOutput, safeControlMarkers) ?? rawOutput;
-  assert.equal(filteredOutput, 'TUS_UIA_CONTROL: control-start');
+  assert.ok(filteredOutput === 'TUS_UIA_CONTROL: control-start',
+    'unapproved marker output is omitted');
 });
 
 test('bounded WaitForExit control honors 1000ms with redirected streams and async stdout drain', { skip: process.platform !== 'win32' }, async () => {
