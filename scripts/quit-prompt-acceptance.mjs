@@ -30,6 +30,62 @@ async function ui(action, pid, menuKey) {
   return stdout.trim();
 }
 
+
+async function assertModifiedPromptIsNotClicked(app, pid, process) {
+  await app.evaluate(({ dialog }) => {
+    const state = { original: dialog.showMessageBox.bind(dialog), resolved: false, title: null, buttons: null, response: null };
+    globalThis.__tusPromptTest = state;
+    dialog.showMessageBox = async (window, options) => {
+      state.title = options.title;
+      state.buttons = [...options.buttons];
+      const result = await state.original(window, {
+        ...options,
+        message: 'Modified activity message.',
+        detail: 'Modified activity detail.',
+      });
+      state.response = result.response;
+      state.resolved = true;
+      return result;
+    };
+  });
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (!window) throw new Error('The packaged TUS window is unavailable.');
+    window.close();
+  });
+
+  let failure;
+  try { await ui('keep-open', pid); }
+  catch (error) { failure = error; }
+  assert.match(failure?.message || '', /expected-message-(?:mismatch|missing)/,
+    'a modified native prompt is rejected without clicking either button');
+  assert.equal(process.exitCode, null, 'rejecting a modified prompt leaves TUS running');
+
+  const beforeDismissal = await app.evaluate(() => {
+    const state = globalThis.__tusPromptTest;
+    return { resolved: state?.resolved, title: state?.title, buttons: state?.buttons };
+  });
+  assert.equal(beforeDismissal.resolved, false, 'the native prompt is still open, so the helper did not click');
+  assert.equal(beforeDismissal.title, 'Codex activity may continue');
+  assert.deepEqual(beforeDismissal.buttons, ['Keep the game open', 'Quit anyway']);
+
+  await ui('dismiss-test-prompt', pid);
+  const dismissal = await app.evaluate(async () => {
+    const state = globalThis.__tusPromptTest;
+    const deadline = Date.now() + 5000;
+    while (!state.resolved && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return { resolved: state.resolved, response: state.response };
+  });
+  assert.deepEqual(dismissal, { resolved: true, response: 0 }, 'test cleanup cancels the prompt with its safe default');
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = globalThis.__tusPromptTest.original;
+    delete globalThis.__tusPromptTest;
+  });
+  assert.equal(process.exitCode, null, 'the test prompt cancellation leaves TUS running');
+}
+
 export async function quitPromptAcceptance(app, page, graphics) {
   const process = app.process();
   assert.ok(process?.pid, 'packaged TUS main process has a PID');
@@ -50,6 +106,7 @@ export async function quitPromptAcceptance(app, page, graphics) {
     process.once('error', reject);
   });
   try {
+    await assertModifiedPromptIsNotClicked(app, pid, process);
     await app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; if (!window) throw new Error('The packaged TUS window is unavailable.'); window.close(); });
     const closePrompt = await ui('keep-open', pid);
     assert.match(closePrompt, /^TUS_UIA: exact-foreground-prompt-matched$/m, 'window-close prompt is the exact TUS dialog');

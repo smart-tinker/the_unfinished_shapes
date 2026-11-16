@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory=$true)][ValidateSet('keep-open','quit-anyway','file-menu-open','file-menu-exit')][string]$Action,
+  [Parameter(Mandatory=$true)][ValidateSet('keep-open','quit-anyway','dismiss-test-prompt','file-menu-open','file-menu-exit')][string]$Action,
   [Parameter(Mandatory=$true)][int]$ProcessId,
   [string]$MenuKey
 )
@@ -186,6 +186,17 @@ switch ($Action) {
     Write-Output 'TUS_UIA: quit-dialog-not-found'
     Write-Output "TUS_UIA: prompt-$promptStatus"
     exit 2
+  }
+  'dismiss-test-prompt' {
+    $script:uiPhase = 'dismissing-test-prompt'
+    $foregroundHandle = [TusWindowLookup]::GetForegroundWindow()
+    if ($foregroundHandle -eq [IntPtr]::Zero -or [TusWindowLookup]::GetWindowTitle($foregroundHandle) -ne 'Codex activity may continue') {
+      Write-Output 'TUS_UIA: test-prompt-not-found'
+      exit 2
+    }
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+    Write-Output 'TUS_UIA: test-prompt-dismissed'
   }
   'file-menu-open' {
     $script:uiPhase = 'locating-main-window'
