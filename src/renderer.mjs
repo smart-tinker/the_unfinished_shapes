@@ -881,10 +881,15 @@ async function poll() {
 }
 function positionKey(position) { return `${position.x.toFixed(2)},${position.y.toFixed(8)},${position.z.toFixed(2)}`; }
 let lastPosition = '';
+// A failed smoke callback must never alter input or movement behavior.
+function traceSmokeJump(event, value) {
+  try { window.__TUS_SMOKE_JUMP_TRACE?.(event, value); } catch {}
+}
 async function syncPosition() {
   const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration, movementVersion = localMovementVersion, jump = jumpRequested;
   if (moveRunning || (key === lastPosition && !jump && playerVelocityY === 0) || !meId || !bridge) return; moveRunning = true;
   try {
+    traceSmokeJump('move.jump', jump);
     const result = await request('/command', 'POST', { type: 'move', position, jump });
     if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && result.revision >= latestStateRevision) {
       latestStateRevision = result.revision;
@@ -1077,7 +1082,7 @@ window.addEventListener('keydown', event => {
   if (event.code === 'Escape' && (dragCandidate || movePreview)) { event.preventDefault(); cancelMovePreview(); return; }
   if (event.code === 'F11') { event.preventDefault(); if (!event.repeat) requestFullscreenToggle(); return; }
   if (event.code === 'Escape' && isFullscreen) { event.preventDefault(); requestFullscreenToggle(); return; }
-  if (event.code === 'Space') { event.preventDefault(); if (!event.repeat) jumpRequested = true; return; }
+  if (event.code === 'Space') { event.preventDefault(); if (!event.repeat) { jumpRequested = true; traceSmokeJump('jumpRequested', jumpRequested); } return; }
   keys.add(event.key.toLowerCase());
 });
 window.addEventListener('keyup', event => keys.delete(event.key.toLowerCase())); window.addEventListener('blur', () => keys.clear());
