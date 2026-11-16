@@ -36,6 +36,14 @@ function waitForExit(child, timeoutMs = 30000) {
   });
 }
 
+function withTimeout(promise, label, timeoutMs = 30000) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label + ' timed out after ' + timeoutMs + 'ms.')), timeoutMs); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function start(executablePath, label, dataDir, useBaseline = false) {
   const gpu = await createGpuDiagnostics(label);
   let instance;
@@ -47,15 +55,23 @@ async function start(executablePath, label, dataDir, useBaseline = false) {
       const preload = path.resolve('scripts/updater-version-preload.cjs').split(path.sep).join('/');
       env.NODE_OPTIONS = [env.NODE_OPTIONS, '--require=' + preload].filter(Boolean).join(' ');
     }
+    console.log('Updater smoke ' + label + ': launching packaged app.');
     instance = await electron.launch({
       executablePath,
       args: [...runnerFlags, '--tus-smoke-confirm-quit', ...gpu.args],
       env,
       timeout: 45000,
     });
+    console.log('Updater smoke ' + label + ': packaged app launched.');
     await gpu.attach(instance);
-    if (useBaseline) assert.equal(await instance.evaluate(({ app }) => app.getVersion()), baselineVersion, 'isolated updater test version is active');
-    const page = await instance.firstWindow();
+    console.log('Updater smoke ' + label + ': GPU diagnostics attached.');
+    if (useBaseline) {
+      const version = await withTimeout(instance.evaluate(({ app }) => app.getVersion()), 'Updater smoke baseline version query', 15000);
+      assert.equal(version, baselineVersion, 'isolated updater test version is active');
+      console.log('Updater smoke ' + label + ': baseline version confirmed.');
+    }
+    const page = await withTimeout(instance.firstWindow(), 'Updater smoke first window', 30000);
+    console.log('Updater smoke ' + label + ': first window opened.');
     graphics = await observeGraphics(page, { label });
     active = { instance, page, graphics, gpu };
     graphics.phase('world connection');
