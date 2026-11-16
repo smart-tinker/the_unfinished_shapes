@@ -380,6 +380,6 @@ test('UIA output drain stays bounded and cleanup reaps remain capped', async () 
 
   const normalDrainGuard = uia.indexOf("if ($remaining -le 0 -or -not $outputReadComplete.WaitOne($remaining)) { return 'unavailable' }");
   const resultsRead = uia.indexOf('$results = @($childTokens.ToArray()', normalDrainGuard);
-  assert.ok(normalDrainGuard >= 0 && normalOutputWait < normalDrainGuard && normalDrainGuard < resultsRead,
+  assert.ok(normalDrainGuard >= 0 && normalDrainGuard < normalOutputWait && normalOutputWait < resultsRead,
     'normal path rejects partial match tokens before reading them');
 });
