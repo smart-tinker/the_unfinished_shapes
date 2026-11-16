@@ -131,7 +131,18 @@ try {
   }.GetNewClosure()
   $process.add_OutputDataReceived([System.Diagnostics.DataReceivedEventHandler]$outputHandler)
   $watch = [Diagnostics.Stopwatch]::StartNew()
+  $testDiagnostic = $null
+  if (-not [string]::IsNullOrEmpty($ChildScriptOverride)) {
+    $testDiagnostic = {
+      param([string]$Marker)
+      try {
+        [Console]::Out.WriteLine('TUS_UIA_DIAG: ' + $Marker)
+        [Console]::Out.Flush()
+      } catch {}
+    }
+  }
   try {
+    if ($null -ne $testDiagnostic) { & $testDiagnostic 'diagnostic-enabled' }
     Write-UiaPhaseMarker 'ui-child-starting'
     if (-not $process.Start()) { return 'unavailable' }
     Write-UiaPhaseMarker 'ui-child-started'
@@ -153,17 +164,66 @@ try {
     Write-UiaPhaseMarker 'ui-payload-written'
     $remaining = 3000 - [int]$watch.ElapsedMilliseconds
     Write-UiaPhaseMarker 'ui-child-waiting'
-    if ($remaining -le 0 -or -not $process.WaitForExit($remaining)) {
+    if ($remaining -le 0) {
+      if ($null -ne $testDiagnostic) { & $testDiagnostic 'wait-budget-expired' }
+      $waitTimedOut = $true
+    } else {
+      if ($null -ne $testDiagnostic) { & $testDiagnostic 'wait-started' }
+      try {
+        $waitTimedOut = -not $process.WaitForExit($remaining)
+      } catch {
+        if ($null -ne $testDiagnostic) { & $testDiagnostic 'wait-threw' }
+        throw
+      }
+      if ($null -ne $testDiagnostic) {
+        if ($waitTimedOut) { & $testDiagnostic 'wait-timed-out' }
+        else { & $testDiagnostic 'wait-child-exited' }
+      }
+    }
+    if ($waitTimedOut) {
       Write-UiaPhaseMarker 'ui-child-killing'
-      try { $process.Kill() } catch {}
+      if ($null -ne $testDiagnostic) { & $testDiagnostic 'kill-started' }
+      try {
+        $process.Kill()
+        if ($null -ne $testDiagnostic) { & $testDiagnostic 'kill-returned' }
+      } catch {
+        if ($null -ne $testDiagnostic) { & $testDiagnostic 'kill-failed' }
+      }
       Write-UiaPhaseMarker 'ui-child-kill-waiting'
-      try { [void]$process.WaitForExit(1000) } catch {}
+      if ($null -ne $testDiagnostic) { & $testDiagnostic 'reap-started' }
+      try {
+        $reapCompleted = $process.WaitForExit(1000)
+        if ($null -ne $testDiagnostic) {
+          if ($reapCompleted) { & $testDiagnostic 'reap-completed' }
+          else { & $testDiagnostic 'reap-timed-out' }
+        }
+      } catch {
+        if ($null -ne $testDiagnostic) { & $testDiagnostic 'reap-threw' }
+      }
       Write-UiaPhaseMarker 'ui-child-exit-checking'
       $drainComplete = $false
       if ($process.HasExited) {
+        if ($null -ne $testDiagnostic) { & $testDiagnostic 'process-exited' }
         Write-UiaPhaseMarker 'ui-child-output-draining'
         $remaining = 3000 - [int]$watch.ElapsedMilliseconds
-        if ($remaining -gt 0) { $drainComplete = $outputReadComplete.WaitOne($remaining) }
+        if ($remaining -gt 0) {
+          if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-started' }
+          try {
+            $drainComplete = $outputReadComplete.WaitOne($remaining)
+          } catch {
+            if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-threw' }
+            throw
+          }
+          if ($null -ne $testDiagnostic) {
+            if ($drainComplete) { & $testDiagnostic 'stdout-eof-completed' }
+            else { & $testDiagnostic 'stdout-eof-timed-out' }
+          }
+        } elseif ($null -ne $testDiagnostic) {
+          & $testDiagnostic 'stdout-eof-budget-expired'
+        }
+      } elseif ($null -ne $testDiagnostic) {
+        & $testDiagnostic 'process-not-exited'
+        & $testDiagnostic 'stdout-eof-skipped-process-not-exited'
       }
       if (-not $drainComplete) { return 'timeout-no-phase' }
       $phases = @($childTokens.ToArray() | Where-Object { $_ -match '^phase-' })
@@ -172,7 +232,22 @@ try {
     }
     Write-UiaPhaseMarker 'ui-child-output-draining'
     $remaining = 3000 - [int]$watch.ElapsedMilliseconds
-    if ($remaining -le 0 -or -not $outputReadComplete.WaitOne($remaining)) { return 'unavailable' }
+    if ($remaining -le 0) {
+      if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-budget-expired' }
+      return 'unavailable'
+    }
+    if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-started' }
+    try {
+      $drainComplete = $outputReadComplete.WaitOne($remaining)
+    } catch {
+      if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-threw' }
+      throw
+    }
+    if (-not $drainComplete) {
+      if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-timed-out' }
+      return 'unavailable'
+    }
+    if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-completed' }
     Write-UiaPhaseMarker 'ui-child-finished'
     $results = @($childTokens.ToArray() | Where-Object { $_ -match '^(matched-[01]|mismatch|unavailable)$' })
     if ($process.ExitCode -eq 0 -and $results.Count -gt 0) {
