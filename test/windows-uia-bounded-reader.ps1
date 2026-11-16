@@ -3,6 +3,10 @@ function Write-UiaPhaseMarker {
   param([Parameter(Mandatory=$true)][string]$Phase)
   [Console]::Out.WriteLine('TUS_UIA: ' + $Phase)
   [Console]::Out.Flush()
+  if ($Phase -eq 'ui-child-killing') {
+    [Console]::Out.WriteLine('TUS_UIA_DIAG: bounded-wait-returned')
+    [Console]::Out.Flush()
+  }
 }
 . (Join-Path $PSScriptRoot '..\scripts\windows-uia-child-reader.ps1')
 $testChildScript = @'

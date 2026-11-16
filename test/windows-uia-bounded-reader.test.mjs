@@ -17,6 +17,8 @@ test('bounded UIA child preserves only a complete safe phase after kill and reap
 
   assert.match(stdout, /^TUS_UIA_TEST: result=timeout-phase-child-start$/m,
     'the complete allowlisted phase is retained after the timed-out child is reaped');
+  assert.match(stdout, /^TUS_UIA_DIAG: bounded-wait-returned$/m,
+    'the bounded process wait returned before child cleanup');
   for (const phase of ['ui-child-killing', 'ui-child-kill-waiting', 'ui-child-exit-checking']) {
     assert.match(stdout, new RegExp('^TUS_UIA: ' + phase + '$', 'm'), phase + ' is exercised');
   }
