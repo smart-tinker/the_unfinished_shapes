@@ -194,7 +194,29 @@ async function updateOnce(distribution) {
   assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'the selected update channel survives restart');
   if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
   await current.page.waitForFunction(() => !document.querySelector('#updates-notice')?.hidden, null, { timeout: 30000 });
-  assert.match(await current.page.locator('#updates-notice').getAttribute('title'), /available\./, 'startup checks expose a published update without installing it');
+  const startupNotice = await current.page.locator('#updates-notice').getAttribute('title');
+  if (!/Prerelease v?\d+\.\d+\.\d+-rc\.?\d+ is available\./.test(startupNotice || '')) {
+    const diagnostic = await current.page.evaluate(async distribution => {
+      try {
+        const result = await window.tus.checkUpdates(distribution);
+        const statuses = ['available', 'none', 'current', 'downgrade', 'unsupported'];
+        return { status: statuses.includes(result?.status) ? result.status : 'unknown', httpStatus: null, errorCode: null };
+      } catch (error) {
+        const message = typeof error?.message === 'string' ? error.message : '';
+        const httpStatus = Number(message.match(/\bHTTP (\d{3})\b/)?.[1]) || null;
+        const errorCode = /rate limit/i.test(message) ? 'rate_limited'
+          : httpStatus ? 'http_error'
+          : /timeout|abort/i.test(message) ? 'timeout'
+          : /invalid/i.test(message) ? 'invalid_response' : 'check_failed';
+        return { status: 'error', httpStatus, errorCode };
+      }
+    }, process.platform === 'win32' ? distribution : 'installer');
+    console.log('Updater startup release diagnostic ' + JSON.stringify(diagnostic));
+  }
+  assert.match(startupNotice || '', /available\./, 'startup checks expose a published update without installing it');
+  const startupTag = startupNotice?.match(/Prerelease (v\d+\.\d+\.\d+-rc\.?\d+) is available\./)?.[1];
+  assert.ok(startupTag, 'startup check identifies the published prerelease');
+  assert.ok(compareReleaseVersions(startupTag, baselineVersion) > 0, 'startup check identifies a newer prerelease');
 
   await current.page.locator('#updates-check').click();
   await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.includes(' is available.'), null, { timeout: 30000 });
@@ -203,6 +225,7 @@ async function updateOnce(distribution) {
   const tag = availability.match(/(v\d+\.\d+\.\d+-rc\.?\d+)/)?.[1];
   assert.ok(tag, 'the published candidate tag is shown in the update status');
   assert.ok(compareReleaseVersions(tag, baselineVersion) > 0, 'the published prerelease is newer than the isolated test version');
+  assert.equal(tag, startupTag, 'startup and manual checks identify the same latest prerelease');
 
   const manifest = await getManifest(tag);
   const assetName = expectedAssetName(manifest.version, distribution);
