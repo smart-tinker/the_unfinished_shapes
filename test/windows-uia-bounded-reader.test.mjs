@@ -8,6 +8,37 @@ import { fileURLToPath } from 'node:url';
 const run = promisify(execFile);
 const readerTest = fileURLToPath(new URL('./windows-uia-bounded-reader.ps1', import.meta.url));
 
+const waitControlTest = fileURLToPath(new URL('./windows-uia-wait-control.ps1', import.meta.url));
+const safeControlMarkers = new Set([
+  'TUS_UIA_CONTROL: control-start',
+  'TUS_UIA_CONTROL: child-started',
+  'TUS_UIA_CONTROL: start-failed',
+  'TUS_UIA_CONTROL: wait-started',
+  'TUS_UIA_CONTROL: wait-returned',
+  'TUS_UIA_CONTROL: wait-timed-out',
+  'TUS_UIA_CONTROL: wait-child-exited',
+  'TUS_UIA_CONTROL: wait-within-bound',
+  'TUS_UIA_CONTROL: wait-over-bound',
+  'TUS_UIA_CONTROL: wait-threw',
+  'TUS_UIA_CONTROL: kill-started',
+  'TUS_UIA_CONTROL: kill-returned',
+  'TUS_UIA_CONTROL: kill-failed',
+  'TUS_UIA_CONTROL: reap-started',
+  'TUS_UIA_CONTROL: reap-completed',
+  'TUS_UIA_CONTROL: reap-timed-out',
+  'TUS_UIA_CONTROL: reap-threw',
+  'TUS_UIA_CONTROL: process-exited',
+  'TUS_UIA_CONTROL: process-not-exited',
+  'TUS_UIA_CONTROL: stdout-eof-started',
+  'TUS_UIA_CONTROL: stdout-eof-completed',
+  'TUS_UIA_CONTROL: stdout-eof-timed-out',
+  'TUS_UIA_CONTROL: stdout-eof-skipped-process-not-exited',
+  'TUS_UIA_CONTROL: stdout-eof-threw',
+  'TUS_UIA_CONTROL: control-failed',
+  'TUS_UIA_CONTROL: control-passed',
+  'TUS_UIA_CONTROL: no-safe-markers',
+]);
+
 const safeDiagnosticMarkers = new Set([
   'TUS_UIA_DIAG: diagnostic-enabled',
   'TUS_UIA_DIAG: bounded-wait-returned',
@@ -32,6 +63,35 @@ const safeDiagnosticMarkers = new Set([
   'TUS_UIA_DIAG: stdout-eof-skipped-process-not-exited',
   'TUS_UIA_DIAG: stdout-eof-threw',
 ]);
+
+test('bounded WaitForExit control honors 1000ms with redirected streams and async stdout drain', { skip: process.platform !== 'win32' }, async () => {
+  const startedAt = Date.now();
+  let stdout = '';
+  let processFailed = false;
+  try {
+    ({ stdout } = await run('powershell.exe', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', waitControlTest,
+    ], { timeout: 15000, windowsHide: true }));
+  } catch (error) {
+    processFailed = true;
+    stdout = String(error?.stdout ?? '');
+  }
+  const safeMarkers = stdout.split(/\r?\n/).filter((line) => safeControlMarkers.has(line));
+  console.log(safeMarkers.length ? safeMarkers.join('\n') : 'TUS_UIA_CONTROL: no-safe-markers');
+  const elapsed = Date.now() - startedAt;
+
+  assert.ok(elapsed < 6000, 'the bounded WaitForExit control completes within six seconds');
+  assert.equal(processFailed, false, 'the control PowerShell process exits successfully');
+  for (const marker of [
+    'control-start', 'child-started', 'wait-started',
+    'wait-returned', 'wait-timed-out', 'wait-within-bound',
+    'kill-returned', 'reap-completed', 'process-exited',
+    'stdout-eof-completed', 'control-passed',
+  ]) {
+    assert.match(stdout, new RegExp('^TUS_UIA_CONTROL: ' + marker + '$', 'm'), marker + ' is recorded');
+  }
+});
 
 test('bounded UIA child preserves only a complete safe phase after kill and reap', { skip: process.platform !== 'win32' }, async () => {
   const startedAt = Date.now();
