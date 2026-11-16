@@ -173,6 +173,18 @@ public static class TusWindowLookup {
 }
 '@
 Write-Output 'TUS_UIA: window-api-ready'
+function Write-UiaPhaseMarker {
+  param(
+    [Parameter(Mandatory=$true)]
+    [ValidateSet(
+      'ui-child-starting', 'ui-child-started', 'ui-payload-preparing', 'ui-payload-ready',
+      'ui-payload-writing', 'ui-payload-written', 'ui-child-waiting', 'ui-child-finished'
+    )]
+    [string]$Phase
+  )
+  [Console]::Out.WriteLine('TUS_UIA: ' + $Phase)
+  [Console]::Out.Flush()
+}
 function Write-PromptEvidence {
   $evidence = [TusWindowLookup]::LastPromptEvidenceText
   if ([string]::IsNullOrWhiteSpace($evidence)) { $evidence = 'none' }
@@ -308,16 +320,23 @@ try {
   $process.add_OutputDataReceived([System.Diagnostics.DataReceivedEventHandler]$outputHandler)
   $watch = [Diagnostics.Stopwatch]::StartNew()
   try {
+    Write-UiaPhaseMarker 'ui-child-starting'
     if (-not $process.Start()) { return 'unavailable' }
+    Write-UiaPhaseMarker 'ui-child-started'
     $process.BeginOutputReadLine()
+    Write-UiaPhaseMarker 'ui-payload-preparing'
     $payload = ConvertTo-Json -InputObject @{
       handle = $WindowHandle.ToInt64(); expectedMessages = $ExpectedMessages
       expectedDetails = $ExpectedDetails; goalStatusPrefix = $GoalStatusPrefix
     } -Compress
     $payloadLine = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload))
+    Write-UiaPhaseMarker 'ui-payload-ready'
+    Write-UiaPhaseMarker 'ui-payload-writing'
     $process.StandardInput.WriteLine($payloadLine)
     $process.StandardInput.Close()
+    Write-UiaPhaseMarker 'ui-payload-written'
     $remaining = 3000 - [int]$watch.ElapsedMilliseconds
+    Write-UiaPhaseMarker 'ui-child-waiting'
     if ($remaining -le 0 -or -not $process.WaitForExit($remaining)) {
       try { $process.Kill() } catch {}
       try { [void]$process.WaitForExit(1000) } catch {}
@@ -327,6 +346,7 @@ try {
       return 'timeout-no-phase'
     }
     $process.WaitForExit()
+    Write-UiaPhaseMarker 'ui-child-finished'
     $results = @($childTokens.ToArray() | Where-Object { $_ -match '^(matched-[01]|mismatch|unavailable)$' })
     if ($process.ExitCode -eq 0 -and $results.Count -gt 0) {
       $result = $results[$results.Count - 1]

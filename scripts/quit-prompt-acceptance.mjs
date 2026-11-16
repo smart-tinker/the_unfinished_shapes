@@ -10,6 +10,8 @@ const safeUiMarkers = new Set([
   'script-start', 'window-api-ready', 'expected-foreground-prompt-unavailable',
   'expected-body-recognized', 'quit-dialog-not-found', 'modified-body-button-returned',
   'modified-body-unverified', 'modified-body-rejected',
+  'ui-child-starting', 'ui-child-started', 'ui-payload-preparing', 'ui-payload-ready',
+  'ui-payload-writing', 'ui-payload-written', 'ui-child-waiting', 'ui-child-finished',
 ]);
 const safeUiPromptStatuses = new Set([
   'foreground-window-unavailable', 'foreground-title-mismatch', 'invalid-window',
@@ -24,7 +26,7 @@ export function safeUiFailureOutcome(tokens = [], processFailure = 'probe-failed
   for (let index = Array.isArray(tokens) ? tokens.length - 1 : -1; index >= 0; index--) {
     const token = tokens[index];
     if (typeof token !== 'string') continue;
-    if (safeUiTimeoutPhase.test(token)) return token;
+    if (token === 'prompt-reader-timeout-no-phase' || safeUiTimeoutPhase.test(token)) return token;
     const status = token.startsWith('prompt-') ? token.slice('prompt-'.length)
       : token.startsWith('expected-body-') ? token.slice('expected-body-'.length) : '';
     if ((safeUiMarkers.has(token) || safeUiPromptStatuses.has(status)) && !marker) marker = token;
@@ -90,7 +92,7 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
     matcherRejected = /^TUS_UIA: modified-body-rejected$/m.test(result);
     matcherOutcome = matcherRejected ? 'mismatch' : 'unexpected-result';
   } catch (error) {
-    const safeOutcome = /exit-[a-z0-9_-]+|timeout-[a-z0-9-]+|(?:script-start|window-api-ready)-no-status|prompt-reader-timeout-[a-z0-9-]+|expected-foreground-prompt-unavailable|quit-dialog-not-found|automation-error-[a-z0-9]+-at-[a-z0-9-]+|modified-body-(?:button-returned|unverified|rejected)|expected-body-(?:mismatch|unavailable|timeout)|prompt-(?:foreground-window-unavailable|foreground-title-mismatch|expected-body-(?:mismatch|unavailable|timeout)|(?:invalid-window|title-mismatch|button-count-mismatch|expected-buttons-missing|requested-button-missing|expected-message-mismatch|expected-message-unavailable|matched))/gi;
+    const safeOutcome = /exit-[a-z0-9_-]+|timeout-[a-z0-9-]+|(?:script-start|window-api-ready)-no-status|ui-(?:child-(?:starting|started|waiting|finished)|payload-(?:preparing|ready|writing|written))|prompt-reader-timeout-[a-z0-9-]+|expected-foreground-prompt-unavailable|quit-dialog-not-found|automation-error-[a-z0-9]+-at-[a-z0-9-]+|modified-body-(?:button-returned|unverified|rejected)|expected-body-(?:mismatch|unavailable|timeout)|prompt-(?:foreground-window-unavailable|foreground-title-mismatch|expected-body-(?:mismatch|unavailable|timeout)|(?:invalid-window|title-mismatch|button-count-mismatch|expected-buttons-missing|requested-button-missing|expected-message-mismatch|expected-message-unavailable|matched))/gi;
     const outcomeTokens = [...String(error?.message || '').matchAll(safeOutcome)];
     matcherOutcome = outcomeTokens.length ? outcomeTokens[outcomeTokens.length - 1][0].toLowerCase() : 'probe-failed';
     console.log('TUS_UIA_TEST: detail-probe-' + matcherOutcome);
