@@ -131,6 +131,9 @@ test('Windows quit prompt acceptance mutates message and detail independently', 
   assert.match(automation, /TUS_UIA_TEST: detail-probe-/);
   assert.match(automation, /if \(matcherRejected\)\s*\{\s*try\s*\{\s*await ui\('keep-open', pid\)/);
   assert.match(automation, /prompt-reader-timeout-\[a-z0-9-\]\+/);
+  assert.match(automation, /expected-foreground-prompt-unavailable/);
+  assert.match(automation, /quit-dialog-not-found/);
+  assert.match(automation, /automation-error-\[a-z0-9\]\+-at-\[a-z0-9-\]\+/i);
   assert.match(windowsUI, /TUS_UIA: prompt-\$status/);
 });
 

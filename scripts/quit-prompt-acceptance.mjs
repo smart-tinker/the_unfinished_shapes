@@ -64,7 +64,9 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
     matcherRejected = /^TUS_UIA: modified-body-rejected$/m.test(result);
     matcherOutcome = matcherRejected ? 'mismatch' : 'unexpected-result';
   } catch (error) {
-    matcherOutcome = String(error?.message || '').match(/prompt-reader-timeout-[a-z0-9-]+|prompt-expected-body-(?:mismatch|unavailable|timeout)|expected-body-(?:mismatch|unavailable|timeout)|modified-body-(?:button-returned|unverified)/)?.[0] || 'probe-failed';
+    const safeOutcome = /prompt-reader-timeout-[a-z0-9-]+|expected-foreground-prompt-unavailable|quit-dialog-not-found|automation-error-[a-z0-9]+-at-[a-z0-9-]+|modified-body-(?:button-returned|unverified|rejected)|expected-body-(?:mismatch|unavailable|timeout)|prompt-(?:foreground-window-unavailable|foreground-title-mismatch|expected-body-(?:mismatch|unavailable|timeout)|(?:invalid-window|title-mismatch|button-count-mismatch|expected-buttons-missing|requested-button-missing|expected-message-mismatch|expected-message-unavailable|matched))/gi;
+    const outcomeTokens = [...String(error?.message || '').matchAll(safeOutcome)];
+    matcherOutcome = outcomeTokens.length ? outcomeTokens[outcomeTokens.length - 1][0].toLowerCase() : 'probe-failed';
     console.log('TUS_UIA_TEST: detail-probe-' + matcherOutcome);
   }
 
