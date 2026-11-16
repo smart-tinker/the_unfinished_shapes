@@ -94,13 +94,17 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
   const expectedBlock = windowsUI.slice(windowsUI.indexOf('$expectedMessages ='), windowsUI.indexOf('switch ($Action)'));
   assert.match(expectedBlock, /Codex may still be working in this conversation/);
   assert.match(expectedBlock, /The current Codex activity is unknown/);
-  assert.doesNotMatch(expectedBlock, /Quitting TUS closes|Codex state could not be confirmed/);
+  assert.match(expectedBlock, /Quitting TUS closes its Codex connection/);
+  assert.match(expectedBlock, /Codex state could not be confirmed/);
+  assert.match(expectedBlock, /Native Goal status:/);
 
   const uiaStart = windowsUI.indexOf('function Get-UiaPromptBodyResult');
   const uiaEnd = windowsUI.indexOf('function Find-ValidatedPromptButton', uiaStart);
   const uia = windowsUI.slice(uiaStart, uiaEnd);
   assert.match(uia, /TreeScope\]::Children/);
   assert.match(uia, /\.FindFirst\(/);
+  assert.match(uia, /GetNextSibling/);
+  assert.match(uia, /detail/);
   assert.match(uia, /TUS_UIA_CHILD: phase-fromhandle-start/);
   assert.match(uia, /TUS_UIA_CHILD: phase-findfirst-\' \+ \$index \+ \'-start/);
   assert.match(uia, /TUS_UIA_CHILD: phase-current-name-\' \+ \$index \+ \'-start/);
@@ -111,6 +115,14 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
   assert.match(uia, /3000 - \[int\]\$watch\.ElapsedMilliseconds/);
   assert.match(uia, /\.Kill\(\)/);
   assert.doesNotMatch(uia, /TreeScope\]::Descendants|\.FindAll\(/);
+});
+
+
+test('Windows quit prompt acceptance mutates message and detail independently', async () => {
+  const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
+  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'message'\)/);
+  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'detail'\)/);
+  assert.match(automation, /Modified activity detail\./);
 });
 
 test('native prompt acceptance uses bounded exact title, text and button checks', async () => {
