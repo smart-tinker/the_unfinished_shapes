@@ -228,3 +228,12 @@ test('File -> Exit selects the exact Electron menu command on the TUS window', a
   assert.ok(titleGate >= 0 && chooseQuit > titleGate && activateQuit > chooseQuit,
     'the visible Electron File submenu receives input only after validating the exact TUS window');
 });
+
+test('safe UIA failure classification distinguishes a child that reached the window API', async () => {
+  const { safeUiFailureOutcome } = await import('../scripts/quit-prompt-acceptance.mjs');
+  assert.equal(typeof safeUiFailureOutcome, 'function', 'failure classification is available');
+  assert.equal(safeUiFailureOutcome(['script-start', 'window-api-ready']) === 'window-api-ready-no-status', true);
+  assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-findfirst-0-start']) === 'prompt-reader-timeout-phase-findfirst-0-start', true);
+  assert.equal(safeUiFailureOutcome(['script-start', 'window-api-ready', 'private dialog text']) === 'window-api-ready-no-status', true,
+    'only allowlisted tokens can become CI evidence');
+});
