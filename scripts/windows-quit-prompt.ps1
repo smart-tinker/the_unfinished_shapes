@@ -312,12 +312,15 @@ try {
   $process = New-Object System.Diagnostics.Process
   $process.StartInfo = $startInfo
   $childTokens = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+  $outputReadComplete = [System.Threading.ManualResetEvent]::new($false)
   $outputHandler = {
     param($sender, $eventArgs)
-    if ($null -ne $eventArgs.Data) {
-      $token = [regex]::Match([string]$eventArgs.Data, '^TUS_UIA_CHILD: (phase-[a-z0-9-]+|matched-[01]|mismatch|unavailable)$')
-      if ($token.Success) { $childTokens.Enqueue($token.Groups[1].Value) }
+    if ($null -eq $eventArgs.Data) {
+      try { [void]$outputReadComplete.Set() } catch {}
+      return
     }
+    $token = [regex]::Match([string]$eventArgs.Data, '^TUS_UIA_CHILD: (phase-[a-z0-9-]+|matched-[01]|mismatch|unavailable)$')
+    if ($token.Success) { $childTokens.Enqueue($token.Groups[1].Value) }
   }.GetNewClosure()
   $process.add_OutputDataReceived([System.Diagnostics.DataReceivedEventHandler]$outputHandler)
   $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -345,16 +348,20 @@ try {
       Write-UiaPhaseMarker 'ui-child-kill-waiting'
       try { [void]$process.WaitForExit(1000) } catch {}
       Write-UiaPhaseMarker 'ui-child-exit-checking'
+      $drainComplete = $false
       if ($process.HasExited) {
         Write-UiaPhaseMarker 'ui-child-output-draining'
-        try { $process.WaitForExit() } catch {}
+        $remaining = 3000 - [int]$watch.ElapsedMilliseconds
+        if ($remaining -gt 0) { $drainComplete = $outputReadComplete.WaitOne($remaining) }
       }
+      if (-not $drainComplete) { return 'timeout-no-phase' }
       $phases = @($childTokens.ToArray() | Where-Object { $_ -match '^phase-' })
       if ($phases.Count -gt 0) { return 'timeout-' + $phases[$phases.Count - 1] }
       return 'timeout-no-phase'
     }
     Write-UiaPhaseMarker 'ui-child-output-draining'
-    $process.WaitForExit()
+    $remaining = 3000 - [int]$watch.ElapsedMilliseconds
+    if ($remaining -le 0 -or -not $outputReadComplete.WaitOne($remaining)) { return 'unavailable' }
     Write-UiaPhaseMarker 'ui-child-finished'
     $results = @($childTokens.ToArray() | Where-Object { $_ -match '^(matched-[01]|mismatch|unavailable)$' })
     if ($process.ExitCode -eq 0 -and $results.Count -gt 0) {
@@ -375,6 +382,7 @@ try {
       }
     } catch {}
     try { Write-UiaPhaseMarker 'ui-child-disposing' } catch {}
+    try { $outputReadComplete.Dispose() } catch {}
     $process.Dispose()
   }
 }
