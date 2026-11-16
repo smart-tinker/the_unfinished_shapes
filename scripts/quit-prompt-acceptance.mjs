@@ -61,7 +61,7 @@ async function assertModifiedPromptIsNotClicked(app, pid, process) {
   let failure;
   try { await ui('keep-open', pid); }
   catch (error) { failure = error; }
-  assert.match(failure?.message || '', /expected-message-(?:mismatch|missing)/,
+  assert.match(failure?.message || '', /expected-message-(?:mismatch|missing|unavailable|combined)/,
     'a modified native prompt is rejected without clicking either button');
   assert.equal(process.exitCode, null, 'rejecting a modified prompt leaves TUS running');
 

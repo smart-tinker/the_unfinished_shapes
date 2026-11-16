@@ -71,11 +71,16 @@ public static class TusWindowLookup {
       return true;
     }, IntPtr.Zero);
     var buttons = new List<PromptControl>();
-    bool hasExpectedMessage = false, hasKeepOpen = false, hasQuitAnyway = false;
+    bool hasExpectedMessage = false, hasReadableMessage = false, hasCombinedExpectedBody = false, hasKeepOpen = false, hasQuitAnyway = false;
+    var messageTexts = new List<string>();
     IntPtr requested = IntPtr.Zero;
     foreach (var control in controls) {
       if (control.ClassName != "Button") {
         var normalizedText = NormalizePromptText(control.Text);
+        if (normalizedText.Length > 0) {
+          hasReadableMessage = true;
+          messageTexts.Add(normalizedText);
+        }
         foreach (var message in expectedMessages) {
           if (String.Equals(normalizedText, NormalizePromptText(message), StringComparison.Ordinal)) hasExpectedMessage = true;
         }
@@ -98,8 +103,17 @@ public static class TusWindowLookup {
       LastPromptStatus = "requested-button-missing";
       return IntPtr.Zero;
     }
+    if (!hasExpectedMessage && expectedMessages.Length >= 4) {
+      var knownBody = NormalizePromptText(expectedMessages[0] + " " + expectedMessages[2]);
+      var unknownBody = NormalizePromptText(expectedMessages[1] + " " + expectedMessages[3]);
+      foreach (var text in messageTexts) {
+        if (String.Equals(text, knownBody, StringComparison.Ordinal) ||
+            String.Equals(text, unknownBody, StringComparison.Ordinal)) hasCombinedExpectedBody = true;
+      }
+    }
     if (!hasExpectedMessage) {
-      LastPromptStatus = "expected-message-missing";
+      LastPromptStatus = hasCombinedExpectedBody ? "expected-message-combined" :
+        hasReadableMessage ? "expected-message-mismatch" : "expected-message-unavailable";
       return IntPtr.Zero;
     }
     LastPromptStatus = "matched";
@@ -170,7 +184,7 @@ switch ($Action) {
       Write-Output 'TUS_UIA: modified-body-button-returned'
       exit 2
     }
-    if ([TusWindowLookup]::LastPromptStatus -ne 'expected-message-missing') {
+    if ([TusWindowLookup]::LastPromptStatus -ne 'expected-message-mismatch') {
       Write-Output "TUS_UIA: prompt-$([TusWindowLookup]::LastPromptStatus)"
       exit 2
     }
