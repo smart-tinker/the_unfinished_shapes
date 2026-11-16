@@ -64,7 +64,7 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
     matcherRejected = /^TUS_UIA: modified-body-rejected$/m.test(result);
     matcherOutcome = matcherRejected ? 'mismatch' : 'unexpected-result';
   } catch (error) {
-    matcherOutcome = String(error?.message || '').match(/prompt-reader-timeout-[a-z0-9-]+|expected-body-(?:mismatch|unavailable|timeout)|modified-body-button-returned/)?.[0] || 'probe-failed';
+    matcherOutcome = String(error?.message || '').match(/prompt-reader-timeout-[a-z0-9-]+|prompt-expected-body-(?:mismatch|unavailable|timeout)|expected-body-(?:mismatch|unavailable|timeout)|modified-body-(?:button-returned|unverified)/)?.[0] || 'probe-failed';
     console.log('TUS_UIA_TEST: detail-probe-' + matcherOutcome);
   }
 

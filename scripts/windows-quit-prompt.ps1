@@ -463,6 +463,7 @@ switch ($Action) {
       Write-Output "TUS_UIA: prompt-reader-timeout-$script:uiaPromptTimeoutPhase"
     }
     if ($status -ne 'expected-body-mismatch') {
+      Write-Output "TUS_UIA: prompt-$status"
       Write-Output 'TUS_UIA: modified-body-unverified'
       exit 2
     }
