@@ -28,6 +28,7 @@ const updaterFailureCodes = new Set([
   'PROVENANCE_FETCH_ERROR', 'PROVENANCE_HTTP_ERROR', 'PROVENANCE_RESPONSE_ERROR',
   'MISSING_PROVENANCE', 'NO_MATCHING_PROVENANCE', 'INVALID_ATTESTATION',
   'INVALID_ATTESTATION_PAYLOAD', 'SIGNATURE_REJECTED', 'ATTESTATION_MISMATCH',
+  'DOWNLOAD_FETCH_ERROR', 'DOWNLOAD_HTTP_ERROR',
 ]);
 
 export function safeUpdaterFailureCode(code) {
@@ -197,9 +198,14 @@ export async function downloadVerifiedAsset({
         encodeURIComponent(tag) + '/' + encodeURIComponent(asset.name);
       let response, currentUrl = url;
       for (let redirect = 0; redirect <= 3; redirect++) {
-        response = await fetcher(currentUrl, {
-          headers: { accept: 'application/octet-stream' }, signal: requestSignal, redirect: 'manual',
-        });
+        try {
+          response = await fetcher(currentUrl, {
+            headers: { accept: 'application/octet-stream' }, signal: requestSignal, redirect: 'manual',
+          });
+        } catch (error) {
+          if (signal?.aborted && (error?.name === 'AbortError' || error?.code === 'ABORT_ERR')) throw error;
+          throw updaterFailure('GitHub release asset request failed.', 'DOWNLOAD_FETCH_ERROR');
+        }
         if (!response || !Number.isInteger(response.status)) throw new Error('Invalid GitHub download response.');
         if ([301, 302, 303, 307, 308].includes(response.status)) {
           const location = response.headers?.get('location');
@@ -213,7 +219,7 @@ export async function downloadVerifiedAsset({
           currentUrl = next.href;
           continue;
         }
-        if (!response.ok) throw new Error('GitHub update download failed (HTTP ' + response.status + ').');
+        if (!response.ok) throw updaterFailure('GitHub update download failed (HTTP ' + response.status + ').', 'DOWNLOAD_HTTP_ERROR', response.status);
         const length = response.headers?.get('content-length');
         if (length !== null && length !== undefined && (!/^\d+$/.test(length) || Number(length) !== asset.size)) {
           throw new Error('Release asset size does not match GitHub metadata.');
