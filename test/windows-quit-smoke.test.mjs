@@ -309,10 +309,22 @@ test('UIA child wait and cleanup phases are fixed safe diagnostics', async () =>
 
   const uia = await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8');
   for (const phase of phases) assert.ok(uia.includes("Write-UiaPhaseMarker '" + phase + "'"), phase + ' is emitted');
+  const processWait = uia.indexOf('$process.WaitForExit($remaining)');
+  const processTimeoutBranch = uia.indexOf('if ($waitTimedOut) {', processWait);
   const killing = uia.indexOf("Write-UiaPhaseMarker 'ui-child-killing'");
-  assert.ok(killing >= 0 && killing < uia.indexOf('try { $process.Kill() } catch {}', killing));
-  const killWait = uia.indexOf("Write-UiaPhaseMarker 'ui-child-kill-waiting'");
-  assert.ok(killWait >= 0 && killWait < uia.indexOf('[void]$process.WaitForExit(1000)', killWait));
+  const killWait = uia.indexOf("Write-UiaPhaseMarker 'ui-child-kill-waiting'", killing);
+  const kill = uia.indexOf('$process.Kill()', killing);
+  assert.ok(
+    processWait >= 0 && processTimeoutBranch > processWait &&
+      killing > processTimeoutBranch && kill > killing && kill < killWait,
+    'the process timeout branch gates kill after its wait outcome',
+  );
+  const reap = uia.indexOf('$process.WaitForExit(1000)', killWait);
+  const processCheck = uia.indexOf('if ($process.HasExited)', reap);
+  assert.ok(
+    killWait >= 0 && reap > killWait && processCheck > reap,
+    'the bounded one-second reap completes before checking process exit',
+  );
   const draining = uia.indexOf("Write-UiaPhaseMarker 'ui-child-output-draining'");
   assert.ok(draining >= 0, 'the child output-drain phase remains visible');
 
@@ -362,19 +374,24 @@ test('UIA output drain stays bounded and cleanup reaps remain capped', async () 
   );
   assert.equal(uia.split(deadline).length - 1, 3, 'each process/output wait path recalculates the three-second budget');
 
-  const processTimeoutBranch = uia.indexOf("if ($remaining -le 0 -or -not $process.WaitForExit($remaining)) {");
+  const processTimeoutBranch = uia.indexOf('if ($waitTimedOut) {', processWait);
   const timeoutDrainGuard = uia.indexOf("if (-not $drainComplete) { return 'timeout-no-phase' }");
   const phasesRead = uia.indexOf('$phases = @($childTokens.ToArray()', timeoutDrainGuard);
   const firstTimeoutNoPhase = uia.indexOf("return 'timeout-no-phase'");
   const secondTimeoutNoPhase = uia.indexOf("return 'timeout-no-phase'", firstTimeoutNoPhase + 1);
-  const normalDrainGuard = uia.indexOf("if ($remaining -le 0 -or -not $outputReadComplete.WaitOne($remaining)) { return 'unavailable' }");
-  const resultsRead = uia.indexOf('$results = @($childTokens.ToArray()', normalDrainGuard);
+  const normalDrainStart = uia.lastIndexOf("Write-UiaPhaseMarker 'ui-child-output-draining'");
+  const normalBudgetExit = uia.indexOf("return 'unavailable'", normalDrainStart);
+  const normalDrainGuard = uia.indexOf('if (-not $drainComplete) {', normalOutputWait);
+  const normalDrainExit = uia.indexOf("return 'unavailable'", normalDrainGuard);
+  const resultsRead = uia.indexOf('$results = @($childTokens.ToArray()', normalDrainExit);
   assert.equal(uia.split("return 'timeout-no-phase'").length - 1, 2, 'timeout-no-phase is reserved for the process-timeout branch');
   assert.ok(
-    processTimeoutBranch >= 0 && processTimeoutBranch < timeoutDrainGuard &&
+    processTimeoutBranch >= processWait && processTimeoutBranch < timeoutDrainGuard &&
       timeoutOutputWait < timeoutDrainGuard && timeoutDrainGuard < phasesRead &&
-      phasesRead < secondTimeoutNoPhase && secondTimeoutNoPhase < normalDrainGuard &&
-      normalDrainGuard < normalOutputWait && normalOutputWait < resultsRead,
+      phasesRead < secondTimeoutNoPhase && secondTimeoutNoPhase < normalDrainStart &&
+      normalDrainStart < normalBudget && normalBudget < normalBudgetExit &&
+      normalBudgetExit < normalOutputWait && normalOutputWait < normalDrainGuard &&
+      normalDrainGuard < normalDrainExit && normalDrainExit < resultsRead,
     'process timeout returns timeout-no-phase; normal EOF timeout returns unavailable before result tokens',
   );
 });
