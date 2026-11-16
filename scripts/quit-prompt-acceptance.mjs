@@ -58,10 +58,14 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
   });
 
   let matcherRejected = false;
+  let matcherOutcome = 'matched';
   try {
     const result = await ui('assert-body-mismatch-rejected', pid);
     matcherRejected = /^TUS_UIA: modified-body-rejected$/m.test(result);
-  } catch {}
+  } catch (error) {
+    matcherOutcome = String(error?.message || '').match(/prompt-reader-timeout-[a-z0-9-]+|expected-body-(?:mismatch|unavailable|timeout)|modified-body-button-returned/)?.[0] || 'probe-failed';
+    console.log('TUS_UIA_TEST: detail-probe-' + matcherOutcome);
+  }
 
   let keepOpenRejected = false;
   try {
@@ -93,7 +97,7 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
     dialog.showMessageBox = globalThis.__tusPromptTest.original;
     delete globalThis.__tusPromptTest;
   });
-  assert.equal(matcherRejected, true, 'the native matcher rejects the modified field as a definite body mismatch');
+  assert.equal(matcherRejected, true, 'the native matcher rejects the modified field as a definite body mismatch; safe outcome: ' + matcherOutcome);
   assert.equal(keepOpenRejected, true, 'keep-open refuses a changed body without clicking the button');
   assert.deepEqual(beforeDismissal, {
     resolved: false,

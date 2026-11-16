@@ -128,6 +128,8 @@ test('Windows quit prompt acceptance mutates message and detail independently', 
   assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'message'\)/);
   assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'detail'\)/);
   assert.match(automation, /Modified activity detail\./);
+  assert.match(automation, /TUS_UIA_TEST: detail-probe-/);
+  assert.match(automation, /prompt-reader-timeout-\[a-z0-9-\]\+/);
 });
 
 test('Windows quit acceptance recognizes the status-prefixed known detail', async () => {

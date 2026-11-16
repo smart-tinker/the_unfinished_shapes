@@ -297,9 +297,19 @@ try {
   $startInfo.RedirectStandardError = $true
   $process = New-Object System.Diagnostics.Process
   $process.StartInfo = $startInfo
+  $childTokens = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+  $outputHandler = {
+    param($sender, $eventArgs)
+    if ($null -ne $eventArgs.Data) {
+      $token = [regex]::Match([string]$eventArgs.Data, '^TUS_UIA_CHILD: (phase-[a-z0-9-]+|matched-[01]|mismatch|unavailable)$')
+      if ($token.Success) { $childTokens.Enqueue($token.Groups[1].Value) }
+    }
+  }.GetNewClosure()
+  $process.add_OutputDataReceived([System.Diagnostics.DataReceivedEventHandler]$outputHandler)
   $watch = [Diagnostics.Stopwatch]::StartNew()
   try {
     if (-not $process.Start()) { return 'unavailable' }
+    $process.BeginOutputReadLine()
     $payload = ConvertTo-Json -InputObject @{
       handle = $WindowHandle.ToInt64(); expectedMessages = $ExpectedMessages
       expectedDetails = $ExpectedDetails; goalStatusPrefix = $GoalStatusPrefix
@@ -311,16 +321,15 @@ try {
     if ($remaining -le 0 -or -not $process.WaitForExit($remaining)) {
       try { $process.Kill() } catch {}
       try { [void]$process.WaitForExit(1000) } catch {}
-      if (-not $process.HasExited) { return 'timeout-no-phase' }
-      $output = $process.StandardOutput.ReadToEnd()
-      $phases = [regex]::Matches($output, '(?m)^TUS_UIA_CHILD: (phase-[a-z0-9-]+)$')
-      if ($phases.Count -gt 0) { return 'timeout-' + $phases[$phases.Count - 1].Groups[1].Value }
+      if ($process.HasExited) { try { $process.WaitForExit() } catch {} }
+      $phases = @($childTokens.ToArray() | Where-Object { $_ -match '^phase-' })
+      if ($phases.Count -gt 0) { return 'timeout-' + $phases[$phases.Count - 1] }
       return 'timeout-no-phase'
     }
-    $output = $process.StandardOutput.ReadToEnd()
-    $results = [regex]::Matches($output, '(?m)^TUS_UIA_CHILD: (matched-[01]|mismatch|unavailable)$')
+    $process.WaitForExit()
+    $results = @($childTokens.ToArray() | Where-Object { $_ -match '^(matched-[01]|mismatch|unavailable)$' })
     if ($process.ExitCode -eq 0 -and $results.Count -gt 0) {
-      $result = $results[$results.Count - 1].Groups[1].Value
+      $result = $results[$results.Count - 1]
       if ($result -match '^matched-[01]$' -or $result -eq 'mismatch') { return $result }
     }
     return 'unavailable'
