@@ -247,6 +247,8 @@ test('UIA wrapper phases are flushed and safely reach mutation evidence', async 
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
   const { safeUiFailureOutcome } = await import('../scripts/quit-prompt-acceptance.mjs');
+  assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-no-phase']), 'prompt-reader-timeout-no-phase',
+    'the fixed no-phase timeout outcome is preserved');
   assert.equal(safeUiFailureOutcome(['ui-child-starting']), 'ui-child-starting',
     'a fixed UIA process phase is retained by the safe whitelist');
 
