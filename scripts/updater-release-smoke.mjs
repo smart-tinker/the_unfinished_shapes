@@ -79,11 +79,16 @@ async function start(executablePath, label, dataDir, useBaseline = false) {
     await graphics.assertHealthy();
     return active;
   } catch (error) {
-    if (instance) await withSmokeCleanup(
-      () => closeSmokeApp(instance, graphics, label + ' cleanup'),
-      () => gpu.finish(),
-    );
-    else await gpu.finish();
+    console.error('Updater smoke ' + label + ' startup failed: ' + error.message);
+    if (instance) {
+      const child = instance.process();
+      await Promise.race([
+        instance.close().catch(() => {}),
+        new Promise(resolve => setTimeout(resolve, 5000)),
+      ]);
+      if (child.exitCode === null) child.kill('SIGKILL');
+    }
+    await gpu.finish();
     throw error;
   }
 }
