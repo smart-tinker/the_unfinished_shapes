@@ -230,9 +230,9 @@ test('safe UIA failure classification distinguishes a child that reached the win
   const mutationProbe = source.slice(source.indexOf('async function assertModifiedPromptIsNotClicked'), source.indexOf('async function assertKnownStatusDetailIsRecognized'));
   assert.match(ui, /const detail = safeUiFailureOutcome\(/,
     'production UI failures use the safe classifier');
-  assert.match(mutationProbe, /(?:script-start|window-api-ready)-no-status/,
+  assert.match(mutationProbe, /\(\?:script-start\|window-api-ready\)-no-status/,
     'the mutation probe recognizes the safe no-status outcome');
-  assert.match(mutationProbe, /console\\.log\\('TUS_UIA_TEST: detail-probe-' \\+ matcherOutcome\\)/,
+  assert.match(mutationProbe, /console\.log\('TUS_UIA_TEST: detail-probe-' \+ matcherOutcome\)/,
     'the mutation probe emits the classified outcome as test evidence');
   const { safeUiFailureOutcome } = await import('../scripts/quit-prompt-acceptance.mjs');
   assert.equal(typeof safeUiFailureOutcome, 'function', 'failure classification is available');
