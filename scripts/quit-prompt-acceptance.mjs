@@ -31,18 +31,93 @@ async function ui(action, pid, menuKey) {
 }
 
 
-async function assertModifiedPromptIsNotClicked(app, pid, process) {
-  await app.evaluate(({ dialog }) => {
-    const state = { original: dialog.showMessageBox.bind(dialog), resolved: false, title: null, buttons: null, response: null };
+async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField) {
+  assert.ok(['message', 'detail'].includes(modifiedField), 'only one prompt body field is changed at a time');
+  await app.evaluate(({ dialog }, field) => {
+    const state = { original: dialog.showMessageBox.bind(dialog), resolved: false, title: null, message: null, detail: null, buttons: null, response: null };
     globalThis.__tusPromptTest = state;
     dialog.showMessageBox = async (window, options) => {
-      state.title = options.title;
-      state.buttons = [...options.buttons];
+      const modifiedOptions = {
+        ...options,
+        [field]: field === 'message' ? 'Modified activity message.' : 'Modified activity detail.',
+      };
+      state.title = modifiedOptions.title;
+      state.message = modifiedOptions.message;
+      state.detail = modifiedOptions.detail;
+      state.buttons = [...modifiedOptions.buttons];
+      const result = await state.original(window, modifiedOptions);
+      state.response = result.response;
+      state.resolved = true;
+      return result;
+    };
+  }, modifiedField);
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (!window) throw new Error('The packaged TUS window is unavailable.');
+    window.close();
+  });
+
+  const nativeMatcherResult = await ui('assert-body-mismatch-rejected', pid);
+  assert.match(nativeMatcherResult, /^TUS_UIA: modified-body-rejected$/m,
+    'the bounded matcher rejects a changed message or detail even when title and buttons remain exact');
+
+  let failure;
+  try { await ui('keep-open', pid); }
+  catch (error) { failure = error; }
+  assert.match(failure?.message || '', /expected-body-(?:mismatch|unavailable|timeout)/,
+    'a modified native prompt is rejected without clicking either button');
+  assert.equal(process.exitCode, null, 'rejecting a modified prompt leaves TUS running');
+
+  const beforeDismissal = await app.evaluate(() => {
+    const state = globalThis.__tusPromptTest;
+    return {
+      resolved: state?.resolved,
+      titleMatches: state?.title === 'Codex activity may continue',
+      messageMutated: state?.message === 'Modified activity message.',
+      detailMutated: state?.detail === 'Modified activity detail.',
+      buttonsMatch: JSON.stringify(state?.buttons) === JSON.stringify(['Keep the game open', 'Quit anyway']),
+    };
+  });
+  assert.deepEqual(beforeDismissal, {
+    resolved: false,
+    titleMatches: true,
+    messageMutated: modifiedField === 'message',
+    detailMutated: modifiedField === 'detail',
+    buttonsMatch: true,
+  }, 'the modified native prompt remains open and the helper did not click');
+
+  await ui('dismiss-test-prompt', pid);
+  const dismissal = await app.evaluate(async () => {
+    const state = globalThis.__tusPromptTest;
+    const deadline = Date.now() + 5000;
+    while (!state.resolved && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return { resolved: state.resolved, responseWasSafe: state.response === 0 };
+  });
+  assert.deepEqual(dismissal, { resolved: true, responseWasSafe: true }, 'test cleanup cancels the prompt with its safe default');
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = globalThis.__tusPromptTest.original;
+    delete globalThis.__tusPromptTest;
+  });
+  assert.equal(process.exitCode, null, 'the test prompt cancellation leaves TUS running');
+}
+
+
+async function assertKnownStatusDetailIsRecognized(app, pid, process) {
+  await app.evaluate(({ dialog }) => {
+    const state = { original: dialog.showMessageBox.bind(dialog), resolved: false };
+    globalThis.__tusKnownPromptTest = state;
+    dialog.showMessageBox = async (window, options) => {
       const result = await state.original(window, {
         ...options,
-        message: 'Modified activity message.',
+        title: 'Codex activity may continue',
+        message: 'Codex may still be working in this conversation.',
+        detail: 'Native Goal status: active. Quitting TUS closes its Codex connection but does not confirm that a Goal or turn stopped. Keep the game open to pause or clear the Goal, or quit anyway.',
+        buttons: ['Keep the game open', 'Quit anyway'],
+        defaultId: 0,
+        cancelId: 0,
       });
-      state.response = result.response;
       state.resolved = true;
       return result;
     };
@@ -52,41 +127,24 @@ async function assertModifiedPromptIsNotClicked(app, pid, process) {
     if (!window) throw new Error('The packaged TUS window is unavailable.');
     window.close();
   });
-
-  const nativeMatcherResult = await ui('assert-body-mismatch-rejected', pid);
-  assert.match(nativeMatcherResult, /^TUS_UIA: modified-body-rejected$/m,
-    'the bounded matcher rejects a changed message even when the production detail and buttons remain exact');
-
-  let failure;
-  try { await ui('keep-open', pid); }
-  catch (error) { failure = error; }
-  assert.match(failure?.message || '', /expected-message-(?:mismatch|missing|unavailable|timeout)/,
-    'a modified native prompt is rejected without clicking either button');
-  assert.equal(process.exitCode, null, 'rejecting a modified prompt leaves TUS running');
-
-  const beforeDismissal = await app.evaluate(() => {
-    const state = globalThis.__tusPromptTest;
-    return { resolved: state?.resolved, title: state?.title, buttons: state?.buttons };
-  });
-  assert.equal(beforeDismissal.resolved, false, 'the native prompt is still open, so the helper did not click');
-  assert.equal(beforeDismissal.title, 'Codex activity may continue');
-  assert.deepEqual(beforeDismissal.buttons, ['Keep the game open', 'Quit anyway']);
-
+  const result = await ui('assert-exact-body-recognized', pid);
+  assert.match(result, /^TUS_UIA: expected-body-recognized$/m,
+    'a known prompt with the native Goal status prefix is recognized');
+  assert.equal(process.exitCode, null, 'recognizing the known prompt does not click either button');
   await ui('dismiss-test-prompt', pid);
-  const dismissal = await app.evaluate(async () => {
-    const state = globalThis.__tusPromptTest;
+  const dismissed = await app.evaluate(async () => {
+    const state = globalThis.__tusKnownPromptTest;
     const deadline = Date.now() + 5000;
     while (!state.resolved && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 50));
     }
-    return { resolved: state.resolved, response: state.response };
+    return state.resolved;
   });
-  assert.deepEqual(dismissal, { resolved: true, response: 0 }, 'test cleanup cancels the prompt with its safe default');
+  assert.equal(dismissed, true, 'test cleanup cancels the known prompt');
   await app.evaluate(({ dialog }) => {
-    dialog.showMessageBox = globalThis.__tusPromptTest.original;
-    delete globalThis.__tusPromptTest;
+    dialog.showMessageBox = globalThis.__tusKnownPromptTest.original;
+    delete globalThis.__tusKnownPromptTest;
   });
-  assert.equal(process.exitCode, null, 'the test prompt cancellation leaves TUS running');
 }
 
 export async function quitPromptAcceptance(app, page, graphics) {
@@ -109,10 +167,12 @@ export async function quitPromptAcceptance(app, page, graphics) {
     process.once('error', reject);
   });
   try {
-    await assertModifiedPromptIsNotClicked(app, pid, process);
+    await assertKnownStatusDetailIsRecognized(app, pid, process);
+    await assertModifiedPromptIsNotClicked(app, pid, process, 'message');
+    await assertModifiedPromptIsNotClicked(app, pid, process, 'detail');
     await app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; if (!window) throw new Error('The packaged TUS window is unavailable.'); window.close(); });
     const exactPromptEvidence = await ui('assert-exact-body-recognized', pid);
-    assert.match(exactPromptEvidence, /^TUS_UIA: expected-body-recognized$/m, 'the exact production message is recognized before clicking');
+    assert.match(exactPromptEvidence, /^TUS_UIA: expected-body-recognized$/m, 'the exact production message and detail are recognized before clicking');
     const closePrompt = await ui('keep-open', pid);
     assert.match(closePrompt, /^TUS_UIA: exact-foreground-prompt-matched$/m, 'window-close prompt is the exact TUS dialog');
     assert.equal(process.exitCode, null, 'Keep the game open leaves the packaged process running');

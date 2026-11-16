@@ -144,7 +144,34 @@ await withSmokeCleanup(async () => {
   await dpiSession.send('Emulation.clearDeviceMetricsOverride');
   await dpiSession.detach();
   await instance.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size[0], size[1]), originalWindowSize);
-  await page.waitForFunction(size => innerWidth === size.width && innerHeight === size.height, originalViewport);
+  try {
+    await page.waitForFunction(size => innerWidth === size.width && innerHeight === size.height, originalViewport);
+  } catch (error) {
+    let timer;
+    const snapshot = await Promise.race([
+      Promise.all([
+        page.evaluate(() => ({ width: innerWidth, height: innerHeight, devicePixelRatio })),
+        instance.evaluate(({ BrowserWindow, screen }) => {
+          const win = BrowserWindow.getAllWindows()[0];
+          const bounds = win.getBounds();
+          return {
+            size: win.getSize(),
+            contentSize: win.getContentSize(),
+            bounds,
+            scaleFactor: screen.getDisplayMatching(bounds).scaleFactor,
+          };
+        }),
+      ]).then(([viewport, window]) => ({ viewport, window })).catch(() => null),
+      new Promise(resolve => { timer = setTimeout(() => resolve(null), 1000); }),
+    ]);
+    clearTimeout(timer);
+    console.log('TUS_VIEWPORT: restore-timeout ' + JSON.stringify({
+      expectedViewport: originalViewport,
+      expectedWindowSize: originalWindowSize,
+      actual: snapshot,
+    }));
+    throw error;
+  }
   graphics.phase('manual UI create, select, edit and remove');
   await manualEditing(page);
   graphics.phase('create current-candidate fixture');

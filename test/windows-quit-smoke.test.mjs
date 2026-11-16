@@ -108,6 +108,8 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
   assert.match(uia, /TUS_UIA_CHILD: phase-fromhandle-start/);
   assert.match(uia, /TUS_UIA_CHILD: phase-findfirst-\' \+ \$index \+ \'-start/);
   assert.match(uia, /TUS_UIA_CHILD: phase-current-name-\' \+ \$index \+ \'-start/);
+  assert.match(uia, /TUS_UIA_CHILD: phase-next-sibling-/);
+  assert.match(uia, /Test-ExpectedPromptDetail/);
   assert.match(uia, /-STA -EncodedCommand/);
   assert.match(uia, /UseShellExecute = \$false/);
   assert.match(uia, /RedirectStandardInput = \$true/);
@@ -124,6 +126,26 @@ test('Windows quit prompt acceptance mutates message and detail independently', 
   assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'detail'\)/);
   assert.match(automation, /Modified activity detail\./);
 });
+
+test('Windows quit acceptance recognizes the status-prefixed known detail', async () => {
+  const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
+  assert.match(automation, /assertKnownStatusDetailIsRecognized\(app, pid, process\)/);
+  assert.match(automation, /Native Goal status: active\./);
+});
+
+
+test('Windows viewport restore retains its exact assertion and logs a bounded numeric snapshot', async () => {
+  const source = await readFile(new URL('../scripts/windows-installer-smoke.mjs', import.meta.url), 'utf8');
+  const restoreStart = source.indexOf('await dpiSession.send(\'Emulation.clearDeviceMetricsOverride\')');
+  const restoreEnd = source.indexOf("graphics.phase('manual UI create, select, edit and remove')", restoreStart);
+  const restore = source.slice(restoreStart, restoreEnd);
+  assert.match(restore, /await page\.waitForFunction\(size => innerWidth === size\.width && innerHeight === size\.height, originalViewport\)/);
+  assert.match(restore, /TUS_VIEWPORT: restore-timeout/);
+  assert.match(restore, /devicePixelRatio/);
+  assert.match(restore, /scaleFactor/);
+  assert.match(restore, /setTimeout\(\(\) => resolve\(null\), 1000\)/);
+});
+
 
 test('native prompt acceptance uses bounded exact title, text and button checks', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
