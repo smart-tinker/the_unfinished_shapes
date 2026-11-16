@@ -282,8 +282,13 @@ test('UIA wrapper phases are flushed and safely reach mutation evidence', async 
   assert.match(ui, /safeUiFailureOutcome\(markers\.slice\(-3\)/,
     'UI errors reduce captured markers through the safe classifier');
   assert.doesNotMatch(ui, /stderrLine|error\.message/);
-  assert.ok(mutationProbe.includes('ui-(?:child-(?:starting|started|waiting|finished)|payload-(?:preparing|ready|writing|written))'),
-    'only allowlisted wrapper phases reach the mutation outcome parser');
+  const safeOutcomeSource = mutationProbe.match(/const safeOutcome = \/(.*)\/gi;/);
+  assert.ok(safeOutcomeSource, 'mutation probe retains a fixed safe outcome parser');
+  const safeOutcomeMatcher = new RegExp(safeOutcomeSource[1], 'i');
+  for (const phase of [
+    'ui-child-starting', 'ui-child-started', 'ui-child-waiting', 'ui-child-finished',
+    'ui-payload-preparing', 'ui-payload-ready', 'ui-payload-writing', 'ui-payload-written',
+  ]) assert.ok(safeOutcomeMatcher.test(phase), phase + ' is allowlisted in mutation evidence');
   assert.match(mutationProbe, /console\.log\('TUS_UIA_TEST: detail-probe-' \+ matcherOutcome\)/);
 });
 
@@ -323,5 +328,8 @@ test('UIA child wait and cleanup phases are fixed safe diagnostics', async () =>
     automation.indexOf('async function assertModifiedPromptIsNotClicked'),
     automation.indexOf('async function assertKnownStatusDetailIsRecognized'),
   );
-  for (const phase of phases) assert.ok(mutationProbe.includes(phase), phase + ' is allowlisted in mutation evidence');
+  const safeOutcomeSource = mutationProbe.match(/const safeOutcome = \/(.*)\/gi;/);
+  assert.ok(safeOutcomeSource, 'mutation probe retains a fixed safe outcome parser');
+  const safeOutcomeMatcher = new RegExp(safeOutcomeSource[1], 'i');
+  for (const phase of phases) assert.ok(safeOutcomeMatcher.test(phase), phase + ' is allowlisted in mutation evidence');
 });
