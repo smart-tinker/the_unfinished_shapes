@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import { compareReleaseVersions } from '../src/update-release.mjs';
+import { safeVerifierCode } from '../src/update-package.mjs';
 import { closeSmokeApp, observeGraphics, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 
@@ -239,29 +240,49 @@ async function updateOnce(distribution) {
   });
   await current.page.locator('#updates-download').click();
   try {
-    await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.startsWith('Verified '), null, { timeout: 180000 });
+    await current.page.waitForFunction(() => {
+      const status = document.querySelector('#updates-status');
+      return status?.textContent.startsWith('Verified ') || status?.dataset.updateFailure === 'true';
+    }, null, { timeout: 180000 });
   } catch (error) {
     const diagnostic = await current.page.evaluate(() => {
-      const text = document.querySelector('#updates-status')?.textContent?.slice(0, 300) || '';
-      const progress = text.match(/^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./);
+      const status = document.querySelector('#updates-status');
+      const text = status?.textContent?.slice(0, 300) || '';
+      const progress = text.match(/^Downloading release package: (\\d+(?:\\.\\d+)?) \/ (\\d+(?:\\.\\d+)?) MB\\./);
       const mb = value => { const number = Number(value); return Number.isFinite(number) && number >= 0 && number <= 500 ? number : null; };
-      const httpStatus = Number(text.match(/\bHTTP (\d{3})\b/)?.[1]) || null;
-      const state = progress ? 'downloading' : text === 'Downloading release package…' ? 'starting' : text.startsWith('Verified ') ? 'verified' : 'other';
-      const errorCode = /rate limit/i.test(text) ? 'rate_limited'
-        : /digest|sha-?256/i.test(text) ? 'digest_error'
-        : /provenance|attestation/i.test(text) ? 'provenance_error'
-        : /timeout|aborted/i.test(text) ? 'timeout' : httpStatus ? 'http_error' : state === 'other' ? 'other' : null;
+      const httpStatus = Number(text.match(/\\bHTTP (\\d{3})\\b/)?.[1]) || null;
+      const state = progress ? 'downloading' : status?.dataset.updateFailure === 'true' ? 'failed'
+        : text === 'Downloading release package…' ? 'starting' : text.startsWith('Verified ') ? 'verified' : 'other';
       return {
         state,
         receivedMB: progress ? mb(progress[1]) : null,
         totalMB: progress ? mb(progress[2]) : null,
         httpStatus,
-        errorCode,
+        phase: status?.dataset.updatePhase || null,
+        verifierCode: status?.dataset.verifierCode || null,
         cancelEnabled: !document.querySelector('#updates-cancel')?.disabled,
       };
-    }).catch(() => ({ state: 'unavailable', receivedMB: null, totalMB: null, httpStatus: null, errorCode: 'snapshot_unavailable', cancelEnabled: null }));
+    }).catch(() => ({ state: 'unavailable', receivedMB: null, totalMB: null, httpStatus: null, phase: null, verifierCode: null, cancelEnabled: null }));
+    const safeDiagnostic = {
+      ...diagnostic,
+      phase: ['download', 'provenance'].includes(diagnostic.phase) ? diagnostic.phase : 'unknown',
+      verifierCode: safeVerifierCode(diagnostic.verifierCode),
+    };
     assert.ok([diagnostic.receivedMB, diagnostic.totalMB].every(value => value === null || value >= 0 && value <= 500), 'timeout progress diagnostic stays bounded');
-    throw new Error(error.message + '; update=' + JSON.stringify(diagnostic));
+    throw new Error(error.message + '; update=' + JSON.stringify(safeDiagnostic));
+  }
+  const terminalFailure = await current.page.evaluate(() => {
+    const status = document.querySelector('#updates-status');
+    return status?.dataset.updateFailure === 'true'
+      ? { phase: status.dataset.updatePhase, verifierCode: status.dataset.verifierCode }
+      : null;
+  });
+  if (terminalFailure) {
+    const diagnostic = {
+      phase: ['download', 'provenance'].includes(terminalFailure.phase) ? terminalFailure.phase : 'unknown',
+      verifierCode: safeVerifierCode(terminalFailure.verifierCode),
+    };
+    throw new Error('Updater failed before verification; update=' + JSON.stringify(diagnostic));
   }
   const verified = await current.page.locator('#updates-status').innerText();
   assert.ok(verified.startsWith('Verified ' + assetName + ' (SHA-256 '), 'the UI reports the exact selected package only after digest and provenance verification');

@@ -14,6 +14,15 @@ const maxAssetBytes = 500_000_000;
 const maxJsonBytes = 2_000_000;
 const maxExtractedBytes = 1_073_741_824;
 const maxArchiveEntries = 20_000;
+const sigstoreVerifierCodes = new Set([
+  'NOT_IMPLEMENTED_ERROR', 'TLOG_ERROR', 'TLOG_INCLUSION_PROOF_ERROR', 'TLOG_INCLUSION_PROMISE_ERROR',
+  'TLOG_MISSING_INCLUSION_ERROR', 'TLOG_BODY_ERROR', 'CERTIFICATE_ERROR', 'PUBLIC_KEY_ERROR',
+  'SIGNATURE_ERROR', 'TIMESTAMP_ERROR', 'UNTRUSTED_SIGNER_ERROR',
+]);
+
+export function safeVerifierCode(code) {
+  return typeof code === 'string' && sigstoreVerifierCodes.has(code) ? code : 'OTHER';
+}
 const downloadHosts = new Set(['github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com', 'github-releases.githubusercontent.com']);
 
 function releaseVersion(tag) {
@@ -62,7 +71,10 @@ export async function verifyReleaseAttestation({ bundle, asset, tag }, verifySig
       certificateIssuer: 'https://token.actions.githubusercontent.com',
     });
   } catch (error) {
-    throw new Error('Release attestation signature rejected: ' + String(error?.message || error).slice(0, 300));
+    const code = safeVerifierCode(error?.code);
+    const rejection = new Error('Release attestation signature rejected [verifier=' + code + '].');
+    rejection.code = code;
+    throw rejection;
   }
   const envelope = bundle.dsseEnvelope;
   if (bundle.mediaType !== 'application/vnd.dev.sigstore.bundle.v0.3+json' ||
@@ -141,6 +153,7 @@ export async function downloadVerifiedAsset({
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const finalPath = path.join(directory, digest + '-' + asset.name);
   let created = false;
+  let phase = 'download';
   let partPath = finalPath + '.' + randomUUID() + '.part';
   try {
     let cached = false;
@@ -201,6 +214,8 @@ export async function downloadVerifiedAsset({
       }
       if (!created) throw new Error('GitHub did not provide the requested release asset.');
     }
+    phase = 'provenance';
+    onProgress({ state: 'verifying', phase });
     const provenance = await fetchAttestation({ fetcher, digest, tag, asset, signal: requestSignal, verifySignature });
     onProgress({ received: asset.size, total: asset.size, verified: true });
     return { filePath: finalPath, sha256: digest, size: asset.size, sourceSha: provenance.sourceSha, assetName: asset.name };
@@ -208,6 +223,7 @@ export async function downloadVerifiedAsset({
     if (partPath) await rm(partPath, { force: true }).catch(() => {});
     if (created) await rm(finalPath, { force: true }).catch(() => {});
     if (signal?.aborted && (error?.name === 'AbortError' || error?.code === 'ABORT_ERR')) return { cancelled: true };
+    onProgress({ state: 'failed', phase, verifierCode: safeVerifierCode(error?.code) });
     throw error;
   }
 }

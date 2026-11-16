@@ -106,6 +106,7 @@ app.whenReady().then(async()=>{
     if (updateDownloadController) throw new Error('An update download is already running.');
     const controller = new AbortController();
     updateDownloadController = controller;
+    let failureReported = false;
     try {
       const directory = path.join(app.getPath('downloads'), 'TheUnfinishedShapes-Updates');
       const { downloadVerifiedAsset } = await import('./update-package.mjs');
@@ -113,12 +114,20 @@ app.whenReady().then(async()=>{
         ...availableUpdate,
         tag: availableUpdate.release.tag_name,
         directory, signal: controller.signal,
-        onProgress: progress => win?.webContents.send('updates:progress', { state: 'downloading', ...progress }),
+        onProgress: progress => {
+          if (progress?.state === 'failed') failureReported = true;
+          win?.webContents.send('updates:progress', { state: 'downloading', ...progress });
+        },
       });
       if (result?.cancelled === true) return result;
       downloadedUpdate = { ...availableUpdate, ...result };
       win?.webContents.send('updates:progress', { state: 'verified', assetName: result.assetName, sha256: result.sha256 });
       return { assetName: result.assetName, sha256: result.sha256, distribution: availableUpdate.distribution };
+    } catch (error) {
+      if (!failureReported) {
+        win?.webContents.send('updates:progress', { state: 'failed', phase: 'download', verifierCode: 'OTHER' });
+      }
+      throw error;
     } finally {
       if (updateDownloadController === controller) updateDownloadController = null;
     }

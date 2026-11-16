@@ -1221,6 +1221,10 @@ $('updates-check').addEventListener('click', async () => {
 $('update-channel').addEventListener('change', () => { checkedUpdate = null; updateDownloaded = false; updateExtracted = false; updateStatus('Save the channel preference, then check for updates.'); updateButtons(); });
 $('update-distribution').addEventListener('change', () => { checkedUpdate = null; updateDownloaded = false; updateExtracted = false; updateStatus('Check again for the selected Windows package.'); updateButtons(); });
 $('updates-download').addEventListener('click', async () => {
+  const status = $('updates-status');
+  delete status.dataset.updateFailure;
+  delete status.dataset.updatePhase;
+  delete status.dataset.verifierCode;
   updateDownloading = true; updateBusy = true; updateButtons(); updateStatus('Downloading release package…');
   try {
     const result = await bridge.downloadUpdate();
@@ -1260,6 +1264,13 @@ bridge?.onUpdateProgress(progress => {
     const received = (progress.received / 1048576).toFixed(1);
     const total = (progress.total / 1048576).toFixed(1);
     updateStatus('Downloading release package: ' + received + ' / ' + total + ' MB.');
+  } else if (progress?.state === 'verifying') {
+    updateStatus('Verifying release provenance…');
+  } else if (progress?.state === 'failed') {
+    const status = $('updates-status');
+    status.dataset.updateFailure = 'true';
+    status.dataset.updatePhase = progress.phase === 'provenance' ? 'provenance' : 'download';
+    status.dataset.verifierCode = typeof progress.verifierCode === 'string' ? progress.verifierCode : 'OTHER';
   } else if (progress?.state === 'verified') {
     updateStatus('Verified ' + progress.assetName + ' (SHA-256 ' + progress.sha256.slice(0, 12) + '…).');
   } else if (progress?.state === 'extracted') {
