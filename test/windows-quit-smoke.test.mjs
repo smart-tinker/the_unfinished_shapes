@@ -373,13 +373,19 @@ test('UIA output drain stays bounded and cleanup reaps remain capped', async () 
   );
   assert.equal(uia.split(deadline).length - 1, 3, 'each process/output wait path recalculates the three-second budget');
 
+  const processTimeoutBranch = uia.indexOf("if ($remaining -le 0 -or -not $process.WaitForExit($remaining)) {");
   const timeoutDrainGuard = uia.indexOf("if (-not $drainComplete) { return 'timeout-no-phase' }");
   const phasesRead = uia.indexOf('$phases = @($childTokens.ToArray()', timeoutDrainGuard);
-  assert.ok(timeoutDrainGuard >= 0 && timeoutOutputWait < timeoutDrainGuard && timeoutDrainGuard < phasesRead,
-    'timeout path rejects partial child phases before reading them');
-
+  const firstTimeoutNoPhase = uia.indexOf("return 'timeout-no-phase'");
+  const secondTimeoutNoPhase = uia.indexOf("return 'timeout-no-phase'", firstTimeoutNoPhase + 1);
   const normalDrainGuard = uia.indexOf("if ($remaining -le 0 -or -not $outputReadComplete.WaitOne($remaining)) { return 'unavailable' }");
   const resultsRead = uia.indexOf('$results = @($childTokens.ToArray()', normalDrainGuard);
-  assert.ok(normalDrainGuard >= 0 && normalDrainGuard < normalOutputWait && normalOutputWait < resultsRead,
-    'normal path rejects partial match tokens before reading them');
+  assert.equal(uia.split("return 'timeout-no-phase'").length - 1, 2, 'timeout-no-phase is reserved for the process-timeout branch');
+  assert.ok(
+    processTimeoutBranch >= 0 && processTimeoutBranch < timeoutDrainGuard &&
+      timeoutOutputWait < timeoutDrainGuard && timeoutDrainGuard < phasesRead &&
+      phasesRead < secondTimeoutNoPhase && secondTimeoutNoPhase < normalDrainGuard &&
+      normalDrainGuard < normalOutputWait && normalOutputWait < resultsRead,
+    'process timeout returns timeout-no-phase; normal EOF timeout returns unavailable before result tokens',
+  );
 });
