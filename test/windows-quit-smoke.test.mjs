@@ -57,6 +57,8 @@ test('Windows UI automation preserves child output for safe failure reporting', 
   assert.match(ui, /resolve\(\{\s*error,\s*stdout,\s*stderr\s*\}\)/);
   assert.match(ui, /error\.killed/);
   assert.match(ui, /error\.signal/);
+  assert.match(ui, /const detail = marker \|\| processFailure/);
+  assert.doesNotMatch(ui, /stderrLine/);
 });
 
 
