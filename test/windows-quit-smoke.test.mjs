@@ -129,6 +129,7 @@ test('Windows quit prompt acceptance mutates message and detail independently', 
   assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'detail'\)/);
   assert.match(automation, /Modified activity detail\./);
   assert.match(automation, /TUS_UIA_TEST: detail-probe-/);
+  assert.match(automation, /if \(matcherRejected\)\s*\{\s*try\s*\{\s*await ui\('keep-open', pid\)/);
   assert.match(automation, /prompt-reader-timeout-\[a-z0-9-\]\+/);
 });
 

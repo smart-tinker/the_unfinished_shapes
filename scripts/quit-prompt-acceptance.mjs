@@ -58,20 +58,23 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
   });
 
   let matcherRejected = false;
-  let matcherOutcome = 'matched';
+  let matcherOutcome = 'unverified';
   try {
     const result = await ui('assert-body-mismatch-rejected', pid);
     matcherRejected = /^TUS_UIA: modified-body-rejected$/m.test(result);
+    matcherOutcome = matcherRejected ? 'mismatch' : 'unexpected-result';
   } catch (error) {
     matcherOutcome = String(error?.message || '').match(/prompt-reader-timeout-[a-z0-9-]+|expected-body-(?:mismatch|unavailable|timeout)|modified-body-button-returned/)?.[0] || 'probe-failed';
     console.log('TUS_UIA_TEST: detail-probe-' + matcherOutcome);
   }
 
   let keepOpenRejected = false;
-  try {
-    await ui('keep-open', pid);
-  } catch (error) {
-    keepOpenRejected = /expected-body-mismatch/.test(error?.message || '');
+  if (matcherRejected) {
+    try {
+      await ui('keep-open', pid);
+    } catch (error) {
+      keepOpenRejected = /expected-body-mismatch/.test(error?.message || '');
+    }
   }
   const beforeDismissal = await app.evaluate(() => {
     const state = globalThis.__tusPromptTest;
