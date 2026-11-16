@@ -12,6 +12,19 @@ import { safeVerifierCode } from '../src/update-package.mjs';
 import { closeSmokeApp, observeGraphics, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 
+const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
+const updateHttpStatusPattern = /\bHTTP (\d{3})\b/;
+assert.deepEqual(
+  'Downloading release package: 1.5 / 42.0 MB.'.match(updateProgressPattern)?.slice(1),
+  ['1.5', '42.0'],
+  'the timeout diagnostic parses bounded download progress',
+);
+assert.equal(
+  'GitHub release provenance check failed (HTTP 403).'.match(updateHttpStatusPattern)?.[1],
+  '403',
+  'the timeout diagnostic keeps only the HTTP status code',
+);
+
 const execute = promisify(execFile);
 const executable = path.resolve(process.env.TUS_SMOKE_EXECUTABLE || '');
 assert.ok(process.env.CI === 'true' && process.env.RUNNER_OS, 'updater package acceptance runs only on a GitHub Actions runner');
@@ -245,12 +258,12 @@ async function updateOnce(distribution) {
       return status?.textContent.startsWith('Verified ') || status?.dataset.updateFailure === 'true';
     }, null, { timeout: 180000 });
   } catch (error) {
-    const diagnostic = await current.page.evaluate(() => {
+    const diagnostic = await current.page.evaluate(({ progressPattern, httpStatusPattern }) => {
       const status = document.querySelector('#updates-status');
       const text = status?.textContent?.slice(0, 300) || '';
-      const progress = text.match(/^Downloading release package: (\\d+(?:\\.\\d+)?) \/ (\\d+(?:\\.\\d+)?) MB\\./);
+      const progress = text.match(new RegExp(progressPattern));
       const mb = value => { const number = Number(value); return Number.isFinite(number) && number >= 0 && number <= 500 ? number : null; };
-      const httpStatus = Number(text.match(/\\bHTTP (\\d{3})\\b/)?.[1]) || null;
+      const httpStatus = Number(text.match(new RegExp(httpStatusPattern))?.[1]) || null;
       const state = progress ? 'downloading' : status?.dataset.updateFailure === 'true' ? 'failed'
         : text === 'Downloading release package…' ? 'starting' : text.startsWith('Verified ') ? 'verified' : 'other';
       return {
@@ -262,7 +275,7 @@ async function updateOnce(distribution) {
         verifierCode: status?.dataset.verifierCode || null,
         cancelEnabled: !document.querySelector('#updates-cancel')?.disabled,
       };
-    }).catch(() => ({ state: 'unavailable', receivedMB: null, totalMB: null, httpStatus: null, phase: null, verifierCode: null, cancelEnabled: null }));
+    }, { progressPattern: updateProgressPattern.source, httpStatusPattern: updateHttpStatusPattern.source }).catch(() => ({ state: 'unavailable', receivedMB: null, totalMB: null, httpStatus: null, phase: null, verifierCode: null, cancelEnabled: null }));
     const safeDiagnostic = {
       ...diagnostic,
       phase: ['download', 'provenance'].includes(diagnostic.phase) ? diagnostic.phase : 'unknown',

@@ -390,7 +390,7 @@ test('reports terminal verifier failures with a safe provenance phase and allowl
     const directory = await mkdtemp(path.join(os.tmpdir(), 'tus-update-verifier-failure-'));
     const progress = [];
     try {
-      const error = await assert.rejects(downloadVerifiedAsset({
+      await assert.rejects(downloadVerifiedAsset({
         asset: downloadAsset, tag, directory,
         onProgress: event => progress.push(event),
         fetcher: async url => {
@@ -403,11 +403,13 @@ test('reports terminal verifier failures with a safe provenance phase and allowl
           throw new Error('Unexpected destination');
         },
         verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code: inputCode }); },
-      }));
-      assert.deepEqual(progress.at(-1), {
-        state: 'failed', phase: 'provenance', verifierCode: expectedCode,
+      }), error => {
+        assert.deepEqual(progress.at(-1), {
+          state: 'failed', phase: 'provenance', verifierCode: expectedCode,
+        });
+        assert.doesNotMatch(error.message, /private verifier detail/);
+        return true;
       });
-      assert.doesNotMatch(error.message, /private verifier detail/);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
