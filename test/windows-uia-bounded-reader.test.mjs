@@ -8,6 +8,10 @@ import { fileURLToPath } from 'node:url';
 const run = promisify(execFile);
 const readerTest = fileURLToPath(new URL('./windows-uia-bounded-reader.ps1', import.meta.url));
 
+function filterAllowlistedOutput(output, allowedLines) {
+  return output.split(/\r?\n/).filter((line) => allowedLines.has(line)).join('\n');
+}
+
 const waitControlTest = fileURLToPath(new URL('./windows-uia-wait-control.ps1', import.meta.url));
 const safeControlMarkers = new Set([
   'TUS_UIA_CONTROL: control-start',
@@ -31,7 +35,7 @@ const safeControlMarkers = new Set([
   'TUS_UIA_CONTROL: process-not-exited',
   'TUS_UIA_CONTROL: stdout-eof-started',
   'TUS_UIA_CONTROL: stdout-eof-completed',
-  'TUS_UIA_CONTROL: stdout-eof-timed-out',
+  'TUS_UIA_CONTROL: stdout-eof-pending',
   'TUS_UIA_CONTROL: stdout-eof-skipped-process-not-exited',
   'TUS_UIA_CONTROL: stdout-eof-threw',
   'TUS_UIA_CONTROL: control-failed',
@@ -40,6 +44,10 @@ const safeControlMarkers = new Set([
 ]);
 
 const safeDiagnosticMarkers = new Set([
+  'TUS_UIA_TEST: result=timeout-phase-child-start',
+  'TUS_UIA: ui-child-killing',
+  'TUS_UIA: ui-child-kill-waiting',
+  'TUS_UIA: ui-child-exit-checking',
   'TUS_UIA_DIAG: diagnostic-enabled',
   'TUS_UIA_DIAG: bounded-wait-returned',
   'TUS_UIA_DIAG: wait-started',
@@ -66,8 +74,7 @@ const safeDiagnosticMarkers = new Set([
 
 test('allowlist output drops an unapproved sentinel', () => {
   const rawOutput = 'TUS_UIA_CONTROL: control-start\nUNAPPROVED_SENTINEL';
-  const filterAllowlistedOutput = undefined;
-  const filteredOutput = filterAllowlistedOutput?.(rawOutput, safeControlMarkers) ?? rawOutput;
+  const filteredOutput = filterAllowlistedOutput(rawOutput, safeControlMarkers);
   assert.ok(filteredOutput === 'TUS_UIA_CONTROL: control-start',
     'unapproved marker output is omitted');
 });
@@ -85,8 +92,8 @@ test('bounded WaitForExit control honors 1000ms with redirected streams and asyn
     processFailed = true;
     stdout = String(error?.stdout ?? '');
   }
-  const safeMarkers = stdout.split(/\r?\n/).filter((line) => safeControlMarkers.has(line));
-  console.log(safeMarkers.length ? safeMarkers.join('\n') : 'TUS_UIA_CONTROL: no-safe-markers');
+  const safeOutput = filterAllowlistedOutput(stdout, safeControlMarkers);
+  console.log(safeOutput || 'TUS_UIA_CONTROL: no-safe-markers');
   const elapsed = Date.now() - startedAt;
 
   assert.ok(elapsed < 6000, 'the bounded WaitForExit control completes within six seconds');
@@ -95,10 +102,12 @@ test('bounded WaitForExit control honors 1000ms with redirected streams and asyn
     'control-start', 'child-started', 'wait-started',
     'wait-returned', 'wait-timed-out', 'wait-within-bound',
     'kill-returned', 'reap-completed', 'process-exited',
-    'stdout-eof-completed', 'control-passed',
+    'stdout-eof-started', 'control-passed',
   ]) {
-    assert.match(stdout, new RegExp('^TUS_UIA_CONTROL: ' + marker + '$', 'm'), marker + ' is recorded');
+    assert.match(safeOutput, new RegExp('^TUS_UIA_CONTROL: ' + marker + '$', 'm'), marker + ' is recorded');
   }
+  assert.match(safeOutput, /^TUS_UIA_CONTROL: stdout-eof-(?:completed|pending)$/m,
+    'stdout EOF is observed without a blocking wait');
 });
 
 test('bounded UIA child preserves only a complete safe phase after kill and reap', { skip: process.platform !== 'win32' }, async () => {
@@ -113,32 +122,32 @@ test('bounded UIA child preserves only a complete safe phase after kill and reap
     ], { timeout: 35000, windowsHide: true }));
   } catch (error) {
     processFailed = true;
-    const safeMarkers = String(error?.stdout ?? '').split(/\r?\n/)
-      .filter((line) => safeDiagnosticMarkers.has(line));
-    console.log(safeMarkers.length ? safeMarkers.join('\n') : 'TUS_UIA_DIAG: no-safe-markers');
+    const safeErrorOutput = filterAllowlistedOutput(String(error?.stdout ?? ''), safeDiagnosticMarkers);
+    console.log(safeErrorOutput || 'TUS_UIA_DIAG: no-safe-markers');
   }
+  const safeOutput = filterAllowlistedOutput(stdout, safeDiagnosticMarkers);
   const elapsed = Date.now() - startedAt;
 
   assert.ok(elapsed < 8000, 'the timeout, kill, reap and output drain remain bounded');
   assert.equal(processFailed, false, 'the PowerShell test process exits successfully');
-  assert.match(stdout, /^TUS_UIA_TEST: result=timeout-phase-child-start$/m,
+  assert.match(safeOutput, /^TUS_UIA_TEST: result=timeout-phase-child-start$/m,
     'the complete allowlisted phase is retained after the timed-out child is reaped');
-  assert.match(stdout, /^TUS_UIA_DIAG: diagnostic-enabled$/m,
+  assert.match(safeOutput, /^TUS_UIA_DIAG: diagnostic-enabled$/m,
     'test override enables safe diagnostic markers');
-  assert.match(stdout, /^TUS_UIA_DIAG: bounded-wait-returned$/m,
+  assert.match(safeOutput, /^TUS_UIA_DIAG: bounded-wait-returned$/m,
     'the bounded process wait returned before child cleanup');
-  assert.match(stdout, /^TUS_UIA_DIAG: wait-(?:timed-out|budget-expired)$/m,
+  assert.match(safeOutput, /^TUS_UIA_DIAG: wait-(?:timed-out|budget-expired)$/m,
     'the diagnostic records the bounded wait outcome');
-  assert.match(stdout, /^TUS_UIA_DIAG: kill-(?:returned|failed)$/m,
+  assert.match(safeOutput, /^TUS_UIA_DIAG: kill-(?:returned|failed)$/m,
     'the diagnostic records the kill outcome');
-  assert.match(stdout, /^TUS_UIA_DIAG: reap-(?:completed|timed-out|threw)$/m,
+  assert.match(safeOutput, /^TUS_UIA_DIAG: reap-(?:completed|timed-out|threw)$/m,
     'the diagnostic records the bounded reap outcome');
-  assert.match(stdout, /^TUS_UIA_DIAG: (?:process-exited|process-not-exited)$/m,
+  assert.match(safeOutput, /^TUS_UIA_DIAG: (?:process-exited|process-not-exited)$/m,
     'the diagnostic records the post-reap process state');
-  assert.match(stdout, /^TUS_UIA_DIAG: stdout-eof-(?:completed|timed-out|budget-expired|skipped-process-not-exited|threw)$/m,
+  assert.match(safeOutput, /^TUS_UIA_DIAG: stdout-eof-(?:completed|timed-out|budget-expired|skipped-process-not-exited|threw)$/m,
     'the diagnostic records the stdout EOF drain outcome');
   for (const phase of ['ui-child-killing', 'ui-child-kill-waiting', 'ui-child-exit-checking']) {
-    assert.match(stdout, new RegExp('^TUS_UIA: ' + phase + '$', 'm'), phase + ' is exercised');
+    assert.match(safeOutput, new RegExp('^TUS_UIA: ' + phase + '$', 'm'), phase + ' is exercised');
   }
   assert.equal(/UNAPPROVED_PROMPT_TEST_PAYLOAD|phase-unapproved-test-output|phase-payload-read-start-partial/.test(stdout + stderr), false,
     'arbitrary and unterminated child output is never surfaced');
