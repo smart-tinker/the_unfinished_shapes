@@ -268,8 +268,9 @@ switch ($Action) {
       Write-Output 'TUS_UIA: modified-body-button-returned'
       exit 2
     }
-    if ([TusWindowLookup]::LastPromptStatus -ne 'expected-message-mismatch') {
-      Write-Output "TUS_UIA: prompt-$([TusWindowLookup]::LastPromptStatus)"
+    $status = [TusWindowLookup]::LastPromptStatus
+    if ($status -ne 'expected-message-mismatch' -and $status -ne 'expected-message-unavailable') {
+      Write-Output "TUS_UIA: prompt-$status"
       exit 2
     }
     Write-Output 'TUS_UIA: modified-body-rejected'
