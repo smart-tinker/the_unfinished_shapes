@@ -125,6 +125,7 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
 
 test('Windows quit prompt acceptance mutates message and detail independently', async () => {
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
+  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
   assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'message'\)/);
   assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'detail'\)/);
   assert.match(automation, /Modified activity detail\./);
