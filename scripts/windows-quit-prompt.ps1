@@ -332,11 +332,15 @@ try {
     Write-UiaPhaseMarker 'ui-child-started'
     $process.BeginOutputReadLine()
     Write-UiaPhaseMarker 'ui-payload-preparing'
-    $payload = ConvertTo-Json -InputObject @{
-      handle = $WindowHandle.ToInt64(); expectedMessages = $ExpectedMessages
-      expectedDetails = $ExpectedDetails; goalStatusPrefix = $GoalStatusPrefix
-    } -Compress
-    $payloadLine = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload))
+    if ([string]::IsNullOrEmpty($ChildScriptOverride)) {
+      $payload = ConvertTo-Json -InputObject @{
+        handle = $WindowHandle.ToInt64(); expectedMessages = $ExpectedMessages
+        expectedDetails = $ExpectedDetails; goalStatusPrefix = $GoalStatusPrefix
+      } -Compress
+      $payloadLine = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload))
+    } else {
+      $payloadLine = 'synthetic-child-test'
+    }
     Write-UiaPhaseMarker 'ui-payload-ready'
     Write-UiaPhaseMarker 'ui-payload-writing'
     $process.StandardInput.WriteLine($payloadLine)
