@@ -343,13 +343,43 @@ test('UIA output drain stays bounded and cleanup reaps remain capped', async () 
   );
   assert.ok(!uia.includes('$process.WaitForExit()'), 'no process wait is unbounded');
   assert.equal(uia.split('$process.WaitForExit(1000)').length - 1, 2, 'both bounded child-reap waits remain');
-  assert.ok(uia.includes('$outputReadComplete.Set()'), 'stdout EOF signals completion');
-  assert.ok(uia.includes('$outputReadComplete.WaitOne($remaining)'), 'output drain uses the remaining budget');
-  const drainGuard = uia.indexOf("if (-not $drainComplete) { return 'timeout-no-phase' }");
-  assert.ok(drainGuard >= 0 && drainGuard < uia.indexOf('$phases = @($childTokens.ToArray()', drainGuard), 'timeout path rejects partial child phases');
-  assert.ok(uia.includes("if ($remaining -le 0 -or -not $outputReadComplete.WaitOne($remaining)) { return 'unavailable' }"),
-    'an incomplete output drain remains fail-closed');
-  assert.ok(uia.includes('$process.WaitForExit($remaining)'), 'process exit uses the remaining budget');
+
+  const outputHandlerStart = uia.indexOf('$outputHandler = {');
+  const outputHandlerEnd = uia.indexOf('}.GetNewClosure()', outputHandlerStart);
+  assert.ok(outputHandlerStart >= 0 && outputHandlerEnd > outputHandlerStart, 'stdout handler is present');
+  const outputHandler = uia.slice(outputHandlerStart, outputHandlerEnd);
+  assert.ok(
+    /if\s*\(\$null\s+-eq\s+\$eventArgs\.Data\)\s*\{[\s\S]*?\$outputReadComplete\.Set\(\)[\s\S]*?return\s*\}[\s\S]*?\$token\s*=\s*\[regex\]::Match/.test(outputHandler),
+    'stdout EOF signals completion in the null-data branch before token parsing',
+  );
+  assert.equal(uia.split('$outputReadComplete.Set()').length - 1, 1, 'stdout EOF has one completion signal');
+
+  const outputWait = '$outputReadComplete.WaitOne($remaining)';
+  const timeoutOutputWait = uia.indexOf(outputWait);
+  const normalOutputWait = uia.indexOf(outputWait, timeoutOutputWait + outputWait.length);
   const deadline = '$remaining = 3000 - [int]$watch.ElapsedMilliseconds';
-  assert.ok(uia.split(deadline).length - 1 >= 2, 'process and output waits recompute the original three-second deadline');
+  const processWait = uia.indexOf('$process.WaitForExit($remaining)');
+  const cleanupReap = uia.indexOf('$process.WaitForExit(1000)', processWait);
+  const processBudget = uia.lastIndexOf(deadline, processWait);
+  const timeoutBudget = uia.lastIndexOf(deadline, timeoutOutputWait);
+  const normalBudget = uia.lastIndexOf(deadline, normalOutputWait);
+  assert.ok(uia.includes('$watch = [Diagnostics.Stopwatch]::StartNew()'), 'all waits share the original stopwatch');
+  assert.ok(
+    processBudget >= 0 && processBudget < processWait &&
+      processWait < cleanupReap && cleanupReap < timeoutBudget &&
+      timeoutBudget < timeoutOutputWait && timeoutOutputWait < normalBudget &&
+      normalBudget < normalOutputWait,
+    'process and output waits recalculate the same deadline in order, including after the timeout reap',
+  );
+  assert.equal(uia.split(deadline).length - 1, 3, 'each process/output wait path recalculates the three-second budget');
+
+  const timeoutDrainGuard = uia.indexOf("if (-not $drainComplete) { return 'timeout-no-phase' }");
+  const phasesRead = uia.indexOf('$phases = @($childTokens.ToArray()', timeoutDrainGuard);
+  assert.ok(timeoutDrainGuard >= 0 && timeoutOutputWait < timeoutDrainGuard && timeoutDrainGuard < phasesRead,
+    'timeout path rejects partial child phases before reading them');
+
+  const normalDrainGuard = uia.indexOf("if ($remaining -le 0 -or -not $outputReadComplete.WaitOne($remaining)) { return 'unavailable' }");
+  const resultsRead = uia.indexOf('$results = @($childTokens.ToArray()', normalDrainGuard);
+  assert.ok(normalDrainGuard >= 0 && normalOutputWait < normalDrainGuard && normalDrainGuard < resultsRead,
+    'normal path rejects partial match tokens before reading them');
 });
