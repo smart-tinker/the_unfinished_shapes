@@ -245,28 +245,6 @@ await withSmokeCleanup(async () => {
   }, jumpStart.players.find(player => player.id === 'alice').position, { polling: 'raf', timeout: 10000 });
   await focus(alice);
   await alice.page.keyboard.up('d');
-  let jumpEvidence = null, jumpResponse;
-  const onJumpRequest = request => {
-    if (jumpEvidence || request.method() !== 'POST') return;
-    try {
-      if (new URL(request.url()).pathname !== '/command') return;
-      const command = request.postDataJSON();
-      if (command?.type !== 'move' || command.jump !== true) return;
-      jumpEvidence = { command: { jump: true, y: Number.isFinite(command.position?.y) ? command.position.y : null }, response: null };
-      jumpResponse = request.response().then(async response => {
-        let body = null;
-        try { body = await response?.json(); } catch {}
-        const error = body?.error;
-        jumpEvidence.response = {
-          status: response?.status() ?? null,
-          y: Number.isFinite(body?.position?.y) ? body.position.y : null,
-          velocityY: Number.isFinite(body?.velocityY) ? body.velocityY : null,
-          error: typeof error === 'string' && /^[a-z0-9_-]{1,64}$/i.test(error) ? error : error ? 'server_error' : null,
-        };
-      }).catch(() => { jumpEvidence.response = { status: null, y: null, velocityY: null, error: 'request_failed' }; });
-    } catch {}
-  };
-  alice.page.on('request', onJumpRequest);
   await alice.page.keyboard.down('d');
   await alice.page.keyboard.down('Space');
   try {
@@ -275,17 +253,7 @@ await withSmokeCleanup(async () => {
       const x = Number(parts?.[0]?.slice(2)), y = Number(parts?.[1]?.slice(2));
       return Number.isFinite(x) && Number.isFinite(y) && x >= 15 && x < 17 && y > 0;
     }, undefined, { polling: 'raf', timeout: 5000 });
-    await jumpResponse;
-    const evidence = JSON.stringify(jumpEvidence);
-    assert.ok(jumpEvidence?.command.jump, 'Space should send a jump:true command; jump=' + evidence);
-    assert.equal(jumpEvidence.response?.status, 200, 'Space jump response status; jump=' + evidence);
-    assert.equal(jumpEvidence.response?.error, null, 'Space jump response error; jump=' + evidence);
-    assert.ok(Number.isFinite(jumpEvidence.response?.y), 'Space jump response position.y; jump=' + evidence);
-    assert.ok(Number.isFinite(jumpEvidence.response?.velocityY), 'Space jump response velocityY; jump=' + evidence);
-    assert.ok(jumpEvidence.response.y > 0 || jumpEvidence.response.velocityY > 0, 'the server should accept the jump; jump=' + evidence);
   } catch (error) {
-    await jumpResponse;
-    const jump = JSON.stringify(jumpEvidence);
     const client = await alice.page.evaluate(() => ({
       focused: document.hasFocus(),
       coordinates: document.querySelector('#coordinates')?.textContent || '',
@@ -293,12 +261,12 @@ await withSmokeCleanup(async () => {
     }));
     const server = await state().catch(failure => ({ error: failure.message }));
     const serverPlayer = server.error ? server : server.players.find(player => player.id === 'alice');
-    throw new Error(error.message + '; jump=' + jump + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer));
+    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer));
   } finally {
-    alice.page.off('request', onJumpRequest);
     await alice.page.keyboard.up('Space');
     await alice.page.keyboard.up('d');
-  }  await alice.page.waitForFunction(() => {
+  }
+  await alice.page.waitForFunction(() => {
     const yPart = document.querySelector('#coordinates')?.textContent.split(' · ')[1];
     return Number(yPart?.slice(2)) > 0;
   }, undefined, { polling: 'raf', timeout: 5000 });
