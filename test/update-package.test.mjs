@@ -379,3 +379,40 @@ test('extracts Windows portable and macOS app archives under the selected folder
     await rm(parent, { recursive: true, force: true });
   }
 });
+
+test('reports terminal verifier failures with a safe provenance phase and allowlisted code', async t => {
+  async function expectFailure(inputCode, expectedCode) {
+    const bytes = Buffer.from('unverified update package');
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const downloadAsset = { ...asset, size: bytes.length, digest: 'sha256:' + digest };
+    const provenance = statement();
+    provenance.subject[0].digest.sha256 = digest;
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'tus-update-verifier-failure-'));
+    const progress = [];
+    try {
+      const error = await assert.rejects(downloadVerifiedAsset({
+        asset: downloadAsset, tag, directory,
+        onProgress: event => progress.push(event),
+        fetcher: async url => {
+          if (url.startsWith('https://github.com/')) {
+            return new Response(bytes, { status: 200, headers: { 'content-length': String(bytes.length) } });
+          }
+          if (url.startsWith('https://api.github.com/')) {
+            return new Response(JSON.stringify({ attestations: [{ bundle: bundle(provenance) }] }), { status: 200 });
+          }
+          throw new Error('Unexpected destination');
+        },
+        verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code: inputCode }); },
+      }));
+      assert.deepEqual(progress.at(-1), {
+        state: 'failed', phase: 'provenance', verifierCode: expectedCode,
+      });
+      assert.doesNotMatch(error.message, /private verifier detail/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  await t.test('retains a known Sigstore verifier code', () => expectFailure('SIGNATURE_ERROR', 'SIGNATURE_ERROR'));
+  await t.test('maps an unknown verifier code to OTHER', () => expectFailure('PRIVATE_CODE', 'OTHER'));
+});
