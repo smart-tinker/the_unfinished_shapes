@@ -178,7 +178,9 @@ function Write-UiaPhaseMarker {
     [Parameter(Mandatory=$true)]
     [ValidateSet(
       'ui-child-starting', 'ui-child-started', 'ui-payload-preparing', 'ui-payload-ready',
-      'ui-payload-writing', 'ui-payload-written', 'ui-child-waiting', 'ui-child-finished'
+      'ui-payload-writing', 'ui-payload-written', 'ui-child-waiting', 'ui-child-finished',
+      'ui-child-killing', 'ui-child-kill-waiting', 'ui-child-exit-checking', 'ui-child-output-draining',
+      'ui-child-finally-exit-checking', 'ui-child-finally-killing', 'ui-child-finally-waiting', 'ui-child-disposing'
     )]
     [string]$Phase
   )
@@ -338,13 +340,20 @@ try {
     $remaining = 3000 - [int]$watch.ElapsedMilliseconds
     Write-UiaPhaseMarker 'ui-child-waiting'
     if ($remaining -le 0 -or -not $process.WaitForExit($remaining)) {
+      Write-UiaPhaseMarker 'ui-child-killing'
       try { $process.Kill() } catch {}
+      Write-UiaPhaseMarker 'ui-child-kill-waiting'
       try { [void]$process.WaitForExit(1000) } catch {}
-      if ($process.HasExited) { try { $process.WaitForExit() } catch {} }
+      Write-UiaPhaseMarker 'ui-child-exit-checking'
+      if ($process.HasExited) {
+        Write-UiaPhaseMarker 'ui-child-output-draining'
+        try { $process.WaitForExit() } catch {}
+      }
       $phases = @($childTokens.ToArray() | Where-Object { $_ -match '^phase-' })
       if ($phases.Count -gt 0) { return 'timeout-' + $phases[$phases.Count - 1] }
       return 'timeout-no-phase'
     }
+    Write-UiaPhaseMarker 'ui-child-output-draining'
     $process.WaitForExit()
     Write-UiaPhaseMarker 'ui-child-finished'
     $results = @($childTokens.ToArray() | Where-Object { $_ -match '^(matched-[01]|mismatch|unavailable)$' })
@@ -357,11 +366,15 @@ try {
     return 'unavailable'
   } finally {
     try {
+      try { Write-UiaPhaseMarker 'ui-child-finally-exit-checking' } catch {}
       if (-not $process.HasExited) {
+        try { Write-UiaPhaseMarker 'ui-child-finally-killing' } catch {}
         $process.Kill()
+        try { Write-UiaPhaseMarker 'ui-child-finally-waiting' } catch {}
         [void]$process.WaitForExit(1000)
       }
     } catch {}
+    try { Write-UiaPhaseMarker 'ui-child-disposing' } catch {}
     $process.Dispose()
   }
 }

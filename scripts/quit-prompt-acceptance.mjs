@@ -12,6 +12,8 @@ const safeUiMarkers = new Set([
   'modified-body-unverified', 'modified-body-rejected',
   'ui-child-starting', 'ui-child-started', 'ui-payload-preparing', 'ui-payload-ready',
   'ui-payload-writing', 'ui-payload-written', 'ui-child-waiting', 'ui-child-finished',
+  'ui-child-killing', 'ui-child-kill-waiting', 'ui-child-exit-checking', 'ui-child-output-draining',
+  'ui-child-finally-exit-checking', 'ui-child-finally-killing', 'ui-child-finally-waiting', 'ui-child-disposing',
 ]);
 const safeUiPromptStatuses = new Set([
   'foreground-window-unavailable', 'foreground-title-mismatch', 'invalid-window',
@@ -92,7 +94,7 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
     matcherRejected = /^TUS_UIA: modified-body-rejected$/m.test(result);
     matcherOutcome = matcherRejected ? 'mismatch' : 'unexpected-result';
   } catch (error) {
-    const safeOutcome = /exit-[a-z0-9_-]+|timeout-[a-z0-9-]+|(?:script-start|window-api-ready)-no-status|ui-(?:child-(?:starting|started|waiting|finished)|payload-(?:preparing|ready|writing|written))|prompt-reader-timeout-[a-z0-9-]+|expected-foreground-prompt-unavailable|quit-dialog-not-found|automation-error-[a-z0-9]+-at-[a-z0-9-]+|modified-body-(?:button-returned|unverified|rejected)|expected-body-(?:mismatch|unavailable|timeout)|prompt-(?:foreground-window-unavailable|foreground-title-mismatch|expected-body-(?:mismatch|unavailable|timeout)|(?:invalid-window|title-mismatch|button-count-mismatch|expected-buttons-missing|requested-button-missing|expected-message-mismatch|expected-message-unavailable|matched))/gi;
+    const safeOutcome = /exit-[a-z0-9_-]+|timeout-[a-z0-9-]+|(?:script-start|window-api-ready)-no-status|ui-(?:child-(?:starting|started|waiting|finished|killing|kill-waiting|exit-checking|output-draining|finally-exit-checking|finally-killing|finally-waiting|disposing)|payload-(?:preparing|ready|writing|written))|prompt-reader-timeout-[a-z0-9-]+|expected-foreground-prompt-unavailable|quit-dialog-not-found|automation-error-[a-z0-9]+-at-[a-z0-9-]+|modified-body-(?:button-returned|unverified|rejected)|expected-body-(?:mismatch|unavailable|timeout)|prompt-(?:foreground-window-unavailable|foreground-title-mismatch|expected-body-(?:mismatch|unavailable|timeout)|(?:invalid-window|title-mismatch|button-count-mismatch|expected-buttons-missing|requested-button-missing|expected-message-mismatch|expected-message-unavailable|matched))/gi;
     const outcomeTokens = [...String(error?.message || '').matchAll(safeOutcome)];
     matcherOutcome = outcomeTokens.length ? outcomeTokens[outcomeTokens.length - 1][0].toLowerCase() : 'probe-failed';
     console.log('TUS_UIA_TEST: detail-probe-' + matcherOutcome);
