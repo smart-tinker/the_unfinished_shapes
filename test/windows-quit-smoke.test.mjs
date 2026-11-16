@@ -101,6 +101,9 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
   const uia = windowsUI.slice(uiaStart, uiaEnd);
   assert.match(uia, /TreeScope\]::Children/);
   assert.match(uia, /\.FindFirst\(/);
+  assert.match(uia, /TUS_UIA_CHILD: phase-fromhandle-start/);
+  assert.match(uia, /TUS_UIA_CHILD: phase-findfirst-\' \+ \$index \+ \'-start/);
+  assert.match(uia, /TUS_UIA_CHILD: phase-current-name-\' \+ \$index \+ \'-start/);
   assert.match(uia, /-STA -EncodedCommand/);
   assert.match(uia, /UseShellExecute = \$false/);
   assert.match(uia, /RedirectStandardInput = \$true/);

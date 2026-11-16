@@ -5,6 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $script:uiPhase = 'startup'
+$script:uiaPromptTimeoutPhase = 'none'
 trap {
   $errorType = $_.Exception.GetType().Name -replace '[^A-Za-z0-9]', ''
   Write-Output "TUS_UIA: automation-error-$errorType-at-$script:uiPhase"
@@ -192,26 +193,38 @@ try {
   $payload = ConvertFrom-Json -InputObject $payloadJson
   Add-Type -AssemblyName UIAutomationTypes
   Add-Type -AssemblyName UIAutomationClient
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-fromhandle-start')
+  [Console]::Out.Flush()
   $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]([long]$payload.handle))
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-fromhandle-done')
+  [Console]::Out.Flush()
   if ($null -eq $root) { throw 'window-unavailable' }
   $expected = @($payload.expectedMessages)
   for ($index = 0; $index -lt $expected.Length; $index++) {
     $condition = [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::NameProperty,
       [string]$expected[$index])
+    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-findfirst-' + $index + '-start')
+    [Console]::Out.Flush()
     $element = $root.FindFirst(
       [System.Windows.Automation.TreeScope]::Children,
       $condition)
+    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-findfirst-' + $index + '-done')
+    [Console]::Out.Flush()
     if ($null -ne $element) {
+      [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-current-name-' + $index + '-start')
+      [Console]::Out.Flush()
       $name = [string]$element.GetCurrentPropertyValue(
         [System.Windows.Automation.AutomationElement]::NameProperty)
+      [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-current-name-' + $index + '-done')
+      [Console]::Out.Flush()
       if ([string]::Equals($name, [string]$expected[$index], [StringComparison]::Ordinal)) {
-        [Console]::Out.WriteLine('matched-' + $index)
+        [Console]::Out.WriteLine('TUS_UIA_CHILD: matched-' + $index)
         exit 0
       }
     }
   }
-  [Console]::Out.WriteLine('mismatch')
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: mismatch')
   exit 0
 } catch {
   [Console]::Out.WriteLine('unavailable')
@@ -240,11 +253,18 @@ try {
     if ($remaining -le 0 -or -not $process.WaitForExit($remaining)) {
       try { $process.Kill() } catch {}
       try { [void]$process.WaitForExit(1000) } catch {}
-      return 'timeout'
+      if (-not $process.HasExited) { return 'timeout-no-phase' }
+      $output = $process.StandardOutput.ReadToEnd()
+      $phases = [regex]::Matches($output, '(?m)^TUS_UIA_CHILD: (phase-[a-z0-9-]+)$')
+      if ($phases.Count -gt 0) { return 'timeout-' + $phases[$phases.Count - 1].Groups[1].Value }
+      return 'timeout-no-phase'
     }
-    $result = $process.StandardOutput.ReadToEnd().Trim()
-    if ($process.ExitCode -eq 0 -and $result -match '^matched-([01])$') { return $result }
-    if ($process.ExitCode -eq 0 -and $result -eq 'mismatch') { return 'mismatch' }
+    $output = $process.StandardOutput.ReadToEnd()
+    $results = [regex]::Matches($output, '(?m)^TUS_UIA_CHILD: (matched-[01]|mismatch|unavailable)$')
+    if ($process.ExitCode -eq 0 -and $results.Count -gt 0) {
+      $result = $results[$results.Count - 1].Groups[1].Value
+      if ($result -match '^matched-[01]$' -or $result -eq 'mismatch') { return $result }
+    }
     return 'unavailable'
   } catch {
     return 'unavailable'
@@ -277,6 +297,10 @@ function Find-ValidatedPromptButton {
   }
   $script:uiPhase = 'checking-exact-dialog-buttons'
   $uiaResult = [string]$script:uiaPromptResults[$cacheKey]
+  if ($uiaResult -match '^timeout-(phase-[a-z0-9-]+|no-phase)$') {
+    $script:uiaPromptTimeoutPhase = $Matches[1]
+    $uiaResult = 'timeout'
+  }
   if ($uiaResult -match '^matched-([01])$') {
     return [TusWindowLookup]::FindExpectedQuitButton($WindowHandle, $ExpectedMessages, $RequestedButton, [int]$Matches[1])
   }
@@ -327,6 +351,9 @@ switch ($Action) {
       Start-Sleep -Milliseconds 100
     }
     Write-PromptEvidence
+    if ($script:uiaPromptTimeoutPhase -ne 'none') {
+      Write-Output "TUS_UIA: prompt-reader-timeout-$script:uiaPromptTimeoutPhase"
+    }
     Write-Output 'TUS_UIA: quit-dialog-not-found'
     Write-Output "TUS_UIA: prompt-$promptStatus"
     exit 2
@@ -341,6 +368,9 @@ switch ($Action) {
     $button = Find-ValidatedPromptButton $foregroundHandle $expectedMessages 'Keep the game open'
     Write-PromptEvidence
     if ($button -eq [IntPtr]::Zero) {
+      if ($script:uiaPromptTimeoutPhase -ne 'none') {
+        Write-Output "TUS_UIA: prompt-reader-timeout-$script:uiaPromptTimeoutPhase"
+      }
       Write-Output "TUS_UIA: expected-body-$([TusWindowLookup]::LastPromptStatus)"
       exit 2
     }
@@ -360,6 +390,9 @@ switch ($Action) {
       exit 2
     }
     $status = [TusWindowLookup]::LastPromptStatus
+    if ($script:uiaPromptTimeoutPhase -ne 'none') {
+      Write-Output "TUS_UIA: prompt-reader-timeout-$script:uiaPromptTimeoutPhase"
+    }
     if ($status -notin @('expected-message-mismatch', 'expected-message-unavailable', 'expected-message-timeout')) {
       Write-Output "TUS_UIA: prompt-$status"
       exit 2
