@@ -335,19 +335,21 @@ test('UIA child wait and cleanup phases are fixed safe diagnostics', async () =>
 });
 
 
-test('UIA process and output drain share the bounded three-second budget', async () => {
+test('UIA output drain stays bounded and cleanup reaps remain capped', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
   const uia = windowsUI.slice(
     windowsUI.indexOf('function Get-UiaPromptBodyResult'),
     windowsUI.indexOf('function Find-ValidatedPromptButton'),
   );
   assert.ok(!uia.includes('$process.WaitForExit()'), 'no process wait is unbounded');
-  assert.ok(!uia.includes('$process.WaitForExit(1000)'), 'cleanup does not add a fixed wait outside the budget');
+  assert.equal(uia.split('$process.WaitForExit(1000)').length - 1, 2, 'both bounded child-reap waits remain');
   assert.ok(uia.includes('$outputReadComplete.Set()'), 'stdout EOF signals completion');
   assert.ok(uia.includes('$outputReadComplete.WaitOne($remaining)'), 'output drain uses the remaining budget');
+  const drainGuard = uia.indexOf("if (-not $drainComplete) { return 'timeout-no-phase' }");
+  assert.ok(drainGuard >= 0 && drainGuard < uia.indexOf('$phases = @($childTokens.ToArray()', drainGuard), 'timeout path rejects partial child phases');
   assert.ok(uia.includes("if ($remaining -le 0 -or -not $outputReadComplete.WaitOne($remaining)) { return 'unavailable' }"),
     'an incomplete output drain remains fail-closed');
   assert.ok(uia.includes('$process.WaitForExit($remaining)'), 'process exit uses the remaining budget');
   const deadline = '$remaining = 3000 - [int]$watch.ElapsedMilliseconds';
-  assert.ok(uia.split(deadline).length - 1 >= 3, 'each cleanup wait recomputes the original three-second deadline');
+  assert.ok(uia.split(deadline).length - 1 >= 2, 'process and output waits recompute the original three-second deadline');
 });
