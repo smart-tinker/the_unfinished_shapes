@@ -441,3 +441,37 @@ test('reports terminal updater failures with safe provenance and verifier codes'
     });
   });
 });
+
+
+test('reports package-download failures with safe codes', async t => {
+  async function expectFailure(fetcher, { failureCode, httpStatus = null, noRawError = false }) {
+    const bytes = Buffer.from('unverified update package');
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const downloadAsset = { ...asset, size: bytes.length, digest: 'sha256:' + digest };
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'tus-update-download-failure-'));
+    const progress = [];
+    try {
+      let caught;
+      await assert.rejects(downloadVerifiedAsset({
+        asset: downloadAsset, tag, directory,
+        onProgress: event => progress.push(event),
+        fetcher,
+      }), error => { caught = error; return true; });
+      assert.deepEqual(progress.at(-1), {
+        state: 'failed', phase: 'download', failureCode, verifierCode: 'OTHER', httpStatus,
+      });
+      if (noRawError) assert.doesNotMatch(caught.message, /private package transport detail/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  await t.test('reports package HTTP status separately', () => expectFailure(
+    async () => new Response('private package response', { status: 503 }),
+    { failureCode: 'DOWNLOAD_HTTP_ERROR', httpStatus: 503 },
+  ));
+  await t.test('does not expose package transport errors', () => expectFailure(
+    async () => { throw new Error('private package transport detail'); },
+    { failureCode: 'DOWNLOAD_FETCH_ERROR', noRawError: true },
+  ));
+});
