@@ -57,7 +57,7 @@ test('Windows UI automation preserves child output for safe failure reporting', 
   assert.match(ui, /resolve\(\{\s*error,\s*stdout,\s*stderr\s*\}\)/);
   assert.match(ui, /error\.killed/);
   assert.match(ui, /error\.signal/);
-  assert.match(ui, /const detail = marker \|\| processFailure/);
+  assert.match(ui, /const detail = safeUiFailureOutcome\(markers\.slice\(-3\)/);
   assert.doesNotMatch(ui, /stderrLine/);
 });
 
@@ -85,8 +85,8 @@ test('Windows quit UI reports its latest safe phase when native automation times
   assert.match(windowsUI, /TUS_UIA: prompt-\$promptStatus/);
   assert.doesNotMatch(windowsUI, /GetProcessWindows|reading-owned-window/);
   assert.ok(
-    automation.includes("markers.slice(-3).join(' after ')"),
-    'timeout errors report the failure marker, phase and safe prompt status',
+    automation.includes('safeUiFailureOutcome(markers.slice(-3)'),
+    'timeout errors classify only allowlisted markers and safe prompt status',
   );
 });
 
@@ -230,6 +230,15 @@ test('File -> Exit selects the exact Electron menu command on the TUS window', a
 });
 
 test('safe UIA failure classification distinguishes a child that reached the window API', async () => {
+  const source = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
+  const ui = source.slice(source.indexOf('async function ui'), source.indexOf('async function assertModifiedPromptIsNotClicked'));
+  const mutationProbe = source.slice(source.indexOf('async function assertModifiedPromptIsNotClicked'), source.indexOf('async function assertKnownStatusDetailIsRecognized'));
+  assert.match(ui, /const detail = safeUiFailureOutcome\(/,
+    'production UI failures use the safe classifier');
+  assert.match(mutationProbe, /(?:script-start|window-api-ready)-no-status/,
+    'the mutation probe recognizes the safe no-status outcome');
+  assert.match(mutationProbe, /console\\.log\\('TUS_UIA_TEST: detail-probe-' \\+ matcherOutcome\\)/,
+    'the mutation probe emits the classified outcome as test evidence');
   const { safeUiFailureOutcome } = await import('../scripts/quit-prompt-acceptance.mjs');
   assert.equal(typeof safeUiFailureOutcome, 'function', 'failure classification is available');
   assert.equal(safeUiFailureOutcome(['script-start', 'window-api-ready']) === 'window-api-ready-no-status', true);
