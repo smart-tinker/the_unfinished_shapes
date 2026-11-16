@@ -50,11 +50,6 @@ async function start(executablePath, label, dataDir, useBaseline = false) {
   let graphics;
   try {
     const env = { ...process.env, TUS_DATA_DIR: dataDir };
-    if (useBaseline) {
-      env.TUS_SMOKE_UPDATE_BASELINE_VERSION = baselineVersion;
-      const preload = path.resolve('scripts/updater-version-preload.cjs').split(path.sep).join('/');
-      env.NODE_OPTIONS = [env.NODE_OPTIONS, '--require=' + preload].filter(Boolean).join(' ');
-    }
     console.log('Updater smoke ' + label + ': launching packaged app.');
     instance = await electron.launch({
       executablePath,
@@ -80,16 +75,19 @@ async function start(executablePath, label, dataDir, useBaseline = false) {
     return active;
   } catch (error) {
     console.error('Updater smoke ' + label + ' startup failed: ' + error.message);
-    if (instance) {
-      const child = instance.process();
-      await Promise.race([
-        instance.close().catch(() => {}),
-        new Promise(resolve => setTimeout(resolve, 5000)),
-      ]);
-      if (child.exitCode === null) child.kill('SIGKILL');
-    }
-    await gpu.finish();
-    throw error;
+    await withSmokeCleanup(
+      async () => { throw error; },
+      async () => {
+        if (!instance) return;
+        const child = instance.process();
+        await Promise.race([
+          instance.close().catch(() => {}),
+          new Promise(resolve => setTimeout(resolve, 5000)),
+        ]);
+        if (child.exitCode === null) child.kill('SIGKILL');
+      },
+      () => gpu.finish(),
+    );
   }
 }
 

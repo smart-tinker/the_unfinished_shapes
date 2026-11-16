@@ -33,6 +33,7 @@ jobs:
         with:
           node-version: '24'
       - run: npm ci
+      - run: npm version 0.1.0-rc.1 --no-git-tag-version --ignore-scripts
       - run: npm run package:linux
       - name: Packaged client lifecycle
         env:
@@ -78,6 +79,7 @@ jobs:
           node -e "if(process.platform!=='darwin'||process.arch!=='arm64') throw Error('Expected native macOS arm64'); console.log(process.platform,process.arch)"
       - run: npm ci
       - run: npm run check
+      - run: npm version 0.1.0-rc.1 --no-git-tag-version --ignore-scripts
       - run: node scripts/package-macos.mjs
       - name: Launch the native packaged application
         env:
@@ -115,6 +117,7 @@ jobs:
           node-version: '24'
       - run: npm ci
       - run: npm run check
+      - run: npm version 0.1.0-rc.1 --no-git-tag-version --ignore-scripts
       - run: npm run package:win
       - run: npm run installer:win
       - name: Verify clean install, current-candidate lifecycle and retained data
