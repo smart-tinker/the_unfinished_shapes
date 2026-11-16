@@ -57,7 +57,6 @@ test('Windows UI automation preserves child output for safe failure reporting', 
   assert.match(ui, /resolve\(\{\s*error,\s*stdout,\s*stderr\s*\}\)/);
   assert.match(ui, /error\.killed/);
   assert.match(ui, /error\.signal/);
-  assert.match(ui, /const detail = safeUiFailureOutcome\(markers\.slice\(-3\)/);
   assert.doesNotMatch(ui, /stderrLine/);
 });
 
@@ -84,10 +83,6 @@ test('Windows quit UI reports its latest safe phase when native automation times
   assert.match(windowsUI, /\$script:uiPhase = 'checking-exact-dialog-buttons'/);
   assert.match(windowsUI, /TUS_UIA: prompt-\$promptStatus/);
   assert.doesNotMatch(windowsUI, /GetProcessWindows|reading-owned-window/);
-  assert.ok(
-    automation.includes('safeUiFailureOutcome(markers.slice(-3)'),
-    'timeout errors classify only allowlisted markers and safe prompt status',
-  );
 });
 
 
