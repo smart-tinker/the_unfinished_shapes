@@ -366,8 +366,8 @@ test('UIA output drain stays bounded and cleanup reaps remain capped', async () 
   const processBudget = uia.lastIndexOf(processDeadline, processWait);
   const timeoutRestart = uia.indexOf('$watch.Restart()', processWait);
   const timeoutBudget = uia.indexOf(drainDeadline, timeoutRestart);
-  const normalDrainStart = uia.lastIndexOf("Write-UiaPhaseMarker 'ui-child-output-draining'");
-  const normalRestart = uia.indexOf('$watch.Restart()', normalDrainStart);
+  const normalDrainBudgetStart = uia.lastIndexOf("Write-UiaPhaseMarker 'ui-child-output-draining'");
+  const normalRestart = uia.indexOf('$watch.Restart()', normalDrainBudgetStart);
   const normalBudget = uia.indexOf(drainDeadline, normalRestart);
   assert.ok(uia.includes('$watch = [Diagnostics.Stopwatch]::StartNew()'), 'the process wait starts its bounded stopwatch');
   assert.ok(
