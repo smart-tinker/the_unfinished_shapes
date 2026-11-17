@@ -346,7 +346,8 @@ test('UIA output drain stays bounded and cleanup reaps remain capped', async () 
   assert.equal(uia.split('$process.WaitForExit(1000)').length - 1, 2, 'both bounded child-reap waits remain');
 
   const outputHandlerStart = uia.indexOf('private void OnOutputDataReceived(');
-  const outputHandlerEnd = uia.indexOf('\n    }\n}', outputHandlerStart);
+  const tokenMatcher = 'TokenMatcher.Match(eventArgs.Data)';
+  const outputHandlerEnd = uia.indexOf(tokenMatcher, outputHandlerStart) + tokenMatcher.length;
   assert.ok(outputHandlerStart >= 0 && outputHandlerEnd > outputHandlerStart, 'stdout handler is present');
   const outputHandler = uia.slice(outputHandlerStart, outputHandlerEnd);
   assert.ok(
@@ -358,21 +359,28 @@ test('UIA output drain stays bounded and cleanup reaps remain capped', async () 
   const outputWait = '$outputCapture.OutputReadComplete.WaitOne($remaining)';
   const timeoutOutputWait = uia.indexOf(outputWait);
   const normalOutputWait = uia.indexOf(outputWait, timeoutOutputWait + outputWait.length);
-  const deadline = '$remaining = 3000 - [int]$watch.ElapsedMilliseconds';
+  const processDeadline = '$remaining = 3000 - [int]$watch.ElapsedMilliseconds';
+  const drainDeadline = '$remaining = 1000 - [int]$watch.ElapsedMilliseconds';
   const processWait = uia.indexOf('$process.WaitForExit($remaining)');
   const cleanupReap = uia.indexOf('$process.WaitForExit(1000)', processWait);
-  const processBudget = uia.lastIndexOf(deadline, processWait);
-  const timeoutBudget = uia.lastIndexOf(deadline, timeoutOutputWait);
-  const normalBudget = uia.lastIndexOf(deadline, normalOutputWait);
-  assert.ok(uia.includes('$watch = [Diagnostics.Stopwatch]::StartNew()'), 'all waits share the original stopwatch');
+  const processBudget = uia.lastIndexOf(processDeadline, processWait);
+  const timeoutRestart = uia.indexOf('$watch.Restart()', processWait);
+  const timeoutBudget = uia.indexOf(drainDeadline, timeoutRestart);
+  const normalDrainStart = uia.lastIndexOf("Write-UiaPhaseMarker 'ui-child-output-draining'");
+  const normalRestart = uia.indexOf('$watch.Restart()', normalDrainStart);
+  const normalBudget = uia.indexOf(drainDeadline, normalRestart);
+  assert.ok(uia.includes('$watch = [Diagnostics.Stopwatch]::StartNew()'), 'the process wait starts its bounded stopwatch');
   assert.ok(
     processBudget >= 0 && processBudget < processWait &&
-      processWait < cleanupReap && cleanupReap < timeoutBudget &&
-      timeoutBudget < timeoutOutputWait && timeoutOutputWait < normalBudget &&
+      processWait < cleanupReap && cleanupReap < timeoutRestart &&
+      timeoutRestart < timeoutBudget && timeoutBudget < timeoutOutputWait &&
+      timeoutOutputWait < normalRestart && normalRestart < normalBudget &&
       normalBudget < normalOutputWait,
-    'process and output waits recalculate the same deadline in order, including after the timeout reap',
+    'process, reap and fresh bounded EOF drains occur in order',
   );
-  assert.equal(uia.split(deadline).length - 1, 3, 'each process/output wait path recalculates the three-second budget');
+  assert.equal(uia.split(processDeadline).length - 1, 1, 'process completion keeps its three-second budget');
+  assert.equal(uia.split(drainDeadline).length - 1, 2, 'each EOF drain gets a fresh one-second budget');
+  assert.equal(uia.split('$watch.Restart()').length - 1, 2, 'each EOF drain starts a fresh timer');
 
   const processTimeoutBranch = uia.indexOf('if ($waitTimedOut) {', processWait);
   const timeoutDrainGuard = uia.indexOf("if (-not $drainComplete) { return 'timeout-no-phase' }");

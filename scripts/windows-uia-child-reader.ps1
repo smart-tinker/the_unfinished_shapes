@@ -227,7 +227,8 @@ public sealed class TusUiaOutputCapture
       if ($process.HasExited) {
         if ($null -ne $testDiagnostic) { & $testDiagnostic 'process-exited' }
         Write-UiaPhaseMarker 'ui-child-output-draining'
-        $remaining = 3000 - [int]$watch.ElapsedMilliseconds
+        $watch.Restart()
+        $remaining = 1000 - [int]$watch.ElapsedMilliseconds
         if ($remaining -gt 0) {
           if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-started' }
           try {
@@ -253,7 +254,8 @@ public sealed class TusUiaOutputCapture
       return 'timeout-no-phase'
     }
     Write-UiaPhaseMarker 'ui-child-output-draining'
-    $remaining = 3000 - [int]$watch.ElapsedMilliseconds
+    $watch.Restart()
+    $remaining = 1000 - [int]$watch.ElapsedMilliseconds
     if ($remaining -le 0) {
       if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-budget-expired' }
       return 'unavailable'

@@ -422,6 +422,13 @@ test('reports terminal updater failures with safe provenance and verifier codes'
     verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code: 'SIGNATURE_ERROR' }); },
     failureCode: 'SIGNATURE_REJECTED', verifierCode: 'SIGNATURE_ERROR', noRawError: true,
   }));
+  await t.test('classifies Sigstore bundle validation failures without exposing their message', () => {
+    class ValidationError extends Error {}
+    return expectFailure({
+      verifySignature: async () => { throw new ValidationError('private verifier detail'); },
+      failureCode: 'SIGNATURE_REJECTED', verifierCode: 'BUNDLE_VALIDATION_ERROR', noRawError: true,
+    });
+  });
   await t.test('preserves Sigstore TUF error codes without exposing details', async () => {
     for (const code of [
       'TUF_INIT_CACHE_ERROR', 'TUF_FIND_TARGET_ERROR', 'TUF_REFRESH_METADATA_ERROR',

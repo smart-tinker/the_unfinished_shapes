@@ -22,8 +22,11 @@ const sigstoreVerifierCodes = new Set([
   'TUF_DOWNLOAD_TARGET_ERROR', 'TUF_READ_TARGET_ERROR',
 ]);
 
-export function safeVerifierCode(code) {
-  return typeof code === 'string' && sigstoreVerifierCodes.has(code) ? code : 'OTHER';
+const safeVerifierErrorTypes = new Map([['ValidationError', 'BUNDLE_VALIDATION_ERROR']]);
+
+export function safeVerifierCode(code, errorType) {
+  if (typeof code === 'string' && sigstoreVerifierCodes.has(code)) return code;
+  return typeof errorType === 'string' ? safeVerifierErrorTypes.get(errorType) || 'OTHER' : 'OTHER';
 }
 
 const updaterFailureCodes = new Set([
@@ -91,7 +94,7 @@ export async function verifyReleaseAttestation({ bundle, asset, tag }, verifySig
       certificateIssuer: 'https://token.actions.githubusercontent.com',
     });
   } catch (error) {
-    const code = safeVerifierCode(error?.code);
+    const code = safeVerifierCode(error?.code, error?.constructor?.name);
     const rejection = updaterFailure('Release attestation signature rejected [verifier=' + code + '].', 'SIGNATURE_REJECTED');
     rejection.code = code;
     throw rejection;
