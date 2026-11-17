@@ -442,6 +442,7 @@ test('reports terminal updater failures with safe provenance and verifier codes'
   });
   await t.test('reports bounded verifier exception class names without exposing their messages', async () => {
     assert.equal(safeVerifierErrorType('TypeError'), 'TypeError');
+    assert.equal(safeVerifierErrorType('Error'), 'Error');
     assert.equal(safeVerifierErrorType('PrivateVerifierType'), 'OTHER');
     assert.equal(safeVerifierErrorType('PrivateVerifierError'), 'PrivateVerifierError');
     assert.equal(safeVerifierErrorType('Private_VerifierError'), 'OTHER');
