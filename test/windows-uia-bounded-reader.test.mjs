@@ -155,11 +155,11 @@ test('bounded UIA child preserves only a complete safe phase after kill and reap
 
 test('UIA phase matcher rejects unapproved child phases', () => {
   const source = readFileSync(fileURLToPath(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url)), 'utf8');
-  const matcherPrefix = "$token = [regex]::Match([string]$eventArgs.Data, '";
+  const matcherPrefix = 'private static readonly Regex TokenMatcher = new Regex(@"';
   const matcherStart = source.indexOf(matcherPrefix);
   assert.notEqual(matcherStart, -1, 'the production child-output matcher is present');
   const patternStart = matcherStart + matcherPrefix.length;
-  const patternEnd = source.indexOf("')", patternStart);
+  const patternEnd = source.indexOf('", RegexOptions.CultureInvariant)', patternStart);
   assert.ok(patternEnd > patternStart, 'the production matcher closes after its pattern');
   const matcher = new RegExp(source.slice(patternStart, patternEnd));
   assert.match('TUS_UIA_CHILD: phase-child-start', matcher);

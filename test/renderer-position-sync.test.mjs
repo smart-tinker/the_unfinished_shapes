@@ -236,6 +236,36 @@ test('Space keydown and the first syncPosition request are captured by the safe 
     spaceKeydown: true,
     jumpRequested: true,
     firstMoveJump: true,
-  }, 'the guarded renderer hook records only the Space flag and first move.jump');
+    firstMoveSkip: null,
+    firstMoveResult: 'accepted',
+  }, 'the guarded renderer hook records only safe Space, skip and command result fields');
   assert.doesNotMatch(JSON.stringify(trace), /alice|token|private|https|home|tmp/i);
+});
+
+test('jump trace captures a move-running skip and a failed request without its error text', async () => {
+  const h = syncHarness();
+  Object.assign(h.context, {
+    meId: 'alice',
+    playerPosition: { x: 14.4, y: 0, z: 0 },
+    playerVelocityY: 0,
+    latestStateRevision: 0,
+    moveRunning: true,
+  });
+  h.load("window.addEventListener('keydown', event => {", "window.addEventListener('keyup', event =>");
+  h.dispatchWindowEvent('keydown', { code: 'Space', repeat: false, preventDefault() {} });
+
+  await h.run('syncPosition()');
+  h.context.moveRunning = false;
+  h.context.request = async () => { throw new Error('private request detail'); };
+  await h.run('syncPosition()');
+
+  const trace = h.jumpTrace();
+  assert.deepEqual(trace, {
+    spaceKeydown: true,
+    jumpRequested: true,
+    firstMoveJump: true,
+    firstMoveSkip: 'move-running',
+    firstMoveResult: 'request-failed',
+  });
+  assert.doesNotMatch(JSON.stringify(trace), /private request detail|alice|token/i);
 });

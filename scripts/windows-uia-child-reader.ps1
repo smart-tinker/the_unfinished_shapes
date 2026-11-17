@@ -118,18 +118,40 @@ try {
   $startInfo.RedirectStandardError = $true
   $process = New-Object System.Diagnostics.Process
   $process.StartInfo = $startInfo
-  $childTokens = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
-  $outputReadComplete = [System.Threading.ManualResetEvent]::new($false)
-  $outputHandler = {
-    param($sender, $eventArgs)
-    if ($null -eq $eventArgs.Data) {
-      try { [void]$outputReadComplete.Set() } catch {}
-      return
+  if ($null -eq ('TusUiaOutputCapture' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+using System.Threading;
+public sealed class TusUiaOutputCapture
+{
+    private static readonly Regex TokenMatcher = new Regex(@"^TUS_UIA_CHILD: (phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-\d+-(?:start|done)|current-name-\d+(?:-\d+)?-(?:start|done)|next-sibling-\d+-\d+-(?:start|done))|matched-[01]|mismatch)$", RegexOptions.CultureInvariant);
+    public readonly List<string> Tokens = new List<string>();
+    public readonly ManualResetEvent OutputReadComplete = new ManualResetEvent(false);
+    public readonly DataReceivedEventHandler Handler;
+
+    public TusUiaOutputCapture()
+    {
+        Handler = new DataReceivedEventHandler(OnOutputDataReceived);
     }
-    $token = [regex]::Match([string]$eventArgs.Data, '^TUS_UIA_CHILD: (phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-\d+-(?:start|done)|current-name-\d+(?:-\d+)?-(?:start|done)|next-sibling-\d+-\d+-(?:start|done))|matched-[01]|mismatch)$')
-    if ($token.Success) { $childTokens.Enqueue($token.Groups[1].Value) }
-  }.GetNewClosure()
-  $process.add_OutputDataReceived([System.Diagnostics.DataReceivedEventHandler]$outputHandler)
+
+    private void OnOutputDataReceived(object sender, DataReceivedEventArgs eventArgs)
+    {
+        if (eventArgs.Data == null)
+        {
+            try { OutputReadComplete.Set(); } catch (ObjectDisposedException) { }
+            return;
+        }
+        Match token = TokenMatcher.Match(eventArgs.Data);
+        if (token.Success) Tokens.Add(token.Groups[1].Value);
+    }
+}
+'@
+  }
+  $outputCapture = New-Object TusUiaOutputCapture
+  $process.add_OutputDataReceived($outputCapture.Handler)
   $watch = [Diagnostics.Stopwatch]::StartNew()
   $testDiagnostic = $null
   if (-not [string]::IsNullOrEmpty($ChildScriptOverride)) {
@@ -209,7 +231,7 @@ try {
         if ($remaining -gt 0) {
           if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-started' }
           try {
-            $drainComplete = $outputReadComplete.WaitOne($remaining)
+            $drainComplete = $outputCapture.OutputReadComplete.WaitOne($remaining)
           } catch {
             if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-threw' }
             throw
@@ -226,7 +248,7 @@ try {
         & $testDiagnostic 'stdout-eof-skipped-process-not-exited'
       }
       if (-not $drainComplete) { return 'timeout-no-phase' }
-      $phases = @($childTokens.ToArray() | Where-Object { $_ -match '^phase-' })
+      $phases = @($outputCapture.Tokens.ToArray() | Where-Object { $_ -match '^phase-' })
       if ($phases.Count -gt 0) { return 'timeout-' + $phases[$phases.Count - 1] }
       return 'timeout-no-phase'
     }
@@ -238,7 +260,7 @@ try {
     }
     if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-started' }
     try {
-      $drainComplete = $outputReadComplete.WaitOne($remaining)
+      $drainComplete = $outputCapture.OutputReadComplete.WaitOne($remaining)
     } catch {
       if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-threw' }
       throw
@@ -249,7 +271,7 @@ try {
     }
     if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-completed' }
     Write-UiaPhaseMarker 'ui-child-finished'
-    $results = @($childTokens.ToArray() | Where-Object { $_ -match '^(matched-[01]|mismatch|unavailable)$' })
+    $results = @($outputCapture.Tokens.ToArray() | Where-Object { $_ -match '^(matched-[01]|mismatch|unavailable)$' })
     if ($process.ExitCode -eq 0 -and $results.Count -gt 0) {
       $result = $results[$results.Count - 1]
       if ($result -match '^matched-[01]$' -or $result -eq 'mismatch') { return $result }
@@ -268,7 +290,10 @@ try {
       }
     } catch {}
     try { Write-UiaPhaseMarker 'ui-child-disposing' } catch {}
-    try { $outputReadComplete.Dispose() } catch {}
+    try { $process.remove_OutputDataReceived($outputCapture.Handler) } catch {}
+    try {
+      if ($outputCapture.OutputReadComplete.WaitOne(0)) { $outputCapture.OutputReadComplete.Dispose() }
+    } catch {}
     $process.Dispose()
   }
 }

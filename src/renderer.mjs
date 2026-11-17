@@ -887,7 +887,11 @@ function traceSmokeJump(event, value) {
 }
 async function syncPosition() {
   const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration, movementVersion = localMovementVersion, jump = jumpRequested;
-  if (moveRunning || (key === lastPosition && !jump && playerVelocityY === 0) || !meId || !bridge) return; moveRunning = true;
+  if (moveRunning) { traceSmokeJump('move.skip', 'move-running'); return; }
+  if (key === lastPosition && !jump && playerVelocityY === 0) { traceSmokeJump('move.skip', 'stationary'); return; }
+  if (!meId) { traceSmokeJump('move.skip', 'no-player'); return; }
+  if (!bridge) { traceSmokeJump('move.skip', 'no-bridge'); return; }
+  moveRunning = true;
   try {
     traceSmokeJump('move.jump', jump);
     const result = await request('/command', 'POST', { type: 'move', position, jump });
@@ -896,10 +900,17 @@ async function syncPosition() {
       if (movementVersion === localMovementVersion && result.position) { playerPosition = result.position; playerVelocityY = result.velocityY ?? 0; }
       if (jump) jumpRequested = false;
       lastPosition = positionKey(result.position ?? position);
+      traceSmokeJump('move.result', 'accepted');
     } else if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && movementVersion === localMovementVersion) {
       lastPosition = positionKey(playerPosition);
+      traceSmokeJump('move.result', 'stale');
+    } else {
+      traceSmokeJump('move.result', result.error ? 'rejected' : 'stale');
     }
-  } catch { /* The status poll reports connectivity failures. */ } finally { moveRunning = false; }
+  } catch {
+    traceSmokeJump('move.result', 'request-failed');
+    /* The status poll reports connectivity failures. */
+  } finally { moveRunning = false; }
 }
 async function command(body) { const result = await request('/command', 'POST', body); if (result.error) throw new Error(result.message || result.error); await poll(); return result; }
 

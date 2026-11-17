@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 const source = readFileSync(new URL('../../src/renderer.mjs', import.meta.url), 'utf8');
 export function rendererHarness() {
   const elements = new Map();
-  const jumpTrace = { spaceKeydown: false, jumpRequested: null, firstMoveJump: null };
+  const jumpTrace = { spaceKeydown: false, jumpRequested: null, firstMoveJump: null, firstMoveSkip: null, firstMoveResult: null };
   const windowListeners = new Map();
   const window = {
     addEventListener(name, listener) {
@@ -17,6 +17,8 @@ export function rendererHarness() {
     __TUS_SMOKE_JUMP_TRACE(event, value) {
       if (event === 'jumpRequested' && typeof value === 'boolean') jumpTrace.jumpRequested = value;
       if (event === 'move.jump' && jumpTrace.spaceKeydown && jumpTrace.firstMoveJump === null && typeof value === 'boolean') jumpTrace.firstMoveJump = value;
+      if (event === 'move.skip' && jumpTrace.spaceKeydown && jumpTrace.firstMoveSkip === null && typeof value === 'string') jumpTrace.firstMoveSkip = value;
+      if (event === 'move.result' && jumpTrace.spaceKeydown && jumpTrace.firstMoveResult === null && typeof value === 'string') jumpTrace.firstMoveResult = value;
     },
   };
   let sequence = 0;

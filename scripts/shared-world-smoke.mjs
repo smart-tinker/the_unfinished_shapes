@@ -50,7 +50,7 @@ async function reportJumpTrace(client) {
   const observed = await client.page.evaluate(() => {
     const trace = window.__TUS_SMOKE_JUMP_TRACE_STATE;
     return trace && typeof trace === 'object'
-      ? { spaceKeydown: trace.spaceKeydown, jumpRequested: trace.jumpRequested, firstMoveJump: trace.firstMoveJump }
+      ? { spaceKeydown: trace.spaceKeydown, jumpRequested: trace.jumpRequested, firstMoveJump: trace.firstMoveJump, firstMoveSkip: trace.firstMoveSkip, firstMoveResult: trace.firstMoveResult }
       : {};
   }).catch(() => ({}));
   const snapshot = await state(client.id).catch(() => null);
@@ -261,11 +261,13 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('d');
   await alice.page.keyboard.down('d');
   await alice.page.evaluate(() => {
-    const trace = { spaceKeydown: false, jumpRequested: null, firstMoveJump: null };
+    const trace = { spaceKeydown: false, jumpRequested: null, firstMoveJump: null, firstMoveSkip: null, firstMoveResult: null };
     window.__TUS_SMOKE_JUMP_TRACE_STATE = trace;
     window.__TUS_SMOKE_JUMP_TRACE = (event, value) => {
       if (event === 'jumpRequested') trace.jumpRequested = value;
       if (event === 'move.jump' && trace.spaceKeydown && trace.firstMoveJump === null) trace.firstMoveJump = value;
+      if (event === 'move.skip' && trace.spaceKeydown && trace.firstMoveSkip === null) trace.firstMoveSkip = value;
+      if (event === 'move.result' && trace.spaceKeydown && trace.firstMoveResult === null) trace.firstMoveResult = value;
     };
     window.addEventListener('keydown', event => {
       if (event.code === 'Space') trace.spaceKeydown = true;
@@ -278,26 +280,37 @@ await withSmokeCleanup(async () => {
       const x = Number(parts?.[0]?.slice(2)), y = Number(parts?.[1]?.slice(2));
       return Number.isFinite(x) && Number.isFinite(y) && x >= 15 && x < 17 && y > 0;
     }, undefined, { polling: 'raf', timeout: 5000 });
-    await reportJumpTrace(alice);
   } catch {
     const trace = await reportJumpTrace(alice);
-    assert.equal(trace.spaceKeydown, true, 'Space keydown trace is missing');
-    assert.equal(trace.jumpRequested, true, 'local jumpRequested trace is missing');
-    assert.equal(typeof trace.firstMoveJump, 'boolean', 'first move.jump trace is missing');
-    throw new Error('Shared-world jump did not reach airborne acceptance within the existing 5000ms timeout.');
+    try {
+      assert.equal(trace.spaceKeydown, true, 'Space keydown trace is missing');
+      assert.equal(trace.jumpRequested, true, 'local jumpRequested trace is missing');
+      assert.equal(typeof trace.firstMoveJump, 'boolean', 'first move.jump trace is missing');
+      throw new Error('Shared-world jump did not reach airborne acceptance within the existing 5000ms timeout.');
+    } finally {
+      await alice.page.evaluate(() => {
+        delete window.__TUS_SMOKE_JUMP_TRACE;
+        delete window.__TUS_SMOKE_JUMP_TRACE_STATE;
+      }).catch(() => {});
+    }
   } finally {
+    await alice.page.keyboard.up('Space');
+    await alice.page.keyboard.up('d');
+  }
+  let landed;
+  try {
+    await alice.page.waitForFunction(() => {
+      const yPart = document.querySelector('#coordinates')?.textContent.split(' · ')[1];
+      return Number(yPart?.slice(2)) > 0;
+    }, undefined, { polling: 'raf', timeout: 5000 });
+    landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
+  } finally {
+    await reportJumpTrace(alice);
     await alice.page.evaluate(() => {
       delete window.__TUS_SMOKE_JUMP_TRACE;
       delete window.__TUS_SMOKE_JUMP_TRACE_STATE;
     }).catch(() => {});
-    await alice.page.keyboard.up('Space');
-    await alice.page.keyboard.up('d');
   }
-  await alice.page.waitForFunction(() => {
-    const yPart = document.querySelector('#coordinates')?.textContent.split(' · ')[1];
-    return Number(yPart?.slice(2)) > 0;
-  }, undefined, { polling: 'raf', timeout: 5000 });
-  const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('Y 2.0'), undefined, { timeout: 5000 });
