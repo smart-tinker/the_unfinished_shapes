@@ -19,8 +19,16 @@ try {
   [Console]::Out.Flush()
   [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-payload-parse-start')
   [Console]::Out.Flush()
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-payload-decode-start')
+  [Console]::Out.Flush()
   $payloadJson = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($payloadLine))
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-payload-decode-done')
+  [Console]::Out.Flush()
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-payload-json-start')
+  [Console]::Out.Flush()
   $payload = ConvertFrom-Json -InputObject $payloadJson
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-payload-json-done')
+  [Console]::Out.Flush()
   [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-payload-parse-done')
   [Console]::Out.Flush()
   [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-addtype-types-start')
@@ -127,7 +135,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 public sealed class TusUiaOutputCapture
 {
-    private static readonly Regex TokenMatcher = new Regex(@"^TUS_UIA_CHILD: (phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-\d+-(?:start|done)|current-name-\d+(?:-\d+)?-(?:start|done)|next-sibling-\d+-\d+-(?:start|done))|matched-[01]|mismatch)$", RegexOptions.CultureInvariant);
+    private static readonly Regex TokenMatcher = new Regex(@"^TUS_UIA_CHILD: (phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-\d+-(?:start|done)|current-name-\d+(?:-\d+)?-(?:start|done)|next-sibling-\d+-\d+-(?:start|done))|matched-[01]|mismatch)$", RegexOptions.CultureInvariant);
     public readonly List<string> Tokens = new List<string>();
     public readonly ManualResetEvent OutputReadComplete = new ManualResetEvent(false);
     public readonly DataReceivedEventHandler Handler;

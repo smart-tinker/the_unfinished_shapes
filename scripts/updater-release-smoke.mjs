@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import { compareReleaseVersions } from '../src/update-release.mjs';
-import { safeUpdaterFailureCode, safeVerifierCode } from '../src/update-package.mjs';
+import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType } from '../src/update-package.mjs';
 import { closeSmokeApp, observeGraphics, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 
@@ -274,14 +274,16 @@ async function updateOnce(distribution) {
         phase: status?.dataset.updatePhase || null,
         failureCode: status?.dataset.updateFailureCode || null,
         verifierCode: status?.dataset.verifierCode || null,
+        verifierErrorType: status?.dataset.verifierErrorType || null,
         cancelEnabled: !document.querySelector('#updates-cancel')?.disabled,
       };
-    }, { progressPattern: updateProgressPattern.source, httpStatusPattern: updateHttpStatusPattern.source }).catch(() => ({ state: 'unavailable', receivedMB: null, totalMB: null, httpStatus: null, phase: null, verifierCode: null, cancelEnabled: null }));
+    }, { progressPattern: updateProgressPattern.source, httpStatusPattern: updateHttpStatusPattern.source }).catch(() => ({ state: 'unavailable', receivedMB: null, totalMB: null, httpStatus: null, phase: null, verifierCode: null, verifierErrorType: null, cancelEnabled: null }));
     const safeDiagnostic = {
       ...diagnostic,
       phase: ['download', 'provenance'].includes(diagnostic.phase) ? diagnostic.phase : 'unknown',
       failureCode: safeUpdaterFailureCode(diagnostic.failureCode),
       verifierCode: safeVerifierCode(diagnostic.verifierCode),
+      verifierErrorType: safeVerifierErrorType(diagnostic.verifierErrorType),
       httpStatus: Number.isInteger(diagnostic.httpStatus) && diagnostic.httpStatus >= 400 && diagnostic.httpStatus <= 599 ? diagnostic.httpStatus : null,
     };
     assert.ok([diagnostic.receivedMB, diagnostic.totalMB].every(value => value === null || value >= 0 && value <= 500), 'timeout progress diagnostic stays bounded');
@@ -294,6 +296,7 @@ async function updateOnce(distribution) {
           phase: status.dataset.updatePhase,
           failureCode: status.dataset.updateFailureCode,
           verifierCode: status.dataset.verifierCode,
+          verifierErrorType: status.dataset.verifierErrorType,
           httpStatus: Number(status.dataset.updateHttpStatus) || null,
         }
       : null;
@@ -303,6 +306,7 @@ async function updateOnce(distribution) {
       phase: ['download', 'provenance'].includes(terminalFailure.phase) ? terminalFailure.phase : 'unknown',
       failureCode: safeUpdaterFailureCode(terminalFailure.failureCode),
       verifierCode: safeVerifierCode(terminalFailure.verifierCode),
+      verifierErrorType: safeVerifierErrorType(terminalFailure.verifierErrorType),
       httpStatus: Number.isInteger(terminalFailure.httpStatus) && terminalFailure.httpStatus >= 400 && terminalFailure.httpStatus <= 599 ? terminalFailure.httpStatus : null,
     };
     throw new Error('Updater failed before verification; update=' + JSON.stringify(diagnostic));

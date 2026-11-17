@@ -23,6 +23,14 @@ const sigstoreVerifierCodes = new Set([
 ]);
 
 const safeVerifierErrorTypes = new Map([['ValidationError', 'BUNDLE_VALIDATION_ERROR']]);
+const safeVerifierErrorClassNames = new Set([
+  'Error', 'TypeError', 'RangeError', 'SyntaxError', 'AggregateError',
+  'ValidationError', 'VerificationError', 'PolicyError', 'TUFError',
+]);
+
+export function safeVerifierErrorType(errorType) {
+  return typeof errorType === 'string' && safeVerifierErrorClassNames.has(errorType) ? errorType : 'OTHER';
+}
 
 export function safeVerifierCode(code, errorType) {
   if (typeof code === 'string' && sigstoreVerifierCodes.has(code)) return code;
@@ -97,6 +105,7 @@ export async function verifyReleaseAttestation({ bundle, asset, tag }, verifySig
     const code = safeVerifierCode(error?.code, error?.constructor?.name);
     const rejection = updaterFailure('Release attestation signature rejected [verifier=' + code + '].', 'SIGNATURE_REJECTED');
     rejection.code = code;
+    rejection.verifierErrorType = safeVerifierErrorType(error?.constructor?.name);
     throw rejection;
   }
   const envelope = bundle.dsseEnvelope;
@@ -265,6 +274,7 @@ export async function downloadVerifiedAsset({
       state: 'failed', phase,
       failureCode: safeUpdaterFailureCode(error?.failureCode),
       verifierCode: safeVerifierCode(error?.code),
+      verifierErrorType: safeVerifierErrorType(error?.verifierErrorType),
       httpStatus,
     });
     throw error;

@@ -21,7 +21,7 @@ const safeUiPromptStatuses = new Set([
   'requested-button-missing', 'expected-message-mismatch', 'expected-message-unavailable',
   'expected-body-mismatch', 'expected-body-timeout', 'expected-body-unavailable',
 ]);
-const safeUiTimeoutPhase = /^prompt-reader-timeout-phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-[01]-(?:start|done)|current-name-[01](?:-[0-7])?-(?:start|done)|next-sibling-[01]-[0-7]-(?:start|done))$/;
+const safeUiTimeoutPhase = /^prompt-reader-timeout-phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-[01]-(?:start|done)|current-name-[01](?:-[0-7])?-(?:start|done)|next-sibling-[01]-[0-7]-(?:start|done))$/;
 
 export function safeUiFailureOutcome(tokens = [], processFailure = 'probe-failed') {
   let marker;

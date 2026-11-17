@@ -101,7 +101,7 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
   assert.match(uia, /GetNextSibling/);
   assert.match(uia, /detail/);
   assert.match(uia, /TUS_UIA_CHILD: phase-fromhandle-start/);
-  for (const marker of ['phase-child-start', 'phase-payload-read-start', 'phase-payload-parse-start', 'phase-addtype-types-start', 'phase-addtype-client-start']) {
+  for (const marker of ['phase-child-start', 'phase-payload-read-start', 'phase-payload-parse-start', 'phase-payload-decode-start', 'phase-payload-decode-done', 'phase-payload-json-start', 'phase-payload-json-done', 'phase-addtype-types-start', 'phase-addtype-client-start']) {
     assert.ok(uia.includes('TUS_UIA_CHILD: ' + marker), 'UIA child reports ' + marker);
   }
   assert.match(uia, /TUS_UIA_CHILD: phase-findfirst-\' \+ \$index \+ \'-start/);
@@ -283,6 +283,7 @@ test('UIA wrapper phases are flushed and safely reach mutation evidence', async 
   for (const phase of [
     'ui-child-starting', 'ui-child-started', 'ui-child-waiting', 'ui-child-finished',
     'ui-payload-preparing', 'ui-payload-ready', 'ui-payload-writing', 'ui-payload-written',
+    'prompt-reader-timeout-phase-payload-decode-start', 'prompt-reader-timeout-phase-payload-json-start',
   ]) assert.ok(safeOutcomeMatcher.test(phase), phase + ' is allowlisted in mutation evidence');
   assert.match(mutationProbe, /console\.log\('TUS_UIA_TEST: detail-probe-' \+ matcherOutcome\)/);
 });

@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import { create as createTar } from 'tar';
-import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeVerifierErrorType, verifyReleaseAttestation } from '../src/update-package.mjs';
 
 const tag = 'v0.1.0-rc11';
 const asset = {
@@ -383,7 +383,7 @@ test('extracts Windows portable and macOS app archives under the selected folder
 test('reports terminal updater failures with safe provenance and verifier codes', async t => {
   async function expectFailure({
     responseStatus = 200, responseBody, verifySignature = async () => ({}),
-    failureCode, verifierCode = 'OTHER', httpStatus = null, noRawError = false,
+    failureCode, verifierCode = 'OTHER', verifierErrorType = 'OTHER', httpStatus = null, noRawError = false,
   }) {
     const bytes = Buffer.from('unverified update package');
     const digest = createHash('sha256').update(bytes).digest('hex');
@@ -410,7 +410,7 @@ test('reports terminal updater failures with safe provenance and verifier codes'
         verifySignature,
       }), error => { caught = error; return true; });
       assert.deepEqual(progress.at(-1), {
-        state: 'failed', phase: 'provenance', failureCode, verifierCode, httpStatus,
+        state: 'failed', phase: 'provenance', failureCode, verifierCode, verifierErrorType, httpStatus,
       });
       if (noRawError) assert.doesNotMatch(caught.message, /private verifier detail/);
     } finally {
@@ -420,13 +420,13 @@ test('reports terminal updater failures with safe provenance and verifier codes'
 
   await t.test('preserves a known Sigstore verifier code', () => expectFailure({
     verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code: 'SIGNATURE_ERROR' }); },
-    failureCode: 'SIGNATURE_REJECTED', verifierCode: 'SIGNATURE_ERROR', noRawError: true,
+    failureCode: 'SIGNATURE_REJECTED', verifierCode: 'SIGNATURE_ERROR', verifierErrorType: 'Error', noRawError: true,
   }));
   await t.test('classifies Sigstore bundle validation failures without exposing their message', () => {
     class ValidationError extends Error {}
     return expectFailure({
       verifySignature: async () => { throw new ValidationError('private verifier detail'); },
-      failureCode: 'SIGNATURE_REJECTED', verifierCode: 'BUNDLE_VALIDATION_ERROR', noRawError: true,
+      failureCode: 'SIGNATURE_REJECTED', verifierCode: 'BUNDLE_VALIDATION_ERROR', verifierErrorType: 'ValidationError', noRawError: true,
     });
   });
   await t.test('preserves Sigstore TUF error codes without exposing details', async () => {
@@ -436,13 +436,21 @@ test('reports terminal updater failures with safe provenance and verifier codes'
     ]) {
       await expectFailure({
         verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code }); },
-        failureCode: 'SIGNATURE_REJECTED', verifierCode: code, noRawError: true,
+        failureCode: 'SIGNATURE_REJECTED', verifierCode: code, verifierErrorType: 'Error', noRawError: true,
       });
     }
   });
+  await t.test('reports allowlisted verifier exception types without exposing their messages', async () => {
+    assert.equal(safeVerifierErrorType('TypeError'), 'TypeError');
+    assert.equal(safeVerifierErrorType('PrivateVerifierType'), 'OTHER');
+    await expectFailure({
+      verifySignature: async () => { throw new TypeError('private verifier detail'); },
+      failureCode: 'SIGNATURE_REJECTED', verifierErrorType: 'TypeError', noRawError: true,
+    });
+  });
   await t.test('maps unknown verifier codes to OTHER', () => expectFailure({
     verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code: 'PRIVATE_CODE' }); },
-    failureCode: 'SIGNATURE_REJECTED', verifierCode: 'OTHER', noRawError: true,
+    failureCode: 'SIGNATURE_REJECTED', verifierCode: 'OTHER', verifierErrorType: 'Error', noRawError: true,
   }));
   await t.test('reports provenance HTTP failures separately', () => expectFailure({
     responseStatus: 503, responseBody: {}, failureCode: 'PROVENANCE_HTTP_ERROR', httpStatus: 503,
