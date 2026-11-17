@@ -484,7 +484,7 @@ test('reports package-download failures with safe codes', async t => {
         fetcher,
       }), error => { caught = error; return true; });
       assert.deepEqual(progress.at(-1), {
-        state: 'failed', phase: 'download', failureCode, verifierCode: 'OTHER', httpStatus,
+        state: 'failed', phase: 'download', failureCode, verifierCode: 'OTHER', verifierErrorType: 'OTHER', httpStatus,
       });
       if (noRawError) assert.doesNotMatch(caught.message, /private package transport detail/);
     } finally {
