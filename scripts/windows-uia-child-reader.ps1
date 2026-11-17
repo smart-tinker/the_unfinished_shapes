@@ -192,7 +192,7 @@ public sealed class TusUiaOutputCapture
     $process.StandardInput.WriteLine($payloadLine)
     $process.StandardInput.Close()
     Write-UiaPhaseMarker 'ui-payload-written'
-    $remaining = 6000 - [int]$watch.ElapsedMilliseconds
+    $remaining = 6500 - [int]$watch.ElapsedMilliseconds
     Write-UiaPhaseMarker 'ui-child-waiting'
     if ($remaining -le 0) {
       if ($null -ne $testDiagnostic) { & $testDiagnostic 'wait-budget-expired' }

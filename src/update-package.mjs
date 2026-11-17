@@ -25,6 +25,7 @@ const sigstoreVerifierCodes = new Set([
 const safeVerifierErrorTypes = new Map([['ValidationError', 'BUNDLE_VALIDATION_ERROR']]);
 const safeVerifierErrorClassNames = new Set([
   'Error', 'TypeError', 'RangeError', 'SyntaxError', 'AggregateError',
+  'ASN1ParseError', 'ASN1TypeError', 'RFC3161TimestampVerificationError',
   'ValidationError', 'VerificationError', 'PolicyError', 'TUFError',
 ]);
 

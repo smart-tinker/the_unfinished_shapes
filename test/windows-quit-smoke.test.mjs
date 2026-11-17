@@ -112,7 +112,7 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
   assert.match(uia, /UseShellExecute = \$false/);
   assert.match(uia, /RedirectStandardInput = \$true/);
   assert.match(uia, /WaitForExit\(\$remaining\)/);
-  assert.match(uia, /6000 - \[int\]\$watch\.ElapsedMilliseconds/);
+  assert.match(uia, /6500 - \[int\]\$watch\.ElapsedMilliseconds/);
   assert.match(uia, /\.Kill\(\)/);
   assert.doesNotMatch(uia, /TreeScope\]::Descendants|\.FindAll\(/);
 });
@@ -360,7 +360,7 @@ test('UIA output drain stays bounded and cleanup reaps remain capped', async () 
   const outputWait = '$outputCapture.OutputReadComplete.WaitOne($remaining)';
   const timeoutOutputWait = uia.indexOf(outputWait);
   const normalOutputWait = uia.indexOf(outputWait, timeoutOutputWait + outputWait.length);
-  const processDeadline = '$remaining = 6000 - [int]$watch.ElapsedMilliseconds';
+  const processDeadline = '$remaining = 6500 - [int]$watch.ElapsedMilliseconds';
   const drainDeadline = '$remaining = 1000 - [int]$watch.ElapsedMilliseconds';
   const processWait = uia.indexOf('$process.WaitForExit($remaining)');
   const cleanupReap = uia.indexOf('$process.WaitForExit(1000)', processWait);
@@ -379,7 +379,7 @@ test('UIA output drain stays bounded and cleanup reaps remain capped', async () 
       normalBudget < normalOutputWait,
     'process, reap and fresh bounded EOF drains occur in order',
   );
-  assert.equal(uia.split(processDeadline).length - 1, 1, 'process completion keeps its six-second budget');
+  assert.equal(uia.split(processDeadline).length - 1, 1, 'process completion keeps its 6.5-second budget');
   assert.equal(uia.split(drainDeadline).length - 1, 2, 'each EOF drain gets a fresh one-second budget');
   assert.equal(uia.split('$watch.Restart()').length - 1, 2, 'each EOF drain starts a fresh timer');
 

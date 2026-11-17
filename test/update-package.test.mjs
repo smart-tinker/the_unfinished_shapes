@@ -443,9 +443,13 @@ test('reports terminal updater failures with safe provenance and verifier codes'
   await t.test('reports allowlisted verifier exception types without exposing their messages', async () => {
     assert.equal(safeVerifierErrorType('TypeError'), 'TypeError');
     assert.equal(safeVerifierErrorType('PrivateVerifierType'), 'OTHER');
+    for (const type of ['ASN1ParseError', 'ASN1TypeError', 'RFC3161TimestampVerificationError']) {
+      assert.equal(safeVerifierErrorType(type), type);
+    }
+    class ASN1ParseError extends Error {}
     await expectFailure({
-      verifySignature: async () => { throw new TypeError('private verifier detail'); },
-      failureCode: 'SIGNATURE_REJECTED', verifierErrorType: 'TypeError', noRawError: true,
+      verifySignature: async () => { throw new ASN1ParseError('private verifier detail'); },
+      failureCode: 'SIGNATURE_REJECTED', verifierErrorType: 'ASN1ParseError', noRawError: true,
     });
   });
   await t.test('maps unknown verifier codes to OTHER', () => expectFailure({
