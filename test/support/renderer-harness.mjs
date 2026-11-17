@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 const source = readFileSync(new URL('../../src/renderer.mjs', import.meta.url), 'utf8');
 export function rendererHarness() {
   const elements = new Map();
-  const jumpTrace = { spaceKeydown: false, jumpRequested: null, firstMoveJump: null, firstMoveSkip: null, firstMoveResult: null };
+  const jumpTrace = { spaceKeydown: false, jumpRequested: null, firstMoveJump: null, firstMoveSkip: null, firstMoveResult: null, jumpPostResponse: null };
   const windowListeners = new Map();
   const window = {
     addEventListener(name, listener) {
@@ -19,6 +19,15 @@ export function rendererHarness() {
       if (event === 'move.jump' && jumpTrace.spaceKeydown && jumpTrace.firstMoveJump === null && typeof value === 'boolean') jumpTrace.firstMoveJump = value;
       if (event === 'move.skip' && jumpTrace.spaceKeydown && jumpTrace.firstMoveSkip === null && typeof value === 'string') jumpTrace.firstMoveSkip = value;
       if (event === 'move.result' && jumpTrace.spaceKeydown && jumpTrace.firstMoveResult === null && typeof value === 'string') jumpTrace.firstMoveResult = value;
+      if (event === 'move.jump-response' && jumpTrace.spaceKeydown && jumpTrace.jumpPostResponse === null && value?.postAttempted === true) {
+        const position = value.serverPosition;
+        jumpTrace.jumpPostResponse = {
+          postAttempted: true, responseReceived: value.responseReceived === true, outcome: value.outcome,
+          serverPosition: position && { x: position.x, y: position.y, z: position.z },
+          serverVelocityY: value.serverVelocityY, serverRevision: value.serverRevision,
+          clientApplied: value.clientApplied,
+        };
+      }
     },
   };
   let sequence = 0;

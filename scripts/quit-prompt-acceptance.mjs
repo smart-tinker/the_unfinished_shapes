@@ -22,6 +22,15 @@ const safeUiPromptStatuses = new Set([
   'expected-body-mismatch', 'expected-body-timeout', 'expected-body-unavailable',
 ]);
 const safeUiTimeoutPhase = /^prompt-reader-timeout-phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-[01]-(?:start|done)|current-name-[01](?:-[0-7])?-(?:start|done)|next-sibling-[01]-[0-7]-(?:start|done))$/;
+const safeUiActions = new Set([
+  'keep-open', 'quit-anyway', 'assert-body-mismatch-rejected',
+  'assert-exact-body-recognized', 'dismiss-test-prompt', 'file-menu-open', 'file-menu-exit',
+]);
+const safeUiTimingPattern = /^TUS_UIA_TIMING: (?:(?:window-api-init|reader-setup|process-start|payload-encode|payload-write|reader-wait|child-kill|child-reap|output-drain|child-finally-kill|child-finally-reap|taskkill|graphics-health|graphics-errors)-ms=\d{1,6}|app-close-ms=\d{1,8}|ui-(?:keep-open|quit-anyway|assert-body-mismatch-rejected|assert-exact-body-recognized|dismiss-test-prompt|file-menu-open|file-menu-exit)-ms=\d{1,6})$/;
+
+export function safeUiTimingLine(line) {
+  return typeof line === 'string' && safeUiTimingPattern.test(line) ? line : null;
+}
 
 export function safeUiFailureOutcome(tokens = [], processFailure = 'probe-failed') {
   let marker;
@@ -39,6 +48,7 @@ export function safeUiFailureOutcome(tokens = [], processFailure = 'probe-failed
 }
 
 async function ui(action, pid, menuKey) {
+  const startedAt = Date.now();
   const args = [
     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', automationScript,
     '-Action', action, '-ProcessId', String(pid),
@@ -47,9 +57,13 @@ async function ui(action, pid, menuKey) {
   const { error, stdout, stderr } = await new Promise(resolve => {
     execFile('powershell.exe', args, { timeout: 30000, windowsHide: true }, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
   });
+  if (safeUiActions.has(action)) console.log('TUS_UIA_TIMING: ui-' + action + '-ms=' + (Date.now() - startedAt));
   if (error) {
     const output = [stdout, stderr].map(value => String(value ?? '')).join('\n');
-    const markers = output.split(/\r?\n/).map(line => line.trim()).filter(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line));
+    const outputLines = output.split(/\r?\n/).map(line => line.trim());
+    const markers = outputLines.filter(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line));
+    const timingLines = outputLines.map(safeUiTimingLine).filter(Boolean);
+    if (timingLines.length) console.log([...new Set(timingLines)].join('\n'));
     const processFailure = error.killed
       ? 'timeout-' + String(error.signal ?? 'unknown').toLowerCase().replace(/[^a-z0-9-]/g, '')
       : 'exit-' + (String(error.code ?? 'unknown').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'unknown');
@@ -264,7 +278,15 @@ export async function quitPromptAcceptance(app, page, graphics) {
     assert.equal(exitCode, 0, 'Quit anyway exits the packaged client cleanly');
   } catch (error) {
     if (process.exitCode === null) {
-      try { await run('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeout: 10000, windowsHide: true }); } catch {}
+      const startedAt = Date.now();
+      console.log('TUS_WINDOWS_CLOSE: taskkill-started');
+      let outcome = 'failed';
+      try {
+        await run('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeout: 10000, windowsHide: true });
+        outcome = 'completed';
+      } catch {}
+      console.log('TUS_UIA_TIMING: taskkill-ms=' + (Date.now() - startedAt));
+      console.log('TUS_WINDOWS_CLOSE: taskkill-' + outcome);
     }
     throw error;
   } finally {

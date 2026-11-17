@@ -126,6 +126,20 @@ try {
   $startInfo.RedirectStandardError = $true
   $process = New-Object System.Diagnostics.Process
   $process.StartInfo = $startInfo
+  function Write-UiaTimingMarker {
+    param(
+      [Parameter(Mandatory=$true)]
+      [ValidateSet('reader-setup','process-start','payload-encode','payload-write','reader-wait','child-kill','child-reap','output-drain','child-finally-kill','child-finally-reap')]
+      [string]$Phase,
+      [Parameter(Mandatory=$true)][long]$Milliseconds
+    )
+    if ($Milliseconds -lt 0 -or $Milliseconds -gt 999999) { return }
+    try {
+      [Console]::Out.WriteLine('TUS_UIA_TIMING: ' + $Phase + '-ms=' + $Milliseconds)
+      [Console]::Out.Flush()
+    } catch {}
+  }
+  $setupWatch = [Diagnostics.Stopwatch]::StartNew()
   if ($null -eq ('TusUiaOutputCapture' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -160,7 +174,11 @@ public sealed class TusUiaOutputCapture
   }
   $outputCapture = New-Object TusUiaOutputCapture
   $process.add_OutputDataReceived($outputCapture.Handler)
+  $setupWatch.Stop()
+  Write-UiaTimingMarker 'reader-setup' $setupWatch.ElapsedMilliseconds
   $watch = [Diagnostics.Stopwatch]::StartNew()
+  $phaseWatch = [Diagnostics.Stopwatch]::StartNew()
+  $phaseWatch.Stop()
   $testDiagnostic = $null
   if (-not [string]::IsNullOrEmpty($ChildScriptOverride)) {
     $testDiagnostic = {
@@ -174,10 +192,17 @@ public sealed class TusUiaOutputCapture
   try {
     if ($null -ne $testDiagnostic) { & $testDiagnostic 'diagnostic-enabled' }
     Write-UiaPhaseMarker 'ui-child-starting'
-    if (-not $process.Start()) { return 'unavailable' }
+    $phaseWatch.Restart()
+    $started = $false
+    try { $started = $process.Start() } finally {
+      $phaseWatch.Stop()
+      Write-UiaTimingMarker 'process-start' $phaseWatch.ElapsedMilliseconds
+    }
+    if (-not $started) { return 'unavailable' }
     Write-UiaPhaseMarker 'ui-child-started'
     $process.BeginOutputReadLine()
     Write-UiaPhaseMarker 'ui-payload-preparing'
+    $phaseWatch.Restart()
     if ([string]::IsNullOrEmpty($ChildScriptOverride)) {
       $payload = ConvertTo-Json -InputObject @{
         handle = $WindowHandle.ToInt64(); expectedMessages = $ExpectedMessages
@@ -187,48 +212,71 @@ public sealed class TusUiaOutputCapture
     } else {
       $payloadLine = 'synthetic-child-test'
     }
+    $phaseWatch.Stop()
+    Write-UiaTimingMarker 'payload-encode' $phaseWatch.ElapsedMilliseconds
     Write-UiaPhaseMarker 'ui-payload-ready'
     Write-UiaPhaseMarker 'ui-payload-writing'
+    $phaseWatch.Restart()
     $process.StandardInput.WriteLine($payloadLine)
     $process.StandardInput.Close()
+    $phaseWatch.Stop()
+    Write-UiaTimingMarker 'payload-write' $phaseWatch.ElapsedMilliseconds
     Write-UiaPhaseMarker 'ui-payload-written'
     $remaining = 6500 - [int]$watch.ElapsedMilliseconds
     Write-UiaPhaseMarker 'ui-child-waiting'
-    if ($remaining -le 0) {
-      if ($null -ne $testDiagnostic) { & $testDiagnostic 'wait-budget-expired' }
-      $waitTimedOut = $true
-    } else {
-      if ($null -ne $testDiagnostic) { & $testDiagnostic 'wait-started' }
-      try {
-        $waitTimedOut = -not $process.WaitForExit($remaining)
-      } catch {
-        if ($null -ne $testDiagnostic) { & $testDiagnostic 'wait-threw' }
-        throw
+    $phaseWatch.Restart()
+    try {
+      if ($remaining -le 0) {
+        if ($null -ne $testDiagnostic) { & $testDiagnostic 'wait-budget-expired' }
+        $waitTimedOut = $true
+      } else {
+        if ($null -ne $testDiagnostic) { & $testDiagnostic 'wait-started' }
+        try {
+          $waitTimedOut = -not $process.WaitForExit($remaining)
+        } catch {
+          if ($null -ne $testDiagnostic) { & $testDiagnostic 'wait-threw' }
+          throw
+        }
+        if ($null -ne $testDiagnostic) {
+          if ($waitTimedOut) { & $testDiagnostic 'wait-timed-out' }
+          else { & $testDiagnostic 'wait-child-exited' }
+        }
       }
-      if ($null -ne $testDiagnostic) {
-        if ($waitTimedOut) { & $testDiagnostic 'wait-timed-out' }
-        else { & $testDiagnostic 'wait-child-exited' }
-      }
+    } finally {
+      $phaseWatch.Stop()
+      Write-UiaTimingMarker 'reader-wait' $phaseWatch.ElapsedMilliseconds
     }
     if ($waitTimedOut) {
       Write-UiaPhaseMarker 'ui-child-killing'
       if ($null -ne $testDiagnostic) { & $testDiagnostic 'kill-started' }
+      $phaseWatch.Restart()
       try {
-        $process.Kill()
-        if ($null -ne $testDiagnostic) { & $testDiagnostic 'kill-returned' }
-      } catch {
-        if ($null -ne $testDiagnostic) { & $testDiagnostic 'kill-failed' }
+        try {
+          $process.Kill()
+          if ($null -ne $testDiagnostic) { & $testDiagnostic 'kill-returned' }
+        } catch {
+          if ($null -ne $testDiagnostic) { & $testDiagnostic 'kill-failed' }
+        }
+      } finally {
+        $phaseWatch.Stop()
+        Write-UiaTimingMarker 'child-kill' $phaseWatch.ElapsedMilliseconds
       }
       Write-UiaPhaseMarker 'ui-child-kill-waiting'
       if ($null -ne $testDiagnostic) { & $testDiagnostic 'reap-started' }
+      $phaseWatch.Restart()
       try {
-        $reapCompleted = $process.WaitForExit(1000)
-        if ($null -ne $testDiagnostic) {
-          if ($reapCompleted) { & $testDiagnostic 'reap-completed' }
-          else { & $testDiagnostic 'reap-timed-out' }
+        try {
+          $reapCompleted = $process.WaitForExit(1000)
+          if ($null -ne $testDiagnostic) {
+            if ($reapCompleted) { & $testDiagnostic 'reap-completed' }
+            else { & $testDiagnostic 'reap-timed-out' }
+          }
+        } catch {
+          if ($null -ne $testDiagnostic) { & $testDiagnostic 'reap-threw' }
         }
-      } catch {
-        if ($null -ne $testDiagnostic) { & $testDiagnostic 'reap-threw' }
+      } finally {
+        $phaseWatch.Stop()
+        Write-UiaTimingMarker 'child-reap' $phaseWatch.ElapsedMilliseconds
       }
       Write-UiaPhaseMarker 'ui-child-exit-checking'
       $drainComplete = $false
@@ -239,22 +287,32 @@ public sealed class TusUiaOutputCapture
         $remaining = 1000 - [int]$watch.ElapsedMilliseconds
         if ($remaining -gt 0) {
           if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-started' }
+          $phaseWatch.Restart()
           try {
-            $drainComplete = $outputCapture.OutputReadComplete.WaitOne($remaining)
-          } catch {
-            if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-threw' }
-            throw
+            try {
+              $drainComplete = $outputCapture.OutputReadComplete.WaitOne($remaining)
+            } catch {
+              if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-threw' }
+              throw
+            }
+          } finally {
+            $phaseWatch.Stop()
+            Write-UiaTimingMarker 'output-drain' $phaseWatch.ElapsedMilliseconds
           }
           if ($null -ne $testDiagnostic) {
             if ($drainComplete) { & $testDiagnostic 'stdout-eof-completed' }
             else { & $testDiagnostic 'stdout-eof-timed-out' }
           }
-        } elseif ($null -ne $testDiagnostic) {
-          & $testDiagnostic 'stdout-eof-budget-expired'
+        } else {
+          if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-budget-expired' }
+          Write-UiaTimingMarker 'output-drain' $watch.ElapsedMilliseconds
         }
-      } elseif ($null -ne $testDiagnostic) {
-        & $testDiagnostic 'process-not-exited'
-        & $testDiagnostic 'stdout-eof-skipped-process-not-exited'
+      } else {
+        if ($null -ne $testDiagnostic) {
+          & $testDiagnostic 'process-not-exited'
+          & $testDiagnostic 'stdout-eof-skipped-process-not-exited'
+        }
+        Write-UiaTimingMarker 'output-drain' 0
       }
       if (-not $drainComplete) { return 'timeout-no-phase' }
       $phases = @($outputCapture.Tokens.ToArray() | Where-Object { $_ -match '^phase-' })
@@ -266,14 +324,21 @@ public sealed class TusUiaOutputCapture
     $remaining = 1000 - [int]$watch.ElapsedMilliseconds
     if ($remaining -le 0) {
       if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-budget-expired' }
+      Write-UiaTimingMarker 'output-drain' $watch.ElapsedMilliseconds
       return 'unavailable'
     }
     if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-started' }
+    $phaseWatch.Restart()
     try {
-      $drainComplete = $outputCapture.OutputReadComplete.WaitOne($remaining)
-    } catch {
-      if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-threw' }
-      throw
+      try {
+        $drainComplete = $outputCapture.OutputReadComplete.WaitOne($remaining)
+      } catch {
+        if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-threw' }
+        throw
+      }
+    } finally {
+      $phaseWatch.Stop()
+      Write-UiaTimingMarker 'output-drain' $phaseWatch.ElapsedMilliseconds
     }
     if (-not $drainComplete) {
       if ($null -ne $testDiagnostic) { & $testDiagnostic 'stdout-eof-timed-out' }
@@ -294,9 +359,17 @@ public sealed class TusUiaOutputCapture
       try { Write-UiaPhaseMarker 'ui-child-finally-exit-checking' } catch {}
       if (-not $process.HasExited) {
         try { Write-UiaPhaseMarker 'ui-child-finally-killing' } catch {}
-        $process.Kill()
+        $phaseWatch.Restart()
+        try { $process.Kill() } finally {
+          $phaseWatch.Stop()
+          Write-UiaTimingMarker 'child-finally-kill' $phaseWatch.ElapsedMilliseconds
+        }
         try { Write-UiaPhaseMarker 'ui-child-finally-waiting' } catch {}
-        [void]$process.WaitForExit(1000)
+        $phaseWatch.Restart()
+        try { [void]$process.WaitForExit(1000) } finally {
+          $phaseWatch.Stop()
+          Write-UiaTimingMarker 'child-finally-reap' $phaseWatch.ElapsedMilliseconds
+        }
       }
     } catch {}
     try { Write-UiaPhaseMarker 'ui-child-disposing' } catch {}

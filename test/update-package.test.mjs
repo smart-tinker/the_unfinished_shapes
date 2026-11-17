@@ -440,9 +440,12 @@ test('reports terminal updater failures with safe provenance and verifier codes'
       });
     }
   });
-  await t.test('reports allowlisted verifier exception types without exposing their messages', async () => {
+  await t.test('reports bounded verifier exception class names without exposing their messages', async () => {
     assert.equal(safeVerifierErrorType('TypeError'), 'TypeError');
     assert.equal(safeVerifierErrorType('PrivateVerifierType'), 'OTHER');
+    assert.equal(safeVerifierErrorType('PrivateVerifierError'), 'PrivateVerifierError');
+    assert.equal(safeVerifierErrorType('Private_VerifierError'), 'OTHER');
+    assert.equal(safeVerifierErrorType('A'.repeat(50) + 'Error'), 'OTHER');
     for (const type of ['ASN1ParseError', 'ASN1TypeError', 'RFC3161TimestampVerificationError']) {
       assert.equal(safeVerifierErrorType(type), type);
     }
@@ -450,6 +453,11 @@ test('reports terminal updater failures with safe provenance and verifier codes'
     await expectFailure({
       verifySignature: async () => { throw new ASN1ParseError('private verifier detail'); },
       failureCode: 'SIGNATURE_REJECTED', verifierErrorType: 'ASN1ParseError', noRawError: true,
+    });
+    class PrivateVerifierError extends Error {}
+    await expectFailure({
+      verifySignature: async () => { throw new PrivateVerifierError('private verifier detail'); },
+      failureCode: 'SIGNATURE_REJECTED', verifierErrorType: 'PrivateVerifierError', noRawError: true,
     });
   });
   await t.test('maps unknown verifier codes to OTHER', () => expectFailure({

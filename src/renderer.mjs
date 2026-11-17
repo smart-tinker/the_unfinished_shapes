@@ -895,19 +895,32 @@ async function syncPosition() {
   try {
     traceSmokeJump('move.jump', jump);
     const result = await request('/command', 'POST', { type: 'move', position, jump });
+    let responseOutcome, clientApplied = false;
     if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && result.revision >= latestStateRevision) {
       latestStateRevision = result.revision;
-      if (movementVersion === localMovementVersion && result.position) { playerPosition = result.position; playerVelocityY = result.velocityY ?? 0; }
+      if (movementVersion === localMovementVersion && result.position) {
+        playerPosition = result.position;
+        playerVelocityY = result.velocityY ?? 0;
+        clientApplied = true;
+      }
       if (jump) jumpRequested = false;
       lastPosition = positionKey(result.position ?? position);
+      responseOutcome = 'accepted';
       traceSmokeJump('move.result', 'accepted');
     } else if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && movementVersion === localMovementVersion) {
       lastPosition = positionKey(playerPosition);
+      responseOutcome = 'stale';
       traceSmokeJump('move.result', 'stale');
     } else {
-      traceSmokeJump('move.result', result.error ? 'rejected' : 'stale');
+      responseOutcome = result.error ? 'rejected' : 'stale';
+      traceSmokeJump('move.result', responseOutcome);
     }
+    if (jump) traceSmokeJump('move.jump-response', {
+      postAttempted: true, responseReceived: true, outcome: responseOutcome, serverPosition: result.position,
+      serverVelocityY: result.velocityY, serverRevision: result.revision, clientApplied,
+    });
   } catch {
+    if (jump) traceSmokeJump('move.jump-response', { postAttempted: true, responseReceived: false, outcome: 'request-failed', clientApplied: false });
     traceSmokeJump('move.result', 'request-failed');
     /* The status poll reports connectivity failures. */
   } finally { moveRunning = false; }

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { safeUiTimingLine } from '../scripts/quit-prompt-acceptance.mjs';
 
 const run = promisify(execFile);
 const readerTest = fileURLToPath(new URL('./windows-uia-bounded-reader.ps1', import.meta.url));
@@ -72,6 +73,24 @@ const safeDiagnosticMarkers = new Set([
   'TUS_UIA_DIAG: stdout-eof-threw',
 ]);
 
+function safeDiagnosticOutput(output) {
+  return output.split(/\r?\n/).map(line =>
+    safeDiagnosticMarkers.has(line) ? line : safeUiTimingLine(line)
+  ).filter(Boolean).join('\n');
+}
+
+test('safe UI timing output retains only bounded phase labels and durations', () => {
+  assert.equal(safeUiTimingLine('TUS_UIA_TIMING: reader-wait-ms=6500'), 'TUS_UIA_TIMING: reader-wait-ms=6500');
+  assert.equal(safeUiTimingLine('TUS_UIA_TIMING: ui-assert-body-mismatch-rejected-ms=30500'), 'TUS_UIA_TIMING: ui-assert-body-mismatch-rejected-ms=30500');
+  assert.equal(safeUiTimingLine('TUS_UIA_TIMING: app-close-ms=2700000'), 'TUS_UIA_TIMING: app-close-ms=2700000');
+  for (const line of [
+    'TUS_UIA_TIMING: reader-wait-ms=100000000',
+    'TUS_UIA_TIMING: unknown-ms=12',
+    'TUS_UIA_TIMING: reader-wait-ms=12 C:\\\\private',
+    'C:\\\\private\\\\path',
+  ]) assert.equal(safeUiTimingLine(line), null);
+});
+
 test('allowlist output drops an unapproved sentinel', () => {
   const rawOutput = 'TUS_UIA_CONTROL: control-start\nUNAPPROVED_SENTINEL';
   const filteredOutput = filterAllowlistedOutput(rawOutput, safeControlMarkers);
@@ -122,10 +141,10 @@ test('bounded UIA child preserves only a complete safe phase after kill and reap
     ], { timeout: 35000, windowsHide: true }));
   } catch (error) {
     processFailed = true;
-    const safeErrorOutput = filterAllowlistedOutput(String(error?.stdout ?? ''), safeDiagnosticMarkers);
+    const safeErrorOutput = safeDiagnosticOutput(String(error?.stdout ?? ''));
     console.log(safeErrorOutput || 'TUS_UIA_DIAG: no-safe-markers');
   }
-  const safeOutput = filterAllowlistedOutput(stdout, safeDiagnosticMarkers);
+  const safeOutput = safeDiagnosticOutput(stdout);
   const elapsed = Date.now() - startedAt;
 
   assert.ok(elapsed < 8000, 'the timeout, kill, reap and output drain remain bounded');
@@ -148,6 +167,9 @@ test('bounded UIA child preserves only a complete safe phase after kill and reap
     'the diagnostic records the stdout EOF drain outcome');
   for (const phase of ['ui-child-killing', 'ui-child-kill-waiting', 'ui-child-exit-checking']) {
     assert.match(safeOutput, new RegExp('^TUS_UIA: ' + phase + '$', 'm'), phase + ' is exercised');
+  }
+  for (const phase of ['reader-setup','process-start','payload-encode','payload-write','reader-wait','child-kill','child-reap','output-drain']) {
+    assert.match(safeOutput, new RegExp('^TUS_UIA_TIMING: ' + phase + '-ms=[0-9]{1,6}$', 'm'), phase + ' duration is recorded');
   }
   assert.equal(/UNAPPROVED_PROMPT_TEST_PAYLOAD|phase-unapproved-test-output|phase-payload-read-start-partial/.test(stdout + stderr), false,
     'arbitrary and unterminated child output is never surfaced');

@@ -50,7 +50,7 @@ async function reportJumpTrace(client) {
   const observed = await client.page.evaluate(() => {
     const trace = window.__TUS_SMOKE_JUMP_TRACE_STATE;
     return trace && typeof trace === 'object'
-      ? { spaceKeydown: trace.spaceKeydown, jumpRequested: trace.jumpRequested, firstMoveJump: trace.firstMoveJump, firstMoveSkip: trace.firstMoveSkip, firstMoveResult: trace.firstMoveResult }
+      ? { spaceKeydown: trace.spaceKeydown, jumpRequested: trace.jumpRequested, firstMoveJump: trace.firstMoveJump, firstMoveSkip: trace.firstMoveSkip, firstMoveResult: trace.firstMoveResult, jumpPostResponse: trace.jumpPostResponse }
       : {};
   }).catch(() => ({}));
   const snapshot = await state(client.id).catch(() => null);
@@ -261,13 +261,14 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.up('d');
   await alice.page.keyboard.down('d');
   await alice.page.evaluate(() => {
-    const trace = { spaceKeydown: false, jumpRequested: null, firstMoveJump: null, firstMoveSkip: null, firstMoveResult: null };
+    const trace = { spaceKeydown: false, jumpRequested: null, firstMoveJump: null, firstMoveSkip: null, firstMoveResult: null, jumpPostResponse: null };
     window.__TUS_SMOKE_JUMP_TRACE_STATE = trace;
     window.__TUS_SMOKE_JUMP_TRACE = (event, value) => {
       if (event === 'jumpRequested') trace.jumpRequested = value;
       if (event === 'move.jump' && trace.spaceKeydown && trace.firstMoveJump === null) trace.firstMoveJump = value;
       if (event === 'move.skip' && trace.spaceKeydown && trace.firstMoveSkip === null) trace.firstMoveSkip = value;
       if (event === 'move.result' && trace.spaceKeydown && trace.firstMoveResult === null) trace.firstMoveResult = value;
+      if (event === 'move.jump-response' && trace.spaceKeydown && trace.jumpPostResponse === null && value?.postAttempted === true) trace.jumpPostResponse = value;
     };
     window.addEventListener('keydown', event => {
       if (event.code === 'Space') trace.spaceKeydown = true;

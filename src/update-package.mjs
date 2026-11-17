@@ -23,14 +23,9 @@ const sigstoreVerifierCodes = new Set([
 ]);
 
 const safeVerifierErrorTypes = new Map([['ValidationError', 'BUNDLE_VALIDATION_ERROR']]);
-const safeVerifierErrorClassNames = new Set([
-  'Error', 'TypeError', 'RangeError', 'SyntaxError', 'AggregateError',
-  'ASN1ParseError', 'ASN1TypeError', 'RFC3161TimestampVerificationError',
-  'ValidationError', 'VerificationError', 'PolicyError', 'TUFError',
-]);
 
 export function safeVerifierErrorType(errorType) {
-  return typeof errorType === 'string' && safeVerifierErrorClassNames.has(errorType) ? errorType : 'OTHER';
+  return typeof errorType === 'string' && /^[A-Za-z][A-Za-z0-9]{0,42}Error$/.test(errorType) ? errorType : 'OTHER';
 }
 
 export function safeVerifierCode(code, errorType) {

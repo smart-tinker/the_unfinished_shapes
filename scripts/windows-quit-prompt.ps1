@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $script:uiPhase = 'startup'
 $script:uiaPromptTimeoutPhase = 'none'
+$script:windowApiWatch = [Diagnostics.Stopwatch]::StartNew()
 trap {
   $errorType = $_.Exception.GetType().Name -replace '[^A-Za-z0-9]', ''
   Write-Output "TUS_UIA: automation-error-$errorType-at-$script:uiPhase"
@@ -172,6 +173,8 @@ public static class TusWindowLookup {
 
 }
 '@
+$script:windowApiWatch.Stop()
+Write-Output "TUS_UIA_TIMING: window-api-init-ms=$($script:windowApiWatch.ElapsedMilliseconds)"
 Write-Output 'TUS_UIA: window-api-ready'
 function Write-UiaPhaseMarker {
   param(
