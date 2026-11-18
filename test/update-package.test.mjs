@@ -420,13 +420,13 @@ test('reports terminal updater failures with safe provenance and verifier codes'
 
   await t.test('preserves a known Sigstore verifier code', () => expectFailure({
     verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code: 'SIGNATURE_ERROR' }); },
-    failureCode: 'SIGNATURE_REJECTED', verifierCode: 'SIGNATURE_ERROR', verifierErrorType: 'Error', noRawError: true,
+    failureCode: 'SIGNATURE_REJECTED', verifierCode: 'SIGNATURE_ERROR', verifierErrorType: 'GENERIC_ERROR', noRawError: true,
   }));
   await t.test('classifies Sigstore bundle validation failures without exposing their message', () => {
     class ValidationError extends Error {}
     return expectFailure({
       verifySignature: async () => { throw new ValidationError('private verifier detail'); },
-      failureCode: 'SIGNATURE_REJECTED', verifierCode: 'BUNDLE_VALIDATION_ERROR', verifierErrorType: 'ValidationError', noRawError: true,
+      failureCode: 'SIGNATURE_REJECTED', verifierCode: 'BUNDLE_VALIDATION_ERROR', verifierErrorType: 'BUNDLE_VALIDATION_ERROR', noRawError: true,
     });
   });
   await t.test('preserves Sigstore TUF error codes without exposing details', async () => {
@@ -436,23 +436,24 @@ test('reports terminal updater failures with safe provenance and verifier codes'
     ]) {
       await expectFailure({
         verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code }); },
-        failureCode: 'SIGNATURE_REJECTED', verifierCode: code, verifierErrorType: 'Error', noRawError: true,
+        failureCode: 'SIGNATURE_REJECTED', verifierCode: code, verifierErrorType: 'GENERIC_ERROR', noRawError: true,
       });
     }
   });
-  await t.test('reports bounded verifier exception class names without exposing their messages', async () => {
-    assert.equal(safeVerifierErrorType('TypeError'), 'TypeError');
-    assert.equal(safeVerifierErrorType('Error'), 'Error');
+  await t.test('reports only known verifier error categories without exposing their messages', async () => {
+    assert.equal(safeVerifierErrorType('TypeError'), 'TYPE_ERROR');
+    assert.equal(safeVerifierErrorType('Error'), 'GENERIC_ERROR');
     assert.equal(safeVerifierErrorType('PrivateVerifierType'), 'OTHER');
     assert.equal(safeVerifierErrorType('Private_VerifierError'), 'OTHER');
     assert.equal(safeVerifierErrorType('A'.repeat(50) + 'Error'), 'OTHER');
-    for (const type of ['ASN1ParseError', 'ASN1TypeError', 'RFC3161TimestampVerificationError']) {
-      assert.equal(safeVerifierErrorType(type), type);
-    }
+    for (const [type, category] of [
+      ['ASN1ParseError', 'ASN1_PARSE_ERROR'], ['ASN1TypeError', 'ASN1_TYPE_ERROR'],
+      ['RFC3161TimestampVerificationError', 'RFC3161_TIMESTAMP_VERIFICATION_ERROR'],
+    ]) assert.equal(safeVerifierErrorType(type), category);
     class ASN1ParseError extends Error {}
     await expectFailure({
       verifySignature: async () => { throw new ASN1ParseError('private verifier detail'); },
-      failureCode: 'SIGNATURE_REJECTED', verifierErrorType: 'ASN1ParseError', noRawError: true,
+      failureCode: 'SIGNATURE_REJECTED', verifierErrorType: 'ASN1_PARSE_ERROR', noRawError: true,
     });
   });
   await t.test('redacts unknown verifier exception class names from progress', async () => {
@@ -465,7 +466,7 @@ test('reports terminal updater failures with safe provenance and verifier codes'
   });
   await t.test('maps unknown verifier codes to OTHER', () => expectFailure({
     verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code: 'PRIVATE_CODE' }); },
-    failureCode: 'SIGNATURE_REJECTED', verifierCode: 'OTHER', verifierErrorType: 'Error', noRawError: true,
+    failureCode: 'SIGNATURE_REJECTED', verifierCode: 'OTHER', verifierErrorType: 'GENERIC_ERROR', noRawError: true,
   }));
   await t.test('reports provenance HTTP failures separately', () => expectFailure({
     responseStatus: 503, responseBody: {}, failureCode: 'PROVENANCE_HTTP_ERROR', httpStatus: 503,

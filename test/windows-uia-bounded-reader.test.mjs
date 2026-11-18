@@ -141,11 +141,13 @@ test('bounded UIA child preserves only a complete safe phase after kill and reap
     ], { timeout: 35000, windowsHide: true }));
   } catch (error) {
     processFailed = true;
-    const safeErrorOutput = safeDiagnosticOutput(String(error?.stdout ?? ''));
-    console.log(safeErrorOutput || 'TUS_UIA_DIAG: no-safe-markers');
+    stdout = String(error?.stdout ?? '');
+    stderr = String(error?.stderr ?? '');
   }
   const safeOutput = safeDiagnosticOutput(stdout);
+  console.log(safeOutput || 'TUS_UIA_DIAG: no-safe-markers');
   const elapsed = Date.now() - startedAt;
+  console.log('TUS_UIA_TEST: elapsed-ms=' + Math.min(999999, Math.max(0, elapsed)));
 
   assert.ok(elapsed < 8000, 'the timeout, kill, reap and output drain remain bounded');
   assert.equal(processFailed, false, 'the PowerShell test process exits successfully');

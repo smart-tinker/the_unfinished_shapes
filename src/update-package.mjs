@@ -22,15 +22,20 @@ const sigstoreVerifierCodes = new Set([
   'TUF_DOWNLOAD_TARGET_ERROR', 'TUF_READ_TARGET_ERROR',
 ]);
 
-const safeVerifierErrorTypes = new Map([['ValidationError', 'BUNDLE_VALIDATION_ERROR']]);
+const safeVerifierErrorTypes = new Map([
+  ['Error', 'GENERIC_ERROR'], ['TypeError', 'TYPE_ERROR'],
+  ['ValidationError', 'BUNDLE_VALIDATION_ERROR'], ['ASN1ParseError', 'ASN1_PARSE_ERROR'],
+  ['ASN1TypeError', 'ASN1_TYPE_ERROR'], ['RFC3161TimestampVerificationError', 'RFC3161_TIMESTAMP_VERIFICATION_ERROR'],
+]);
+const safeVerifierCodesByErrorType = new Map([['ValidationError', 'BUNDLE_VALIDATION_ERROR']]);
 
 export function safeVerifierErrorType(errorType) {
-  return typeof errorType === 'string' && (errorType === 'Error' || /^[A-Za-z][A-Za-z0-9]{0,42}Error$/.test(errorType)) ? errorType : 'OTHER';
+  return typeof errorType === 'string' ? safeVerifierErrorTypes.get(errorType) || 'OTHER' : 'OTHER';
 }
 
 export function safeVerifierCode(code, errorType) {
   if (typeof code === 'string' && sigstoreVerifierCodes.has(code)) return code;
-  return typeof errorType === 'string' ? safeVerifierErrorTypes.get(errorType) || 'OTHER' : 'OTHER';
+  return typeof errorType === 'string' ? safeVerifierCodesByErrorType.get(errorType) || 'OTHER' : 'OTHER';
 }
 
 const updaterFailureCodes = new Set([
