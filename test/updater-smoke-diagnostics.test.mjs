@@ -200,3 +200,15 @@ test('TUS extraction boundary snapshot preserves only allowlisted states and fil
   assert.equal(serialized.includes('raw parser text'), false);
   assert.equal(serialized.includes('PRIVATE_CODE'), false);
 });
+
+test('TUS extraction phase snapshot preserves only fixed live phases', () => {
+  const phases = ['preflight', 'digest', 'zip-open', 'zip-read', 'write', 'executable', 'cleanup', 'fulfilled', 'rejected'];
+  const manifestFile = { sha256: 'a'.repeat(64) };
+  const diagnostics = safeMainDiagnostics([
+    ...phases.map(extractPhase => ({ stage: 'extract-archive', status: 'starting', extractPhase })),
+    { stage: 'extract-archive', status: 'starting', extractPhase: 'C:/private/path' },
+  ], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+
+  assert.deepEqual(diagnostics.map(item => item.extractPhase), [...phases, 'unknown']);
+  assert.equal(JSON.stringify(diagnostics).includes('C:/private/path'), false);
+});
