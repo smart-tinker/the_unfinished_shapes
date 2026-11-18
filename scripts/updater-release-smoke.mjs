@@ -169,7 +169,7 @@ function safeMainDiagnostics(live, manifestFile, assetName, tag) {
   return (Array.isArray(live) ? live : []).slice(0, 40).map(item => ({
     bundleIndex: Number.isInteger(item?.bundleIndex) && item.bundleIndex >= 0 && item.bundleIndex < 20 ? item.bundleIndex : null,
     bundleSha256: typeof item?.bundleSha256 === 'string' && /^[a-f0-9]{64}$/.test(item.bundleSha256) ? item.bundleSha256 : null,
-    stage: ['updater-module-import', 'download-verified-asset', 'main-catch-fallback', 'verify-start', 'verify-result'].includes(item?.stage) ? item.stage : 'unknown',
+    stage: ['updater-module-import', 'download-verified-asset', 'main-catch-fallback', 'verify-start', 'verify-result', 'verifier-setup', 'verifier-verify'].includes(item?.stage) ? item.stage : 'unknown',
     status: ['starting', 'ready', 'synthetic-other', 'verified', 'rejected'].includes(item?.status)
       ? item.status : item?.stage === 'verify-start' ? 'started' : 'unknown',
     assetMatches: item?.assetName === assetName && item?.assetSha256 === manifestFile.sha256 && item?.tag === tag,
@@ -259,6 +259,17 @@ async function comparePinnedAttestation(electronMain, manifestFile, assetName, t
     electronMain: safeMain,
   }));
   assert.ok(bundle, 'the Node control verifies the exact bundle attempted by the packaged updater');
+  const setupEvents = electronMain.filter(item => item.stage === 'verifier-setup');
+  const verifyEvents = electronMain.filter(item => item.stage === 'verifier-verify');
+  assert.equal(setupEvents.filter(item => item.status === 'starting').length, 1, 'the live verifier reports one setup attempt');
+  const setupResult = setupEvents.filter(item => item.status === 'ready' || item.status === 'rejected');
+  assert.equal(setupResult.length, 1, 'the live verifier reports the setup outcome');
+  if (setupResult[0].status === 'ready') {
+    assert.equal(verifyEvents.filter(item => item.status === 'starting').length, 1, 'bundle verification starts only after setup succeeds');
+    assert.equal(verifyEvents.filter(item => item.status === 'verified' || item.status === 'rejected').length, 1, 'the live verifier reports the bundle outcome');
+  } else {
+    assert.equal(verifyEvents.length, 0, 'bundle verification does not start when setup fails');
+  }
 }
 async function getManifest(tag) {
   const filename = 'candidate-' + platform + '.json';
