@@ -10,7 +10,7 @@ import { createWorldServer } from './server.mjs';
 import { DATA_DIRECTORY, loadSettings, saveSettings, agentModelForThread } from './settings.mjs';
 import { findCodex } from './codex-discovery.mjs';
 import { createQuitConfirmation, createQuitStateReader, installQuitGuard, isSmokeAutoConfirmQuit } from './quit-guard.mjs';
-import { listPublishedReleases, releaseRelation, selectReleaseAsset, startupUpdateOptions, safeReleaseCheckErrorCode } from './update-release.mjs';
+import { listPublishedReleases, releaseRelation, selectReleaseAsset, startupUpdateOptions, safeReleaseCheckErrorCode, safeUpdaterModuleFailureName } from './update-release.mjs';
 const userData = process.env.TUS_DATA_DIR ? path.resolve(process.env.TUS_DATA_DIR) : path.join(app.getPath('appData'),DATA_DIRECTORY);
 mkdirSync(userData,{recursive:true});
 app.setPath('userData',userData);
@@ -18,7 +18,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld, gameToolSession, fullscreenRestoreBounds;
 let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, extractedUpdate = null, updateDownloadController = null;
 const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic')
-  ? { moduleImport: 'not-started', moduleFailureCode: null, downloadVerifiedAsset: 'not-started' }
+  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started' }
   : null;
 if (updaterSmokeBoundary) globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -155,11 +155,13 @@ app.whenReady().then(async()=>{
         const moduleFailureCode = error?.code === 'ERR_MODULE_NOT_FOUND'
           ? 'ERR_MODULE_NOT_FOUND'
           : error?.name === 'SyntaxError' ? 'SyntaxError' : 'MODULE_IMPORT_REJECTED';
+        const moduleFailureName = safeUpdaterModuleFailureName(error);
         if (updaterSmokeBoundary) {
           updaterSmokeBoundary.moduleImport = 'rejected';
           updaterSmokeBoundary.moduleFailureCode = moduleFailureCode;
+          updaterSmokeBoundary.moduleFailureName = moduleFailureName;
         }
-        await reportDiagnostic({ stage: 'updater-module-import', status: 'rejected', moduleFailureCode });
+        await reportDiagnostic({ stage: 'updater-module-import', status: 'rejected', moduleFailureCode, moduleFailureName });
         throw error;
       }
       await reportDiagnostic({ stage: 'updater-module-import', status: 'ready' });

@@ -162,7 +162,7 @@ async function updaterRuntimeBoundary(current, manifestFile, assetName, tag) {
     withTimeout(current.page.evaluate(() => document.querySelector('#updates-status')?.dataset.updateInvokeStatus || 'not-started'), 'Updater renderer invoke snapshot', 5000).catch(() => null),
   ]);
   return safeMainDiagnostics([
-    { stage: 'updater-module-import', status: main?.moduleImport, moduleFailureCode: main?.moduleFailureCode },
+    { stage: 'updater-module-import', status: main?.moduleImport, moduleFailureCode: main?.moduleFailureCode, moduleFailureName: main?.moduleFailureName },
     { stage: 'download-verified-asset', status: main?.downloadVerifiedAsset },
     { stage: 'renderer-invoke', status: rendererInvoke },
   ], manifestFile, assetName, tag);

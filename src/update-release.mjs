@@ -14,6 +14,46 @@ export function safeReleaseCheckErrorCode(error) {
   return ['AbortError', 'TimeoutError'].includes(error?.name) || error?.code === 'ABORT_ERR' ? 'timeout' : 'check_failed';
 }
 
+// shortcut: locked updater dependency names; refresh this set when package-lock.json changes.
+const safeUpdaterModuleNames = new Set([
+  "@gar/promise-retry", "@isaacs/fs-minipass", "@isaacs/nonrecursive-glob-match", "@npmcli/agent",
+  "@npmcli/fs", "@npmcli/redact", "@sigstore/bundle", "@sigstore/core",
+  "@sigstore/protobuf-specs", "@sigstore/sign", "@sigstore/tuf", "@sigstore/verify",
+  "@tufjs/canonical-json", "@tufjs/models", "agent-base", "balanced-match",
+  "brace-expansion", "cacache", "chownr", "content-type",
+  "debug", "fs-minipass", "glob", "http-cache-semantics",
+  "http-proxy-agent", "https-proxy-agent", "iconv-lite", "ip-address",
+  "lru-cache", "make-fetch-happen", "minimatch", "minipass",
+  "minipass-collect", "minipass-fetch", "minipass-flush", "minipass-pipeline",
+  "minipass-sized", "minizlib", "ms", "negotiator",
+  "p-map", "path-scurry", "pend", "proc-log",
+  "safer-buffer", "semver", "sigstore", "smart-buffer",
+  "socks", "socks-proxy-agent", "ssri", "tar",
+  "tuf-js", "yallist", "yauzl",
+  'update-package.mjs', 'update-release.mjs',
+]);
+
+export function safeUpdaterModuleName(value) {
+  return typeof value === 'string' && safeUpdaterModuleNames.has(value) ? value : 'unknown';
+}
+
+export function safeUpdaterModuleFailureName(error) {
+  if (error?.code !== 'ERR_MODULE_NOT_FOUND') return 'unknown';
+  const specifier = typeof error.message === 'string'
+    ? error.message.match(/^Cannot find (?:package|module) '([^']+)' imported from /)?.[1]
+    : null;
+  if (specifier) {
+    const name = safeUpdaterModuleName(specifier);
+    if (name !== 'unknown') return name;
+  }
+  if (typeof error.url !== 'string') return 'unknown';
+  try {
+    const pathname = decodeURIComponent(new URL(error.url).pathname);
+    const name = pathname.match(/(?:^|\/)node_modules\/(@[^/]+\/[^/]+|[^/]+)/)?.[1] ?? pathname.split('/').at(-1);
+    return safeUpdaterModuleName(name);
+  } catch { return 'unknown'; }
+}
+
 export function parseReleaseTag(value) {
   if (typeof value !== 'string') return null;
   const match = releaseTag.exec(value);

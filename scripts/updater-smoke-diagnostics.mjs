@@ -1,4 +1,5 @@
 import { safeArchiveExtractionStage, safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType } from '../src/update-package.mjs';
+import { safeUpdaterModuleName } from '../src/update-release.mjs';
 
 const safeVerifierSetupStages = new Set([
   'tuf-get-trusted-root', 'trust-material', 'verifier-construction',
@@ -40,6 +41,7 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
     } : {}),
     ...(item?.stage === 'updater-module-import' && item?.status === 'rejected' ? {
       moduleFailureCode: safeModuleFailureCodes.has(item?.moduleFailureCode) ? item.moduleFailureCode : 'OTHER',
+      moduleFailureName: safeUpdaterModuleName(item?.moduleFailureName),
     } : {}),
     ...(item?.stage === 'extract-failed' && item?.status === 'rejected' ? { extractStage: safeArchiveExtractionStage(item.extractStage) } : {}),
     trustedRootTarget: safeRootTarget(item?.trustedRootTarget),
