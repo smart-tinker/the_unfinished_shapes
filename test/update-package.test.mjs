@@ -538,3 +538,19 @@ test('reports package-download failures with safe codes', async t => {
     { failureCode: 'DOWNLOAD_FETCH_ERROR', noRawError: true },
   ));
 });
+
+test('classifies verifier setup failures into safe internal stages', async () => {
+  const { safeVerifierSetupStage } = await import('../src/update-package.mjs');
+  assert.equal(typeof safeVerifierSetupStage, 'function');
+
+  const cases = [
+    [{ code: 'TUF_REFRESH_METADATA_ERROR', stack: 'TUFError\\n    at getTrustedRoot (sigstore.js:1:1)' }, 'tuf-get-trusted-root'],
+    [{ stack: 'Error\\n    at getTrustedRoot (sigstore.js:1:1)' }, 'tuf-get-trusted-root'],
+    [{ stack: 'Error\\n    at toTrustMaterial (sigstore.js:1:1)' }, 'trust-material'],
+    [{ stack: 'Error\\n    at new Verifier (sigstore.js:1:1)' }, 'verifier-construction'],
+    [{ stack: 'Error\\n    at createVerificationPolicy (config.js:1:1)' }, 'verification-policy'],
+    [{ stack: 'Error\\n    at /private/path/secret-token.js:1:1' }, 'unknown'],
+  ];
+
+  for (const [error, expected] of cases) assert.equal(safeVerifierSetupStage(error), expected);
+});
