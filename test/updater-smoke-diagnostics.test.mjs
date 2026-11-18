@@ -183,5 +183,8 @@ test('TUS extraction boundary snapshot preserves only allowlisted states and fil
   assert.equal(verified.status, 'fulfilled');
   assert.equal(verified.rendererInvokeStatus, 'fulfilled');
   assert.equal(cancelled.rendererStatus, 'cancelled');
-  assert.doesNotMatch(JSON.stringify([pending, unsafe, verified, cancelled]), /C:\\/private|raw parser text|PRIVATE_CODE/);
+  const serialized = JSON.stringify([pending, unsafe, verified, cancelled]);
+  assert.equal(serialized.includes('C:/private/path'), false);
+  assert.equal(serialized.includes('raw parser text'), false);
+  assert.equal(serialized.includes('PRIVATE_CODE'), false);
 });
