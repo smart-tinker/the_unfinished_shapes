@@ -21,6 +21,28 @@ test('Windows updater workflow runs after native smoke failure only when both pa
     assert.ok(installerStart > packageStart, 'the installer step follows packaging');
     const packageStep = job.slice(packageStart, installerStart);
     assert.match(packageStep, /npm run package:win/, 'the standard package command remains');
+    const dependenciesStart = job.indexOf('      - id: dependencies\n');
+    const checkStart = job.indexOf('      - run: npm run check\n', dependenciesStart);
+    const metadataStart = job.indexOf('      - id: metadata\n', checkStart);
+    assert.ok(dependenciesStart >= 0 && checkStart > dependenciesStart && metadataStart > checkStart && packageStart > metadataStart,
+      'dependency install, required check, metadata and package remain ordered');
+
+    const step = start => {
+      const end = job.indexOf('\n      - ', start + 8);
+      return end < 0 ? job.slice(start) : job.slice(start, end);
+    };
+    assert.match(step(dependenciesStart), /run: npm ci/, 'Windows dependencies must install before packaging');
+    assert.equal(step(checkStart).trim(), '- run: npm run check', 'the required check remains an ordinary failing step');
+    assert.doesNotMatch(job, /continue-on-error\s*:\s*true/, 'check failures still fail Validate');
+    const metadataStep = step(metadataStart);
+    assert.match(metadataStep, /if:\s*\$\{\{[^}]*steps\.dependencies\.conclusion\s*==\s*'success'[^}]*\}\}/,
+      'runner metadata only changes after dependency installation');
+    assert.match(metadataStep, /npm version 0\.1\.0-rc\.1/, 'packaged checks still target the published candidate version');
+    const packageCondition = packageStep.match(/^\s*if:\s*\$\{\{([^}]+)\}\}/m)?.[1] || '';
+    assert.match(packageCondition, /!\s*cancelled\(\)/);
+    assert.match(packageCondition, /steps\.dependencies\.conclusion\s*==\s*'success'/);
+    assert.match(packageCondition, /steps\.metadata\.conclusion\s*==\s*'success'/);
+
     assert.match(packageStep, /\$env:DEBUG\s*=\s*'electron-packager'/, 'the standard Packager debug reports its effective ignore regex');
     assert.match(packageStep, /TUS_TAR_PACKAGE stage=before/, 'the installed tar ESM entry is recorded before packaging');
     assert.match(packageStep, /TUS_TAR_PACKAGE stage=after/, 'the bundled tar ESM entry is recorded after packaging');
@@ -31,7 +53,14 @@ test('Windows updater workflow runs after native smoke failure only when both pa
     assert.ok(packageStep.includes("path.join('node_modules', 'tar', entry.slice(2))"), 'the ASAR readback uses platform-native separators for the ESM entry');
     assert.match(packageStep, /exports[\s\S]*import\.default/, 'the check follows tar exports[\".\"].import.default');
     assert.doesNotMatch(packageStep, /PACKAGER_ARGV|electron-packager\.tus-real\.cmd/, 'the ordinary npm package command is not wrapped');
-    assert.match(job, /- id: installer\s*\n\s*run: npm run installer:win/);
+    const nativeStart = job.indexOf('      - name: Verify clean install, current-candidate lifecycle and retained data');
+    const installerStep = job.slice(installerStart, nativeStart);
+    assert.match(installerStep, /if:\s*\$\{\{[^}]*!\s*cancelled\(\)[^}]*steps\.package\.conclusion\s*==\s*'success'[^}]*\}\}/,
+      'installer build runs only after a successful portable package and not after cancellation');
+    assert.match(installerStep, /run: npm run installer:win/, 'the standard installer command remains');
+    const nativeCondition = native.match(/^\s*if:\s*\$\{\{([^}]+)\}\}/m)?.[1] || '';
+    assert.match(nativeCondition, /steps\.package\.conclusion\s*==\s*'success'/);
+    assert.match(nativeCondition, /steps\.installer\.conclusion\s*==\s*'success'/);
     assert.doesNotMatch(native, /continue-on-error\s*:\s*true/, 'the native smoke failure remains job-failing');
     const condition = updater.match(/^\s*if:\s*\$\{\{([^}]+)\}\}/m)?.[1] || '';
     assert.match(condition, /!\s*cancelled\(\)/, 'the updater still runs after an earlier smoke failure');
