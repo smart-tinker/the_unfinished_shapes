@@ -105,3 +105,83 @@ test('TUS extraction diagnostic carries only allowlisted stage and operation', (
   assert.equal(privateStage.extractOperation, 'unknown');
   assert.doesNotMatch(JSON.stringify([entry, privateStage]), /raw parser message|C:\/private\/path/);
 });
+
+
+test('TUS extraction boundary snapshot preserves only allowlisted states and file flags', () => {
+  const manifestFile = { sha256: 'a'.repeat(64) };
+  const assetName = 'candidate.zip';
+  const tag = 'v0.1.0-rc11';
+  const [pending, unsafe, verified, cancelled] = safeMainDiagnostics([
+    {
+      stage: 'extract-archive',
+      status: 'starting',
+      rendererStatusText: 'Choose a destination folder…',
+      rendererInvokeStatus: 'pending',
+      failureCode: 'TAR_ENTRY_ERROR',
+      extractStage: 'write',
+      extractOperation: 'asar-open-invalid-package',
+      visibilityState: 'visible',
+      fileFlags: {
+        targetExists: true, appAsarExists: false, appAsarFile: false,
+        executableExists: false, stagedAsarExists: true,
+      },
+    },
+    {
+      stage: 'extract-archive',
+      status: 'rejected',
+      rendererStatusText: 'C:/private/path raw error',
+      rendererInvokeStatus: 'private-status',
+      failureCode: 'PRIVATE_CODE',
+      extractStage: 'C:/private/path',
+      extractOperation: 'C:/private/app.asar',
+      visibilityState: 'C:/private/path',
+      fileFlags: { targetExists: 1, appAsarExists: 'true', appAsarFile: true, executableExists: false, stagedAsarExists: null },
+      privateDetails: 'C:/private/path and raw parser text',
+    },
+    {
+      stage: 'extract-archive',
+      status: 'fulfilled',
+      rendererStatusText: 'Verified archive extracted. You can now launch the new copy.',
+      rendererInvokeStatus: 'fulfilled',
+      visibilityState: 'hidden',
+      fileFlags: { targetExists: true, appAsarExists: true, appAsarFile: true, executableExists: true, stagedAsarExists: false },
+    },
+    {
+      stage: 'extract-archive',
+      status: 'fulfilled',
+      rendererStatusText: 'Folder selection cancelled.',
+      rendererInvokeStatus: 'fulfilled',
+      visibilityState: 'visible',
+      fileFlags: {},
+    },
+  ], manifestFile, assetName, tag);
+
+  assert.equal(pending.stage, 'extract-archive');
+  assert.equal(pending.status, 'starting');
+  assert.equal(pending.rendererStatus, 'pending');
+  assert.equal(pending.rendererInvokeStatus, 'pending');
+  assert.equal(pending.failureCode, 'TAR_ENTRY_ERROR');
+  assert.equal(pending.extractStage, 'write');
+  assert.equal(pending.extractOperation, 'asar-open-invalid-package');
+  assert.equal(pending.visibilityState, 'visible');
+  assert.deepEqual(pending.fileFlags, {
+    targetExists: true, appAsarExists: false, appAsarFile: false,
+    executableExists: false, stagedAsarExists: true,
+  });
+
+  assert.equal(unsafe.rendererStatus, 'other');
+  assert.equal(unsafe.rendererInvokeStatus, 'unknown');
+  assert.equal(unsafe.failureCode, 'OTHER');
+  assert.equal(unsafe.extractStage, 'unknown');
+  assert.equal(unsafe.extractOperation, 'unknown');
+  assert.equal(unsafe.visibilityState, 'unknown');
+  assert.deepEqual(unsafe.fileFlags, {
+    targetExists: false, appAsarExists: false, appAsarFile: true,
+    executableExists: false, stagedAsarExists: false,
+  });
+  assert.equal(verified.rendererStatus, 'verified');
+  assert.equal(verified.status, 'fulfilled');
+  assert.equal(verified.rendererInvokeStatus, 'fulfilled');
+  assert.equal(cancelled.rendererStatus, 'cancelled');
+  assert.doesNotMatch(JSON.stringify([pending, unsafe, verified, cancelled]), /C:\\/private|raw parser text|PRIVATE_CODE/);
+});
