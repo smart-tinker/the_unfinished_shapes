@@ -437,9 +437,10 @@ async function updateOnce(distribution) {
 
   const verified = await current.page.locator('#updates-status').innerText();
   assert.ok(verified.startsWith('Verified ' + assetName + ' (SHA-256 '), 'the UI reports the exact selected package only after digest and provenance verification');
-  const downloadName = (await readdir(downloadsDir)).find(name => name.endsWith('-' + assetName));
+  const updateDir = path.join(downloadsDir, 'TheUnfinishedShapes-Updates');
+  const downloadName = (await readdir(updateDir)).find(name => name.endsWith('-' + assetName));
   assert.ok(downloadName, 'the verified package is saved in the isolated Downloads directory');
-  const downloadedPath = path.join(downloadsDir, downloadName);
+  const downloadedPath = path.join(updateDir, downloadName);
   assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'downloaded bytes match the published release manifest');
 
   if (distribution !== 'installer') {
