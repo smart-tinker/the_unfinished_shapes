@@ -516,8 +516,12 @@ async function updateOnce(distribution) {
             extractStage: await current.page.evaluate(
               () => document.querySelector('#updates-status')?.dataset.updateExtractStage || 'unknown',
             ),
+            extractOperation: await current.page.evaluate(
+              () => document.querySelector('#updates-status')?.dataset.updateExtractOperation || 'unknown',
+            ),
           }], manifestFile, assetName, tag);
           extractDiagnostic.extractStage = safeExtraction.extractStage;
+          extractDiagnostic.extractOperation = safeExtraction.extractOperation;
         }
       } catch (error) {
         if (error?.name !== 'TimeoutError') {

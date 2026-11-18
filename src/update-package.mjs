@@ -172,6 +172,18 @@ export function safeArchiveExtractionStage(value) {
   return archiveExtractionStages.has(stage) ? stage : 'unknown';
 }
 
+export function classifyAppAsarOpenFailure(error, expectedPath, zipOutputPath) {
+  if (error?.message !== 'Invalid package' || typeof expectedPath !== 'string') return 'unknown';
+  const failedPath = error?.entry && typeof error.entry === 'object' ? error.entry.absolute : zipOutputPath;
+  return typeof failedPath === 'string' && path.resolve(failedPath) === path.resolve(expectedPath)
+    ? 'asar-open-invalid-package' : 'unknown';
+}
+
+export function safeArchiveExtractionOperation(value) {
+  const operation = typeof value === 'string' ? value : value?.extractOperation;
+  return operation === 'asar-open-invalid-package' ? operation : 'unknown';
+}
+
 export function safeArchiveExtractionFailureCode(error) {
   return archiveFileSystemCodes.get(error?.code) ??
     archiveExtractionFailureMessages.get(error?.message) ??
@@ -525,7 +537,7 @@ function platformArchive(platform, assetName, tag) {
   return value;
 }
 
-async function extractZip(filePath, destination, spec, extraction) {
+async function extractZip(filePath, destination, spec, extraction, appAsarPath) {
   extraction.value = 'zip-open';
   const zip = await yauzl.openPromise(filePath, { strictFileNames: true, validateEntrySizes: true });
   let count = 0, extractedBytes = 0;
@@ -576,14 +588,22 @@ async function extractZip(filePath, destination, spec, extraction) {
     extraction.value = 'write';
     const stream = await zip.openReadStreamPromise(entry);
     const fileMode = ((entry.externalFileAttributes >>> 16) & 0o777) || 0o600;
-    await pipeline(stream, createWriteStream(output, { flags: 'wx', mode: fileMode }));
+    try {
+      await pipeline(stream, createWriteStream(output, { flags: 'wx', mode: fileMode }));
+    } catch (error) {
+      const operation = classifyAppAsarOpenFailure(error, appAsarPath, output);
+      if (operation !== 'unknown' && error && typeof error === 'object') {
+        try { error.extractOperation = operation; } catch {}
+      }
+      throw error;
+    }
     extraction.value = 'entry';
   }
 }
 
 export async function extractVerifiedArchive({ filePath, directory, tag, assetName, sha256, platform = process.platform }) {
   const extraction = { value: 'preflight' };
-  let target, targetCreated = false;
+  let target, appAsarPath, targetCreated = false;
   try {
     const spec = platformArchive(platform, assetName, tag);
     if (typeof filePath !== 'string' || !filePath || typeof directory !== 'string' || !directory ||
@@ -594,6 +614,7 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
     if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) throw new Error('Choose a real destination folder for the update.');
     const parent = await realpath(directory);
     target = path.join(parent, 'TheUnfinishedShapes-' + releaseVersion(tag) + (platform === 'darwin' ? '.app' : ''));
+    appAsarPath = path.join(target, ...(platform === 'darwin' ? ['Contents', 'Resources', 'app.asar'] : ['resources', 'app.asar']));
     try { await lstat(target); throw new Error('The update destination already exists. Choose another folder.'); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     extraction.value = 'digest';
@@ -601,7 +622,7 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
     extraction.value = 'preflight';
     await mkdir(target, { recursive: false, mode: 0o700 });
     targetCreated = true;
-    if (spec.zip) await extractZip(filePath, target, spec, extraction);
+    if (spec.zip) await extractZip(filePath, target, spec, extraction, appAsarPath);
     else {
       let count = 0, extractedBytes = 0;
       const paths = new Set();
@@ -638,6 +659,10 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
     return { target, executablePath };
   } catch (error) {
     if (error && typeof error === 'object') {
+      const operation = classifyAppAsarOpenFailure(error, appAsarPath);
+      if (operation !== 'unknown') {
+        try { error.extractOperation = operation; } catch {}
+      }
       try { error.extractStage = extraction.value; } catch {}
     }
     if (targetCreated) await rm(target, { recursive: true, force: true }).catch(() => {});

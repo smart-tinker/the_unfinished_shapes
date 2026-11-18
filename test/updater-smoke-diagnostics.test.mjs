@@ -87,7 +87,7 @@ test('TUS runtime boundary preserves only fixed import and renderer-invoke outco
   assert.equal(serialized.includes('PRIVATE_CODE'), false);
 });
 
-test('TUS extraction diagnostic carries only an allowlisted failure stage', () => {
+test('TUS extraction diagnostic carries only allowlisted stage and operation', () => {
   const assetName = 'candidate.zip';
   const tag = 'v0.1.0-rc11';
   const manifestFile = { sha256: 'a'.repeat(64) };

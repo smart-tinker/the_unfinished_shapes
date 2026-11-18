@@ -139,49 +139,48 @@ jobs:
           }
           Write-Output 'TUS_TAR_PACKAGE stage=before packageJson=present esmEntry=present'
 
-          $packagerShim = Join-Path $PWD 'node_modules/.bin/electron-packager.cmd'
-          $packagerRealShim = Join-Path $PWD 'node_modules/.bin/electron-packager.tus-real.cmd'
-          if (-not (Test-Path -LiteralPath $packagerShim -PathType Leaf)) {
-            throw 'Windows packager launcher is missing'
-          }
-          Move-Item -LiteralPath $packagerShim -Destination $packagerRealShim
-          $packageExit = 1
-          try {
-            $shimContent = @(
-              '@echo off'
-              'echo PACKAGER_ARGV %*'
-              'call "%~dp0electron-packager.tus-real.cmd" %*'
-              'exit /b %ERRORLEVEL%'
-            ) -join [Environment]::NewLine
-            Set-Content -LiteralPath $packagerShim -Value $shimContent -Encoding ascii
-            npm run package:win
-            $packageExit = $LASTEXITCODE
-          } finally {
-            Remove-Item -LiteralPath $packagerShim -Force -ErrorAction SilentlyContinue
-            Move-Item -LiteralPath $packagerRealShim -Destination $packagerShim
-          }
+          $env:DEBUG = 'electron-packager'
+          npm run package:win
+          $packageExit = $LASTEXITCODE
+          Remove-Item Env:DEBUG -ErrorAction SilentlyContinue
           if ($packageExit -ne 0) { exit $packageExit }
 
-          $bundleTarRoot = Join-Path $PWD 'dist/TheUnfinishedShapes-win32-x64/resources/app/node_modules/tar'
-          $bundleTarManifestPath = Join-Path $bundleTarRoot 'package.json'
-          $bundlePackageState = 'missing'
-          $bundleEntryState = 'missing'
-          if (Test-Path -LiteralPath $bundleTarManifestPath -PathType Leaf) {
-            $bundlePackageState = 'present'
+          $tarReadback = @'
+          import { existsSync } from 'node:fs';
+          import path from 'node:path';
+          import { extractFile } from '@electron/asar';
+
+          const archive = path.resolve('dist/TheUnfinishedShapes-win32-x64/resources/app.asar');
+          const container = existsSync(archive) ? 'present' : 'missing';
+          let packageJson = 'unknown';
+          let esmEntry = 'unknown';
+          if (container === 'present') {
             try {
-              $bundleTarManifest = Get-Content -Raw -LiteralPath $bundleTarManifestPath | ConvertFrom-Json
-              $bundleTarEntry = $bundleTarManifest.exports.PSObject.Properties['.'].Value.import.default
-              if (($bundleTarEntry -is [string]) -and $bundleTarEntry.StartsWith('./')) {
-                $bundleTarEntryPath = Join-Path $bundleTarRoot $bundleTarEntry.Substring(2)
-                if (Test-Path -LiteralPath $bundleTarEntryPath -PathType Leaf) {
-                  $bundleEntryState = 'present'
+              const manifest = JSON.parse(extractFile(archive, 'node_modules/tar/package.json').toString('utf8'));
+              packageJson = 'present';
+              const entry = manifest?.exports?.['.']?.import?.default;
+              if (typeof entry === 'string' && entry.startsWith('./')) {
+                try {
+                  extractFile(archive, `node_modules/tar/${entry.slice(2)}`);
+                  esmEntry = 'present';
+                } catch {
+                  esmEntry = 'missing';
                 }
+              } else {
+                esmEntry = 'missing';
               }
             } catch {
-              $bundleEntryState = 'unknown'
+              packageJson = 'missing';
             }
+          } else {
+            packageJson = 'missing';
           }
-          Write-Output "TUS_TAR_PACKAGE stage=after packageJson=$bundlePackageState esmEntry=$bundleEntryState"
+          console.log(`TUS_TAR_PACKAGE stage=after container=${container} packageJson=${packageJson} esmEntry=${esmEntry}`);
+          '@
+          node --input-type=module -e $tarReadback 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output 'TUS_TAR_PACKAGE stage=after container=unknown packageJson=unknown esmEntry=unknown'
+          }
       - id: installer
         run: npm run installer:win
       - name: Verify clean install, current-candidate lifecycle and retained data

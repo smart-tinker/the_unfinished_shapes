@@ -1,4 +1,4 @@
-import { safeArchiveExtractionStage, safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType } from '../src/update-package.mjs';
+import { safeArchiveExtractionOperation, safeArchiveExtractionStage, safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType } from '../src/update-package.mjs';
 import { safeUpdaterModuleName } from '../src/update-release.mjs';
 
 const safeVerifierSetupStages = new Set([
@@ -43,7 +43,10 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
       moduleFailureCode: safeModuleFailureCodes.has(item?.moduleFailureCode) ? item.moduleFailureCode : 'OTHER',
       moduleFailureName: safeUpdaterModuleName(item?.moduleFailureName),
     } : {}),
-    ...(item?.stage === 'extract-failed' && item?.status === 'rejected' ? { extractStage: safeArchiveExtractionStage(item.extractStage) } : {}),
+    ...(item?.stage === 'extract-failed' && item?.status === 'rejected' ? {
+      extractStage: safeArchiveExtractionStage(item.extractStage),
+      extractOperation: safeArchiveExtractionOperation(item.extractOperation),
+    } : {}),
     trustedRootTarget: safeRootTarget(item?.trustedRootTarget),
   }));
 }
