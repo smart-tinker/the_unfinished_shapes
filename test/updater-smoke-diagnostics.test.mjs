@@ -212,3 +212,26 @@ test('TUS extraction phase snapshot preserves only fixed live phases', () => {
   assert.deepEqual(diagnostics.map(item => item.extractPhase), [...phases, 'unknown']);
   assert.equal(JSON.stringify(diagnostics).includes('C:/private/path'), false);
 });
+
+test('TUS extraction snapshot preserves only fixed ZIP write substages and exact app.asar flag', () => {
+  const substages = ['none', 'directory-mkdir', 'parent-mkdir', 'read-stream-open', 'pipeline'];
+  const manifestFile = { sha256: 'a'.repeat(64) };
+  const diagnostics = safeMainDiagnostics([
+    ...substages.map((extractSubstage, index) => ({
+      stage: 'extract-archive',
+      status: 'starting',
+      extractSubstage,
+      extractAppAsarEntry: index === 3,
+    })),
+    {
+      stage: 'extract-archive',
+      status: 'starting',
+      extractSubstage: 'C:/private/path',
+      extractAppAsarEntry: 'true',
+    },
+  ], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+
+  assert.deepEqual(diagnostics.map(item => item.extractSubstage), [...substages, 'unknown']);
+  assert.deepEqual(diagnostics.map(item => item.extractAppAsarEntry), [false, false, false, true, false, false]);
+  assert.equal(JSON.stringify(diagnostics).includes('C:/private/path'), false);
+});
