@@ -27,6 +27,8 @@ test('Windows updater workflow runs after native smoke failure only when both pa
     assert.match(packageStep, /resources\/app\.asar/, 'the readback targets the actual packaged ASAR');
     assert.match(packageStep, /@electron\/asar/, 'the readback uses the installed ASAR reader');
     assert.match(packageStep, /extractFile/, 'the readback inspects files inside the ASAR');
+    assert.ok(packageStep.includes("path.join('node_modules', 'tar', 'package.json')"), 'the ASAR readback uses platform-native separators for the manifest');
+    assert.ok(packageStep.includes("path.join('node_modules', 'tar', entry.slice(2))"), 'the ASAR readback uses platform-native separators for the ESM entry');
     assert.match(packageStep, /exports[\s\S]*import\.default/, 'the check follows tar exports[\".\"].import.default');
     assert.doesNotMatch(packageStep, /PACKAGER_ARGV|electron-packager\.tus-real\.cmd/, 'the ordinary npm package command is not wrapped');
     assert.match(job, /- id: installer\s*\n\s*run: npm run installer:win/);
@@ -42,4 +44,10 @@ test('Windows updater workflow runs after native smoke failure only when both pa
   const lfCondition = inspect(lf);
   const crlfCondition = inspect(lf.replace(/\n/g, '\r\n'));
   assert.equal(crlfCondition, lfCondition, 'LF and CRLF forms preserve the same workflow semantics');
+});
+
+test('Windows package command preserves root ignore anchors through npm cmd', async () => {
+  const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.ok(packageJson.scripts['package:win'].includes('--ignore="^/test"'), 'Windows keeps the root test ignore anchored after npm cmd parsing');
+  assert.ok(packageJson.scripts['package:win'].includes('--ignore="^/dist"'), 'Windows keeps the root dist ignore anchored after npm cmd parsing');
 });
