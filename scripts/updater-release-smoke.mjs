@@ -209,6 +209,8 @@ async function extractRuntimeBoundary(current, extractDir, targetVersion, manife
         extractModuleImport: boundary.extractModuleImport,
         extractCall: boundary.extractCall,
         extractPhase: boundary.extractPhase,
+        extractSubstage: boundary.extractSubstage,
+        extractAppAsarEntry: boundary.extractAppAsarEntry,
       } : null;
     }), 'Updater extraction main snapshot', 5000).catch(() => null),
     withTimeout(current.page.evaluate(() => {
@@ -230,6 +232,8 @@ async function extractRuntimeBoundary(current, extractDir, targetVersion, manife
     extractModuleImport: main?.extractModuleImport,
     extractCall: main?.extractCall,
     extractPhase: main?.extractPhase,
+    extractSubstage: main?.extractSubstage,
+    extractAppAsarEntry: main?.extractAppAsarEntry,
     rendererStatusText: renderer?.statusText,
     rendererInvokeStatus: renderer?.invokeStatus,
     failureCode: renderer?.failureCode,
@@ -243,6 +247,8 @@ async function extractRuntimeBoundary(current, extractDir, targetVersion, manife
     extractModuleImport: safe.extractModuleImport,
     extractCall: safe.extractCall,
     extractPhase: safe.extractPhase,
+    extractSubstage: safe.extractSubstage,
+    extractAppAsarEntry: safe.extractAppAsarEntry,
     rendererStatus: safe.rendererStatus,
     rendererInvokeStatus: safe.rendererInvokeStatus,
     failureCode: safe.failureCode,

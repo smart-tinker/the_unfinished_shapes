@@ -18,7 +18,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld, gameToolSession, fullscreenRestoreBounds;
 let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, extractedUpdate = null, updateDownloadController = null;
 const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic')
-  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown' }
+  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false }
   : null;
 if (updaterSmokeBoundary) globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -217,6 +217,8 @@ app.whenReady().then(async()=>{
       if (updaterSmokeBoundary) {
         updaterSmokeBoundary.extractCall = 'starting';
         updaterSmokeBoundary.extractPhase = 'preflight';
+        updaterSmokeBoundary.extractSubstage = 'none';
+        updaterSmokeBoundary.extractAppAsarEntry = false;
       }
       extractedUpdate = await updater.extractVerifiedArchive({
         filePath: downloadedUpdate.filePath, directory: choice.filePaths[0], tag: downloadedUpdate.release.tag_name,

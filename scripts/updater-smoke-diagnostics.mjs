@@ -23,6 +23,7 @@ const safeExtractRendererStatuses = new Map([
 const safeExtractInvokeStatuses = new Set(['not-started', 'pending', 'fulfilled', 'rejected']);
 const safeExtractMainStatuses = new Set(['not-started', 'starting', 'fulfilled', 'rejected']);
 const safeExtractPhases = new Set(['preflight', 'digest', 'zip-open', 'zip-read', 'write', 'executable', 'cleanup', 'fulfilled', 'rejected', 'unknown']);
+const safeExtractSubstages = new Set(['none', 'directory-mkdir', 'parent-mkdir', 'read-stream-open', 'pipeline', 'unknown']);
 const safeVisibilityStates = new Set(['visible', 'hidden', 'prerender', 'unloaded']);
 const safeArchiveFailureCodes = new Set([
   'ARCHIVE_PATH', 'ARCHIVE_LINK', 'ARCHIVE_FILE_TYPE', 'ARCHIVE_SIZE', 'ARCHIVE_DUPLICATE_PATH',
@@ -72,6 +73,8 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
       extractModuleImport: safeExtractMainStatuses.has(item.extractModuleImport) ? item.extractModuleImport : 'unknown',
       extractCall: safeExtractMainStatuses.has(item.extractCall) ? item.extractCall : 'unknown',
       extractPhase: safeExtractPhases.has(item.extractPhase) ? item.extractPhase : 'unknown',
+      extractSubstage: safeExtractSubstages.has(item.extractSubstage) ? item.extractSubstage : 'unknown',
+      extractAppAsarEntry: item.extractAppAsarEntry === true,
       failureCode: typeof item.failureCode === 'string' ? safeArchiveFailureCode(item.failureCode) : null,
       extractStage: typeof item.extractStage === 'string' ? safeArchiveExtractionStage(item.extractStage) : null,
       extractOperation: typeof item.extractOperation === 'string' ? safeArchiveExtractionOperation(item.extractOperation) : null,

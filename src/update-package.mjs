@@ -577,17 +577,29 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath) 
     if (isAppAsar && (directory || mode === 0o040000)) throw new Error('Update archive contains an unsupported file type.');
     if (directory || mode === 0o040000) {
       extraction.value = 'write';
+      extraction.substage = 'directory-mkdir';
+      extraction.appAsarEntry = isAppAsar;
       await mkdir(output, { recursive: true, mode: 0o700 });
+      extraction.substage = 'none';
+      extraction.appAsarEntry = false;
       extraction.value = 'entry';
       continue;
     }
     if (mode !== 0 && mode !== 0o100000 && mode !== 0o120000) throw new Error('Update archive contains an unsupported file type.');
     extraction.value = 'write';
+    extraction.substage = 'parent-mkdir';
+    extraction.appAsarEntry = isAppAsar;
     await mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
+    extraction.substage = 'none';
+    extraction.appAsarEntry = false;
     if (mode === 0o120000) {
       extraction.value = 'symlink';
       if (process.platform === 'win32' || entry.uncompressedSize > 4096) throw new Error('Update archive contains an unsupported link.');
+      extraction.substage = 'read-stream-open';
+      extraction.appAsarEntry = isAppAsar;
       const stream = await zip.openReadStreamPromise(entry);
+      extraction.substage = 'none';
+      extraction.appAsarEntry = false;
       const chunks = [];
       for await (const chunk of stream) chunks.push(chunk);
       const target = Buffer.concat(chunks).toString('utf8');
@@ -598,13 +610,21 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath) 
       continue;
     }
     extraction.value = 'write';
+    extraction.substage = 'read-stream-open';
+    extraction.appAsarEntry = isAppAsar;
     const stream = await zip.openReadStreamPromise(entry);
+    extraction.substage = 'none';
+    extraction.appAsarEntry = false;
     const fileMode = ((entry.externalFileAttributes >>> 16) & 0o777) || 0o600;
     try {
+      extraction.substage = 'pipeline';
+      extraction.appAsarEntry = isAppAsar;
       const writeStream = isAppAsar && electronFs
         ? electronFs.createWriteStream(output, { flags: 'wx', mode: fileMode })
         : createWriteStream(output, { flags: 'wx', mode: fileMode });
       await pipeline(stream, writeStream);
+      extraction.substage = 'none';
+      extraction.appAsarEntry = false;
     } catch (error) {
       const operation = classifyAppAsarOpenFailure(error, appAsarPath, output);
       if (operation !== 'unknown' && error && typeof error === 'object') {
@@ -627,7 +647,17 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
         smokeBoundary.extractPhase = ['entry', 'symlink'].includes(value)
           ? archiveFormat === 'zip' ? 'zip-read' : 'unknown'
           : value;
+        if (value !== 'write') {
+          smokeBoundary.extractSubstage = 'none';
+          smokeBoundary.extractAppAsarEntry = false;
+        }
       }
+    },
+    set substage(value) {
+      if (smokeBoundary) smokeBoundary.extractSubstage = value;
+    },
+    set appAsarEntry(value) {
+      if (smokeBoundary) smokeBoundary.extractAppAsarEntry = value === true;
     },
   };
   let target, appAsarPath, targetCreated = false;
