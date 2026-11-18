@@ -117,10 +117,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: npm ci
+      - id: dependencies
+        run: npm ci
       - run: npm run check
-      - run: npm version 0.1.0-rc.1 --no-git-tag-version --ignore-scripts
+      - id: metadata
+        if: ${{ !cancelled() && steps.dependencies.conclusion == 'success' }}
+        run: npm version 0.1.0-rc.1 --no-git-tag-version --ignore-scripts
       - id: package
+        if: ${{ !cancelled() && steps.dependencies.conclusion == 'success' && steps.metadata.conclusion == 'success' }}
         shell: pwsh
         run: |
           $sourceTarRoot = Join-Path $PWD 'node_modules/tar'
@@ -184,8 +188,10 @@ jobs:
             Write-Output 'TUS_TAR_PACKAGE stage=after container=unknown packageJson=unknown esmEntry=unknown'
           }
       - id: installer
+        if: ${{ !cancelled() && steps.package.conclusion == 'success' }}
         run: npm run installer:win
       - name: Verify clean install, current-candidate lifecycle and retained data
+        if: ${{ !cancelled() && steps.package.conclusion == 'success' && steps.installer.conclusion == 'success' }}
         env:
           TUS_SMOKE_PORTABLE_EXECUTABLE: dist/TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe
         run: node scripts/windows-installer-smoke.mjs
