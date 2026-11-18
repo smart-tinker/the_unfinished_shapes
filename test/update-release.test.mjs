@@ -61,3 +61,15 @@ test('reports a release API rate limit from the first request without retrying',
  }
  assert.equal(safeReleaseCheckErrorCode(new Error('private release failure')),'check_failed');
 });
+test('reports only allowlisted names for missing updater modules', async()=>{
+ const {safeUpdaterModuleFailureName}=await updater();
+ const classify=error=>safeUpdaterModuleFailureName?.(error);
+ const names=[
+  classify(Object.assign(new Error("Cannot find package '@sigstore/tuf' imported from C:\\private\\app.asar\\src\\update-package.mjs"),{code:'ERR_MODULE_NOT_FOUND'})),
+  classify(Object.assign(new Error('private raw exception'),{code:'ERR_MODULE_NOT_FOUND',url:'file:///C:/private/app.asar/src/update-release.mjs'})),
+  classify(Object.assign(new Error("Cannot find package 'private-module' imported from C:\\private\\app.asar"),{code:'ERR_MODULE_NOT_FOUND'})),
+  classify(Object.assign(new Error("Cannot find package 'sigstore' imported from C:\\private\\app.asar"),{code:'ERR_RUNTIME'})),
+ ];
+ assert.deepEqual(names,['@sigstore/tuf','update-release.mjs','unknown','unknown']);
+ assert.doesNotMatch(JSON.stringify(names),/private|app\\.asar/);
+});
