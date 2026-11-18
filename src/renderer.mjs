@@ -1287,6 +1287,7 @@ $('updates-cancel').addEventListener('click', async () => {
 });
 $('updates-extract').addEventListener('click', async () => {
   delete $('updates-status').dataset.updateExtractFailureCode;
+  delete $('updates-status').dataset.updateExtractStage;
   updateBusy = true; updateButtons(); updateStatus('Choose a destination folder…');
   try {
     const result = await bridge.extractUpdate();
@@ -1320,6 +1321,7 @@ bridge?.onUpdateProgress(progress => {
     updateStatus('Verified ' + progress.assetName + ' (SHA-256 ' + progress.sha256.slice(0, 12) + '…).');
   } else if (progress?.state === 'extract-failed') {
     $('updates-status').dataset.updateExtractFailureCode = typeof progress.failureCode === 'string' ? progress.failureCode : 'OTHER';
+    $('updates-status').dataset.updateExtractStage = typeof progress.extractStage === 'string' ? progress.extractStage : 'unknown';
   } else if (progress?.state === 'extracted') {
     updateExtracted = true; updateStatus('Verified archive extracted. You can now launch the new copy.'); updateButtons();
   } else if (progress?.state === 'launch-cancelled') {

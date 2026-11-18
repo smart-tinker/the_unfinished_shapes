@@ -510,6 +510,14 @@ async function updateOnce(distribution) {
           extractDiagnostic.failureCode = await current.page.evaluate(
             () => document.querySelector('#updates-status')?.dataset.updateExtractFailureCode || 'OTHER',
           );
+          const [safeExtraction] = safeMainDiagnostics([{
+            stage: 'extract-failed',
+            status: 'rejected',
+            extractStage: await current.page.evaluate(
+              () => document.querySelector('#updates-status')?.dataset.updateExtractStage || 'unknown',
+            ),
+          }], manifestFile, assetName, tag);
+          extractDiagnostic.extractStage = safeExtraction.extractStage;
         }
       } catch (error) {
         if (error?.name !== 'TimeoutError') {

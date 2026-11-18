@@ -158,6 +158,15 @@ const archiveFileSystemCodes = new Map([
   ['EIO', 'FILESYSTEM_IO'],
 ]);
 
+const archiveExtractionStages = new Set([
+  'preflight', 'digest', 'zip-open', 'entry', 'symlink', 'write', 'executable',
+]);
+
+export function safeArchiveExtractionStage(value) {
+  const stage = typeof value === 'string' ? value : value?.extractStage;
+  return archiveExtractionStages.has(stage) ? stage : 'unknown';
+}
+
 export function safeArchiveExtractionFailureCode(error) {
   return archiveFileSystemCodes.get(error?.code) ??
     archiveExtractionFailureMessages.get(error?.message) ?? 'OTHER';
@@ -510,10 +519,13 @@ function platformArchive(platform, assetName, tag) {
   return value;
 }
 
-async function extractZip(filePath, destination, spec) {
+async function extractZip(filePath, destination, spec, extraction) {
+  extraction.value = 'zip-open';
   const zip = await yauzl.openPromise(filePath, { strictFileNames: true, validateEntrySizes: true });
   let count = 0, extractedBytes = 0;
+  extraction.value = 'entry';
   for await (const entry of zip.eachEntry()) {
+    extraction.value = 'entry';
     count++;
     if (count > maxArchiveEntries || !Number.isSafeInteger(entry.uncompressedSize) ||
         entry.uncompressedSize < 0 || (extractedBytes += entry.uncompressedSize) > maxExtractedBytes) {
@@ -535,12 +547,16 @@ async function extractZip(filePath, destination, spec) {
     if (!isWithin(destination, output)) throw new Error('Update archive path escapes its destination.');
     const directory = entry.fileName.endsWith('/');
     if (directory || mode === 0o040000) {
+      extraction.value = 'write';
       await mkdir(output, { recursive: true, mode: 0o700 });
+      extraction.value = 'entry';
       continue;
     }
     if (mode !== 0 && mode !== 0o100000 && mode !== 0o120000) throw new Error('Update archive contains an unsupported file type.');
+    extraction.value = 'write';
     await mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
     if (mode === 0o120000) {
+      extraction.value = 'symlink';
       if (process.platform === 'win32' || entry.uncompressedSize > 4096) throw new Error('Update archive contains an unsupported link.');
       const stream = await zip.openReadStreamPromise(entry);
       const chunks = [];
@@ -548,36 +564,46 @@ async function extractZip(filePath, destination, spec) {
       const target = Buffer.concat(chunks).toString('utf8');
       safeArchiveLinkTarget(target, path.dirname(output), destination);
       await symlink(target, output);
+      extraction.value = 'entry';
       continue;
     }
+    extraction.value = 'write';
     const stream = await zip.openReadStreamPromise(entry);
     const fileMode = ((entry.externalFileAttributes >>> 16) & 0o777) || 0o600;
     await pipeline(stream, createWriteStream(output, { flags: 'wx', mode: fileMode }));
+    extraction.value = 'entry';
   }
 }
 
 export async function extractVerifiedArchive({ filePath, directory, tag, assetName, sha256, platform = process.platform }) {
-  const spec = platformArchive(platform, assetName, tag);
-  if (typeof filePath !== 'string' || !filePath || typeof directory !== 'string' || !directory ||
-      typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256)) {
-    throw new Error('Invalid verified update extraction request.');
-  }
-  const parentStat = await lstat(directory);
-  if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) throw new Error('Choose a real destination folder for the update.');
-  const parent = await realpath(directory);
-  const target = path.join(parent, 'TheUnfinishedShapes-' + releaseVersion(tag) + (platform === 'darwin' ? '.app' : ''));
-  try { await lstat(target); throw new Error('The update destination already exists. Choose another folder.'); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
-  await verifyDownloadedFile({ filePath, sha256 });
-  await mkdir(target, { recursive: false, mode: 0o700 });
+  const extraction = { value: 'preflight' };
+  let target, targetCreated = false;
   try {
-    if (spec.zip) await extractZip(filePath, target, spec);
+    const spec = platformArchive(platform, assetName, tag);
+    if (typeof filePath !== 'string' || !filePath || typeof directory !== 'string' || !directory ||
+        typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256)) {
+      throw new Error('Invalid verified update extraction request.');
+    }
+    const parentStat = await lstat(directory);
+    if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) throw new Error('Choose a real destination folder for the update.');
+    const parent = await realpath(directory);
+    target = path.join(parent, 'TheUnfinishedShapes-' + releaseVersion(tag) + (platform === 'darwin' ? '.app' : ''));
+    try { await lstat(target); throw new Error('The update destination already exists. Choose another folder.'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    extraction.value = 'digest';
+    await verifyDownloadedFile({ filePath, sha256 });
+    extraction.value = 'preflight';
+    await mkdir(target, { recursive: false, mode: 0o700 });
+    targetCreated = true;
+    if (spec.zip) await extractZip(filePath, target, spec, extraction);
     else {
       let count = 0, extractedBytes = 0;
       const paths = new Set();
+      extraction.value = 'entry';
       await extractTar({
         file: filePath, cwd: target, strip: 1, strict: true, preservePaths: false, preserveOwner: false,
         filter: (entryPath, entry) => {
+          extraction.value = 'entry';
           count++;
           if (count > maxArchiveEntries || !Number.isSafeInteger(entry.size) || entry.size < 0 ||
               (extractedBytes += entry.size) > maxExtractedBytes) throw new Error('Update archive exceeds extraction limits.');
@@ -587,17 +613,29 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
           paths.add(relative);
           const output = path.resolve(target, ...relative.split('/'));
           if (!isWithin(target, output)) throw new Error('Update archive path escapes its destination.');
-          if (entry.type === 'SymbolicLink') safeArchiveLinkTarget(entry.linkpath, path.dirname(output), target);
-          if (entry.type === 'Link') safeArchiveLinkTarget(entry.linkpath, target, target);
+          if (entry.type === 'SymbolicLink') {
+            extraction.value = 'symlink';
+            safeArchiveLinkTarget(entry.linkpath, path.dirname(output), target);
+          }
+          if (entry.type === 'Link') {
+            extraction.value = 'symlink';
+            safeArchiveLinkTarget(entry.linkpath, target, target);
+          }
+          extraction.value = 'write';
           return true;
         },
       });
     }
+    extraction.value = 'executable';
     const executablePath = path.join(target, ...spec.executable.split('/'));
     await access(executablePath, platform === 'win32' ? constants.F_OK : constants.X_OK);
     return { target, executablePath };
   } catch (error) {
-    await rm(target, { recursive: true, force: true }).catch(() => {});
+    if (error && typeof error === 'object') {
+      try { error.extractStage = extraction.value; } catch {}
+    }
+    if (targetCreated) await rm(target, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
 }
+

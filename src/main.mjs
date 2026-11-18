@@ -198,10 +198,11 @@ app.whenReady().then(async()=>{
     const choice = await dialog.showOpenDialog(win, { title: 'Choose a folder for the verified TUS update', properties: ['openDirectory'] });
     if (choice.canceled || !choice.filePaths[0]) return { canceled: true };
     const diagnosticEnabled = process.argv.includes('--tus-smoke-provenance-diagnostic');
-    let classifyExtractionFailure;
+    let classifyExtractionFailure, classifyExtractionStage;
     try {
       const updater = await import('./update-package.mjs');
       classifyExtractionFailure = updater.safeArchiveExtractionFailureCode;
+      classifyExtractionStage = updater.safeArchiveExtractionStage;
       extractedUpdate = await updater.extractVerifiedArchive({
         filePath: downloadedUpdate.filePath, directory: choice.filePaths[0], tag: downloadedUpdate.release.tag_name,
         assetName: downloadedUpdate.assetName, sha256: downloadedUpdate.sha256,
@@ -210,6 +211,7 @@ app.whenReady().then(async()=>{
       if (diagnosticEnabled) win?.webContents.send('updates:progress', {
         state: 'extract-failed',
         failureCode: typeof classifyExtractionFailure === 'function' ? classifyExtractionFailure(error) : 'OTHER',
+        extractStage: typeof classifyExtractionStage === 'function' ? classifyExtractionStage(error) : 'unknown',
       });
       throw error;
     }
