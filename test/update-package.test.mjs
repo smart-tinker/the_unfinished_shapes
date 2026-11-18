@@ -559,6 +559,12 @@ test('classifies verifier setup failures into safe internal stages', () => {
   const verifierError = captureSetupError(() => new Verifier());
   const policyError = captureSetupError(createVerificationPolicy);
   const unknownError = captureSetupError(unclassifiedSetup);
+  function messageOnlySetup() { throw new Error('toTrustMaterial'); }
+  const messageOnlyError = captureSetupError(messageOnlySetup);
+  const pathOnlyError = captureSetupError(unclassifiedSetup);
+  pathOnlyError.stack = pathOnlyError.stack.replaceAll('update-package.test.mjs', 'toTrustMaterial.test.mjs');
+  assert.equal(safeVerifierSetupStage(messageOnlyError), 'unknown');
+  assert.equal(safeVerifierSetupStage(pathOnlyError), 'unknown');
   const result = [
     safeVerifierSetupStage(trustMaterialError),
     safeVerifierSetupStage(verifierError),
