@@ -124,6 +124,8 @@ test('TUS extraction boundary snapshot preserves only allowlisted states and fil
       failureCode: 'TAR_ENTRY_ERROR',
       extractStage: 'write',
       extractOperation: 'asar-open-invalid-package',
+      extractModuleImport: 'fulfilled',
+      extractCall: 'starting',
       visibilityState: 'visible',
       fileFlags: {
         targetExists: true, appAsarExists: false, appAsarFile: false,
@@ -140,6 +142,8 @@ test('TUS extraction boundary snapshot preserves only allowlisted states and fil
       extractOperation: 'C:/private/app.asar',
       visibilityState: 'C:/private/path',
       fileFlags: { targetExists: 1, appAsarExists: 'true', appAsarFile: true, executableExists: false, stagedAsarExists: null },
+      extractModuleImport: 'C:/private/path',
+      extractCall: 'C:/private/path',
       privateDetails: 'C:/private/path and raw parser text',
     },
     {
@@ -167,6 +171,8 @@ test('TUS extraction boundary snapshot preserves only allowlisted states and fil
   assert.equal(pending.failureCode, 'TAR_ENTRY_ERROR');
   assert.equal(pending.extractStage, 'write');
   assert.equal(pending.extractOperation, 'asar-open-invalid-package');
+  assert.equal(pending.extractModuleImport, 'fulfilled');
+  assert.equal(pending.extractCall, 'starting');
   assert.equal(pending.visibilityState, 'visible');
   assert.deepEqual(pending.fileFlags, {
     targetExists: true, appAsarExists: false, appAsarFile: false,
@@ -178,6 +184,8 @@ test('TUS extraction boundary snapshot preserves only allowlisted states and fil
   assert.equal(unsafe.failureCode, 'OTHER');
   assert.equal(unsafe.extractStage, 'unknown');
   assert.equal(unsafe.extractOperation, 'unknown');
+  assert.equal(unsafe.extractModuleImport, 'unknown');
+  assert.equal(unsafe.extractCall, 'unknown');
   assert.equal(unsafe.visibilityState, 'unknown');
   assert.deepEqual(unsafe.fileFlags, {
     targetExists: false, appAsarExists: false, appAsarFile: true,
