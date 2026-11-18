@@ -577,3 +577,17 @@ test('classifies verifier setup failures into safe internal stages', () => {
   ]);
   assert.doesNotMatch(JSON.stringify(result), /private diagnostic details|unclassifiedSetup/);
 });
+test('classifies the inner TUF setup operation from a named stack frame', async () => {
+  const { safeVerifierSetupStep } = await import('../src/update-package.mjs');
+  assert.equal(typeof safeVerifierSetupStep, 'function');
+
+  function captureSetupError(run) {
+    try { run(); } catch (error) { return error; }
+    throw new Error('Expected the TUF setup fixture to fail.');
+  }
+  function getTargetInfo() { throw new Error('private diagnostic details'); }
+  function getTrustedRoot() { return getTargetInfo(); }
+
+  const error = captureSetupError(getTrustedRoot);
+  assert.equal(safeVerifierSetupStep(error), 'tuf-metadata-refresh');
+});
