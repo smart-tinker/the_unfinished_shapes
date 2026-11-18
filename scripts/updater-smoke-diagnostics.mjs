@@ -1,4 +1,4 @@
-import { safeArchiveExtractionFailureCode, safeArchiveExtractionOperation, safeArchiveExtractionStage, safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType } from '../src/update-package.mjs';
+import { safeArchiveExtractionOperation, safeArchiveExtractionStage, safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType } from '../src/update-package.mjs';
 import { safeUpdaterModuleName } from '../src/update-release.mjs';
 
 const safeVerifierSetupStages = new Set([
@@ -22,6 +22,15 @@ const safeExtractRendererStatuses = new Map([
 ]);
 const safeExtractInvokeStatuses = new Set(['not-started', 'pending', 'fulfilled', 'rejected']);
 const safeVisibilityStates = new Set(['visible', 'hidden', 'prerender', 'unloaded']);
+const safeArchiveFailureCodes = new Set([
+  'ARCHIVE_PATH', 'ARCHIVE_LINK', 'ARCHIVE_FILE_TYPE', 'ARCHIVE_SIZE', 'ARCHIVE_DUPLICATE_PATH',
+  'INVALID_REQUEST', 'INVALID_DESTINATION', 'DESTINATION_EXISTS', 'UNSUPPORTED_PACKAGE',
+  'INVALID_PACKAGE', 'DIGEST_MISMATCH', 'FILESYSTEM_PERMISSION', 'FILESYSTEM_SPACE',
+  'FILESYSTEM_READ_ONLY', 'FILESYSTEM_NOT_FOUND', 'FILESYSTEM_CONFLICT',
+  'FILESYSTEM_RESOURCE_LIMIT', 'FILESYSTEM_IO', 'TAR_ABORT', 'TAR_BAD_ARCHIVE',
+  'TAR_ENTRY_ERROR', 'TAR_ENTRY_INFO', 'TAR_ENTRY_INVALID', 'TAR_ENTRY_UNSUPPORTED', 'OTHER',
+]);
+const safeArchiveFailureCode = value => safeArchiveFailureCodes.has(value) ? value : 'OTHER';
 
 export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
   const safeRootTarget = value => ({
@@ -51,14 +60,14 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
       moduleFailureName: safeUpdaterModuleName(item?.moduleFailureName),
     } : {}),
     ...(item?.stage === 'extract-failed' && item?.status === 'rejected' ? {
-      failureCode: typeof item.failureCode === 'string' ? safeArchiveExtractionFailureCode({ code: item.failureCode }) : null,
+      failureCode: typeof item.failureCode === 'string' ? safeArchiveFailureCode(item.failureCode) : null,
       extractStage: safeArchiveExtractionStage(item.extractStage),
       extractOperation: safeArchiveExtractionOperation(item.extractOperation),
     } : {}),
     ...(item?.stage === 'extract-archive' ? {
       rendererStatus: safeExtractRendererStatuses.get(item.rendererStatusText) ?? (typeof item.rendererStatusText === 'string' && item.rendererStatusText ? 'other' : 'unknown'),
       rendererInvokeStatus: safeExtractInvokeStatuses.has(item.rendererInvokeStatus) ? item.rendererInvokeStatus : 'unknown',
-      failureCode: typeof item.failureCode === 'string' ? safeArchiveExtractionFailureCode({ code: item.failureCode }) : null,
+      failureCode: typeof item.failureCode === 'string' ? safeArchiveFailureCode(item.failureCode) : null,
       extractStage: typeof item.extractStage === 'string' ? safeArchiveExtractionStage(item.extractStage) : null,
       extractOperation: typeof item.extractOperation === 'string' ? safeArchiveExtractionOperation(item.extractOperation) : null,
       visibilityState: safeVisibilityStates.has(item.visibilityState) ? item.visibilityState : 'unknown',

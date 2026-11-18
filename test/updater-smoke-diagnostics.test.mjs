@@ -91,19 +91,23 @@ test('TUS extraction diagnostic carries only allowlisted stage and operation', (
   const assetName = 'candidate.zip';
   const tag = 'v0.1.0-rc11';
   const manifestFile = { sha256: 'a'.repeat(64) };
-  const [entry, privateStage] = safeMainDiagnostics([
-    { stage: 'extract-failed', status: 'rejected', extractStage: 'entry', extractOperation: 'asar-open-invalid-package', privateDetails: 'raw parser message' },
-    { stage: 'extract-failed', status: 'rejected', extractStage: 'C:/private/path', extractOperation: 'C:/private/app.asar', privateDetails: 'raw parser message' },
+  const [entry, privateStage, filesystemFailure] = safeMainDiagnostics([
+    { stage: 'extract-failed', status: 'rejected', failureCode: 'TAR_ENTRY_ERROR', extractStage: 'entry', extractOperation: 'asar-open-invalid-package', privateDetails: 'raw parser message' },
+    { stage: 'extract-failed', status: 'rejected', failureCode: 'C:/private/path', extractStage: 'C:/private/path', extractOperation: 'C:/private/app.asar', privateDetails: 'raw parser message' },
+    { stage: 'extract-failed', status: 'rejected', failureCode: 'FILESYSTEM_NOT_FOUND', extractStage: 'write' },
   ], manifestFile, assetName, tag);
 
   assert.equal(entry.stage, 'extract-failed');
   assert.equal(entry.status, 'rejected');
   assert.equal(entry.extractStage, 'entry');
   assert.equal(entry.extractOperation, 'asar-open-invalid-package');
+  assert.equal(entry.failureCode, 'TAR_ENTRY_ERROR');
   assert.equal(privateStage.stage, 'extract-failed');
   assert.equal(privateStage.extractStage, 'unknown');
   assert.equal(privateStage.extractOperation, 'unknown');
-  assert.doesNotMatch(JSON.stringify([entry, privateStage]), /raw parser message|C:\/private\/path/);
+  assert.equal(privateStage.failureCode, 'OTHER');
+  assert.equal(filesystemFailure.failureCode, 'FILESYSTEM_NOT_FOUND');
+  assert.doesNotMatch(JSON.stringify([entry, privateStage, filesystemFailure]), /raw parser message|C:\/private\/path/);
 });
 
 
