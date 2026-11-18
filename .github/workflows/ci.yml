@@ -121,7 +121,67 @@ jobs:
       - run: npm run check
       - run: npm version 0.1.0-rc.1 --no-git-tag-version --ignore-scripts
       - id: package
-        run: npm run package:win
+        shell: pwsh
+        run: |
+          $sourceTarRoot = Join-Path $PWD 'node_modules/tar'
+          $sourceTarManifestPath = Join-Path $sourceTarRoot 'package.json'
+          if (-not (Test-Path -LiteralPath $sourceTarManifestPath -PathType Leaf)) {
+            throw 'Installed tar package manifest is missing before packaging'
+          }
+          $sourceTarManifest = Get-Content -Raw -LiteralPath $sourceTarManifestPath | ConvertFrom-Json
+          $sourceTarEntry = $sourceTarManifest.exports.PSObject.Properties['.'].Value.import.default
+          if (($sourceTarEntry -isnot [string]) -or (-not $sourceTarEntry.StartsWith('./'))) {
+            throw 'Installed tar package has no declared ESM root entry'
+          }
+          $sourceTarEntryPath = Join-Path $sourceTarRoot $sourceTarEntry.Substring(2)
+          if (-not (Test-Path -LiteralPath $sourceTarEntryPath -PathType Leaf)) {
+            throw 'Installed tar ESM entry is missing before packaging'
+          }
+          Write-Output 'TUS_TAR_PACKAGE stage=before packageJson=present esmEntry=present'
+
+          $packagerShim = Join-Path $PWD 'node_modules/.bin/electron-packager.cmd'
+          $packagerRealShim = Join-Path $PWD 'node_modules/.bin/electron-packager.tus-real.cmd'
+          if (-not (Test-Path -LiteralPath $packagerShim -PathType Leaf)) {
+            throw 'Windows packager launcher is missing'
+          }
+          Move-Item -LiteralPath $packagerShim -Destination $packagerRealShim
+          $packageExit = 1
+          try {
+            $shimContent = @(
+              '@echo off'
+              'echo PACKAGER_ARGV %*'
+              'call "%~dp0electron-packager.tus-real.cmd" %*'
+              'exit /b %ERRORLEVEL%'
+            ) -join [Environment]::NewLine
+            Set-Content -LiteralPath $packagerShim -Value $shimContent -Encoding ascii
+            npm run package:win
+            $packageExit = $LASTEXITCODE
+          } finally {
+            Remove-Item -LiteralPath $packagerShim -Force -ErrorAction SilentlyContinue
+            Move-Item -LiteralPath $packagerRealShim -Destination $packagerShim
+          }
+          if ($packageExit -ne 0) { exit $packageExit }
+
+          $bundleTarRoot = Join-Path $PWD 'dist/TheUnfinishedShapes-win32-x64/resources/app/node_modules/tar'
+          $bundleTarManifestPath = Join-Path $bundleTarRoot 'package.json'
+          $bundlePackageState = 'missing'
+          $bundleEntryState = 'missing'
+          if (Test-Path -LiteralPath $bundleTarManifestPath -PathType Leaf) {
+            $bundlePackageState = 'present'
+            try {
+              $bundleTarManifest = Get-Content -Raw -LiteralPath $bundleTarManifestPath | ConvertFrom-Json
+              $bundleTarEntry = $bundleTarManifest.exports.PSObject.Properties['.'].Value.import.default
+              if (($bundleTarEntry -is [string]) -and $bundleTarEntry.StartsWith('./')) {
+                $bundleTarEntryPath = Join-Path $bundleTarRoot $bundleTarEntry.Substring(2)
+                if (Test-Path -LiteralPath $bundleTarEntryPath -PathType Leaf) {
+                  $bundleEntryState = 'present'
+                }
+              }
+            } catch {
+              $bundleEntryState = 'unknown'
+            }
+          }
+          Write-Output "TUS_TAR_PACKAGE stage=after packageJson=$bundlePackageState esmEntry=$bundleEntryState"
       - id: installer
         run: npm run installer:win
       - name: Verify clean install, current-candidate lifecycle and retained data
