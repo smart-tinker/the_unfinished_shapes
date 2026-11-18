@@ -1,4 +1,4 @@
-import { safeArchiveExtractionOperation, safeArchiveExtractionStage, safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType } from '../src/update-package.mjs';
+import { safeArchiveExtractionFailureCode, safeArchiveExtractionOperation, safeArchiveExtractionStage, safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType } from '../src/update-package.mjs';
 import { safeUpdaterModuleName } from '../src/update-release.mjs';
 
 const safeVerifierSetupStages = new Set([
@@ -15,6 +15,13 @@ const safeVerifierSetupSteps = new Set([
 ]);
 
 const safeModuleFailureCodes = new Set(['MODULE_IMPORT_REJECTED', 'ERR_MODULE_NOT_FOUND', 'SyntaxError']);
+const safeExtractRendererStatuses = new Map([
+  ['Choose a destination folder…', 'pending'],
+  ['Verified archive extracted. You can now launch the new copy.', 'verified'],
+  ['Folder selection cancelled.', 'cancelled'],
+]);
+const safeExtractInvokeStatuses = new Set(['not-started', 'pending', 'fulfilled', 'rejected']);
+const safeVisibilityStates = new Set(['visible', 'hidden', 'prerender', 'unloaded']);
 
 export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
   const safeRootTarget = value => ({
@@ -24,11 +31,11 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
   return (Array.isArray(live) ? live : []).slice(0, 40).map(item => ({
     bundleIndex: Number.isInteger(item?.bundleIndex) && item.bundleIndex >= 0 && item.bundleIndex < 20 ? item.bundleIndex : null,
     bundleSha256: typeof item?.bundleSha256 === 'string' && /^[a-f0-9]{64}$/.test(item.bundleSha256) ? item.bundleSha256 : null,
-    stage: ['updater-module-import', 'download-verified-asset', 'renderer-invoke', 'extract-failed', 'main-catch-fallback', 'verify-start', 'verify-result', 'verifier-setup', 'verifier-verify', 'verifier-tampered-control'].includes(item?.stage) ? item.stage : 'unknown',
+    stage: ['updater-module-import', 'download-verified-asset', 'renderer-invoke', 'extract-archive', 'extract-failed', 'main-catch-fallback', 'verify-start', 'verify-result', 'verifier-setup', 'verifier-verify', 'verifier-tampered-control'].includes(item?.stage) ? item.stage : 'unknown',
     status: ['not-started', 'pending', 'fulfilled', 'starting', 'ready', 'synthetic-other', 'verified', 'rejected', 'tampered-rejected', 'tampered-accepted', 'tampered-unavailable'].includes(item?.status)
       ? item.status : item?.stage === 'verify-start' ? 'started' : 'unknown',
     assetMatches: item?.assetName === assetName && item?.assetSha256 === manifestFile.sha256 && item?.tag === tag,
-    ...(item?.status === 'rejected' && item?.stage !== 'updater-module-import' && item?.stage !== 'renderer-invoke' && item?.stage !== 'extract-failed' ? {
+    ...(item?.status === 'rejected' && item?.stage !== 'updater-module-import' && item?.stage !== 'renderer-invoke' && item?.stage !== 'extract-failed' && item?.stage !== 'extract-archive' ? {
       failureCode: safeUpdaterFailureCode(item.failureCode),
       ...(item?.stage === 'verifier-setup' ? {
         verifierSetupStage: safeVerifierSetupStages.has(item.verifierSetupStage) ? item.verifierSetupStage : 'unknown',
@@ -44,8 +51,24 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
       moduleFailureName: safeUpdaterModuleName(item?.moduleFailureName),
     } : {}),
     ...(item?.stage === 'extract-failed' && item?.status === 'rejected' ? {
+      failureCode: typeof item.failureCode === 'string' ? safeArchiveExtractionFailureCode({ code: item.failureCode }) : null,
       extractStage: safeArchiveExtractionStage(item.extractStage),
       extractOperation: safeArchiveExtractionOperation(item.extractOperation),
+    } : {}),
+    ...(item?.stage === 'extract-archive' ? {
+      rendererStatus: safeExtractRendererStatuses.get(item.rendererStatusText) ?? (typeof item.rendererStatusText === 'string' && item.rendererStatusText ? 'other' : 'unknown'),
+      rendererInvokeStatus: safeExtractInvokeStatuses.has(item.rendererInvokeStatus) ? item.rendererInvokeStatus : 'unknown',
+      failureCode: typeof item.failureCode === 'string' ? safeArchiveExtractionFailureCode({ code: item.failureCode }) : null,
+      extractStage: typeof item.extractStage === 'string' ? safeArchiveExtractionStage(item.extractStage) : null,
+      extractOperation: typeof item.extractOperation === 'string' ? safeArchiveExtractionOperation(item.extractOperation) : null,
+      visibilityState: safeVisibilityStates.has(item.visibilityState) ? item.visibilityState : 'unknown',
+      fileFlags: {
+        targetExists: item.fileFlags?.targetExists === true,
+        appAsarExists: item.fileFlags?.appAsarExists === true,
+        appAsarFile: item.fileFlags?.appAsarFile === true,
+        executableExists: item.fileFlags?.executableExists === true,
+        stagedAsarExists: item.fileFlags?.stagedAsarExists === true,
+      },
     } : {}),
     trustedRootTarget: safeRootTarget(item?.trustedRootTarget),
   }));

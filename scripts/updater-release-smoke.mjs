@@ -2,7 +2,7 @@ import { _electron as electron } from 'playwright-core';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -166,6 +166,79 @@ async function updaterRuntimeBoundary(current, manifestFile, assetName, tag) {
     { stage: 'download-verified-asset', status: main?.downloadVerifiedAsset },
     { stage: 'renderer-invoke', status: rendererInvoke },
   ], manifestFile, assetName, tag);
+}
+
+
+async function extractFileFlags(extractDir, version) {
+  const empty = { targetExists: false, appAsarExists: false, appAsarFile: false, executableExists: false, stagedAsarExists: false };
+  let target;
+  try {
+    target = path.join(await realpath(extractDir), 'TheUnfinishedShapes-' + version + (process.platform === 'darwin' ? '.app' : ''));
+  } catch {
+    return empty;
+  }
+  const resources = path.join(target, ...(process.platform === 'darwin' ? ['Contents', 'Resources'] : ['resources']));
+  const appAsar = path.join(resources, 'app.asar');
+  const executable = path.join(target, ...(process.platform === 'darwin'
+    ? ['Contents', 'MacOS', 'TheUnfinishedShapes']
+    : [process.platform === 'win32' ? 'TheUnfinishedShapes.exe' : 'TheUnfinishedShapes']));
+  const statOrNull = file => lstat(file).catch(() => null);
+  const [targetStat, appAsarStat, executableStat, resourceEntries] = await Promise.all([
+    statOrNull(target),
+    statOrNull(appAsar),
+    statOrNull(executable),
+    readdir(resources).catch(() => []),
+  ]);
+  return {
+    targetExists: Boolean(targetStat),
+    appAsarExists: Boolean(appAsarStat),
+    appAsarFile: appAsarStat?.isFile() === true,
+    executableExists: Boolean(executableStat),
+    stagedAsarExists: resourceEntries.some(name => name.startsWith('.tus-app-asar-') && name.endsWith('.tmp')),
+  };
+}
+
+async function extractRuntimeBoundary(current, extractDir, manifestFile, assetName, tag) {
+  const emptyFileFlags = { targetExists: false, appAsarExists: false, appAsarFile: false, executableExists: false, stagedAsarExists: false };
+  const [mainStatus, renderer, fileFlags] = await Promise.all([
+    withTimeout(
+      current.instance.evaluate(() => globalThis.__tusUpdaterSmokeBoundary?.extractArchive || 'not-started'),
+      'Updater extraction main snapshot', 5000,
+    ).catch(() => 'unknown'),
+    withTimeout(current.page.evaluate(() => {
+      const status = document.querySelector('#updates-status');
+      return {
+        statusText: status?.textContent ?? '',
+        failureCode: status?.dataset.updateExtractFailureCode || null,
+        extractStage: status?.dataset.updateExtractStage || null,
+        extractOperation: status?.dataset.updateExtractOperation || null,
+        invokeStatus: status?.dataset.updateExtractInvokeStatus || 'not-started',
+        visibilityState: document.visibilityState,
+      };
+    }), 'Updater extraction renderer snapshot', 5000).catch(() => null),
+    withTimeout(extractFileFlags(extractDir, manifestFile.version), 'Updater extraction file snapshot', 5000).catch(() => emptyFileFlags),
+  ]);
+  const [safe] = safeMainDiagnostics([{
+    stage: 'extract-archive',
+    status: mainStatus,
+    rendererStatusText: renderer?.statusText,
+    rendererInvokeStatus: renderer?.invokeStatus,
+    failureCode: renderer?.failureCode,
+    extractStage: renderer?.extractStage,
+    extractOperation: renderer?.extractOperation,
+    visibilityState: renderer?.visibilityState,
+    fileFlags,
+  }], manifestFile, assetName, tag);
+  return {
+    mainStatus: safe.status,
+    rendererStatus: safe.rendererStatus,
+    rendererInvokeStatus: safe.rendererInvokeStatus,
+    failureCode: safe.failureCode,
+    extractStage: safe.extractStage,
+    extractOperation: safe.extractOperation,
+    visibilityState: safe.visibilityState,
+    fileFlags: safe.fileFlags,
+  };
 }
 
 function sigstoreTrustedRootTargetPath() {
@@ -492,42 +565,37 @@ async function updateOnce(distribution) {
       reason: folderChooserInvoked ? 'no-terminal-renderer-status' : 'folder-chooser-not-invoked',
     };
     if (folderChooserInvoked) {
+      let timedOut = false;
+      let observationFailed = false;
       try {
-        await current.page.waitForFunction(({ pending, prior }) => {
-          const status = document.querySelector('#updates-status')?.textContent;
-          return Boolean(status && status !== pending && status !== prior);
-        }, { pending: pendingStatus, prior: verified }, { timeout: 120000 });
-        const status = await current.page.locator('#updates-status').innerText();
-        if (status === successStatus) {
-          extractDiagnostic.outcome = 'verified';
-          extractDiagnostic.reason = 'none';
-        } else if (status === 'Folder selection cancelled.') {
-          extractDiagnostic.outcome = 'cancelled';
-          extractDiagnostic.reason = 'folder-selection-cancelled';
-        } else {
-          extractDiagnostic.outcome = 'rejected';
-          extractDiagnostic.reason = 'renderer-reported-error';
-          extractDiagnostic.failureCode = await current.page.evaluate(
-            () => document.querySelector('#updates-status')?.dataset.updateExtractFailureCode || 'OTHER',
-          );
-          const [safeExtraction] = safeMainDiagnostics([{
-            stage: 'extract-failed',
-            status: 'rejected',
-            extractStage: await current.page.evaluate(
-              () => document.querySelector('#updates-status')?.dataset.updateExtractStage || 'unknown',
-            ),
-            extractOperation: await current.page.evaluate(
-              () => document.querySelector('#updates-status')?.dataset.updateExtractOperation || 'unknown',
-            ),
-          }], manifestFile, assetName, tag);
-          extractDiagnostic.extractStage = safeExtraction.extractStage;
-          extractDiagnostic.extractOperation = safeExtraction.extractOperation;
-        }
+        await current.page.waitForFunction(({ pending, prior, success }) => {
+          const status = document.querySelector('#updates-status');
+          const text = status?.textContent || '';
+          const invoke = status?.dataset.updateExtractInvokeStatus || 'not-started';
+          if (text === success) return invoke === 'fulfilled' || invoke === 'rejected';
+          return Boolean(text && text !== pending && text !== prior);
+        }, { pending: pendingStatus, prior: verified, success: successStatus }, { timeout: 120000 });
       } catch (error) {
-        if (error?.name !== 'TimeoutError') {
-          extractDiagnostic.outcome = 'unobserved';
-          extractDiagnostic.reason = 'status-observation-failed';
-        }
+        if (error?.name === 'TimeoutError') timedOut = true;
+        else observationFailed = true;
+      }
+      const runtime = await extractRuntimeBoundary(current, extractDir, manifestFile, assetName, tag);
+      extractDiagnostic.runtime = runtime;
+      if (timedOut) {
+        extractDiagnostic.outcome = 'pending';
+        extractDiagnostic.reason = 'renderer-observation-timeout';
+      } else if (observationFailed) {
+        extractDiagnostic.outcome = 'unobserved';
+        extractDiagnostic.reason = 'status-observation-failed';
+      } else if (runtime.rendererStatus === 'verified' && runtime.mainStatus === 'fulfilled' && runtime.rendererInvokeStatus === 'fulfilled') {
+        extractDiagnostic.outcome = 'verified';
+        extractDiagnostic.reason = 'none';
+      } else if (runtime.rendererStatus === 'cancelled' && runtime.rendererInvokeStatus === 'fulfilled') {
+        extractDiagnostic.outcome = 'cancelled';
+        extractDiagnostic.reason = 'folder-selection-cancelled';
+      } else {
+        extractDiagnostic.outcome = 'rejected';
+        extractDiagnostic.reason = 'renderer-reported-error';
       }
     }
     console.log('TUS_UPDATE_EXTRACT_DIAGNOSTIC ' + JSON.stringify(extractDiagnostic));

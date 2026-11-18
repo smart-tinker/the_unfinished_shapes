@@ -1286,15 +1286,21 @@ $('updates-cancel').addEventListener('click', async () => {
   catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
 });
 $('updates-extract').addEventListener('click', async () => {
-  delete $('updates-status').dataset.updateExtractFailureCode;
-  delete $('updates-status').dataset.updateExtractStage;
-  delete $('updates-status').dataset.updateExtractOperation;
+  const status = $('updates-status');
+  delete status.dataset.updateExtractFailureCode;
+  delete status.dataset.updateExtractStage;
+  delete status.dataset.updateExtractOperation;
+  status.dataset.updateExtractInvokeStatus = 'pending';
   updateBusy = true; updateButtons(); updateStatus('Choose a destination folder…');
   try {
     const result = await bridge.extractUpdate();
+    status.dataset.updateExtractInvokeStatus = 'fulfilled';
     if (result.canceled) updateStatus('Folder selection cancelled.');
     else { updateExtracted = true; updateStatus('Verified archive extracted. You can now launch the new copy.'); }
-  } catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
+  } catch (error) {
+    status.dataset.updateExtractInvokeStatus = 'rejected';
+    updateStatus(String(error?.message || error).slice(0, 300));
+  }
   finally { updateBusy = false; updateButtons(); }
 });
 $('updates-launch').addEventListener('click', async () => {

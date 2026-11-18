@@ -18,7 +18,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld, gameToolSession, fullscreenRestoreBounds;
 let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, extractedUpdate = null, updateDownloadController = null;
 const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic')
-  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started' }
+  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started' }
   : null;
 if (updaterSmokeBoundary) globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -203,6 +203,7 @@ app.whenReady().then(async()=>{
     const choice = await dialog.showOpenDialog(win, { title: 'Choose a folder for the verified TUS update', properties: ['openDirectory'] });
     if (choice.canceled || !choice.filePaths[0]) return { canceled: true };
     const diagnosticEnabled = process.argv.includes('--tus-smoke-provenance-diagnostic');
+    if (updaterSmokeBoundary) updaterSmokeBoundary.extractArchive = 'starting';
     let classifyExtractionFailure, classifyExtractionStage, classifyExtractionOperation;
     try {
       const updater = await import('./update-package.mjs');
@@ -213,7 +214,9 @@ app.whenReady().then(async()=>{
         filePath: downloadedUpdate.filePath, directory: choice.filePaths[0], tag: downloadedUpdate.release.tag_name,
         assetName: downloadedUpdate.assetName, sha256: downloadedUpdate.sha256,
       });
+      if (updaterSmokeBoundary) updaterSmokeBoundary.extractArchive = 'fulfilled';
     } catch (error) {
+      if (updaterSmokeBoundary) updaterSmokeBoundary.extractArchive = 'rejected';
       if (diagnosticEnabled) win?.webContents.send('updates:progress', {
         state: 'extract-failed',
         failureCode: typeof classifyExtractionFailure === 'function' ? classifyExtractionFailure(error) : 'OTHER',
