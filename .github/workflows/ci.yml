@@ -152,25 +152,27 @@ jobs:
 
           const archive = path.resolve('dist/TheUnfinishedShapes-win32-x64/resources/app.asar');
           const container = existsSync(archive) ? 'present' : 'missing';
+          const packageJsonPath = path.join('node_modules', 'tar', 'package.json');
           let packageJson = 'unknown';
           let esmEntry = 'unknown';
           if (container === 'present') {
             try {
-              const manifest = JSON.parse(extractFile(archive, 'node_modules/tar/package.json').toString('utf8'));
+              const manifest = JSON.parse(extractFile(archive, packageJsonPath).toString('utf8'));
               packageJson = 'present';
               const entry = manifest?.exports?.['.']?.import?.default;
               if (typeof entry === 'string' && entry.startsWith('./')) {
+                const entryPath = path.join('node_modules', 'tar', entry.slice(2));
                 try {
-                  extractFile(archive, `node_modules/tar/${entry.slice(2)}`);
+                  extractFile(archive, entryPath);
                   esmEntry = 'present';
-                } catch {
-                  esmEntry = 'missing';
+                } catch (error) {
+                  esmEntry = error?.message === '"' + entryPath + '" was not found in this archive' ? 'missing' : 'unknown';
                 }
               } else {
                 esmEntry = 'missing';
               }
-            } catch {
-              packageJson = 'missing';
+            } catch (error) {
+              packageJson = error?.message === '"' + packageJsonPath + '" was not found in this archive' ? 'missing' : 'unknown';
             }
           } else {
             packageJson = 'missing';

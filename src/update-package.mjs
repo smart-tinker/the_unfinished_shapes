@@ -173,9 +173,13 @@ export function safeArchiveExtractionStage(value) {
 }
 
 export function classifyAppAsarOpenFailure(error, expectedPath, zipOutputPath) {
-  if (error?.message !== 'Invalid package' || typeof expectedPath !== 'string') return 'unknown';
+  const prefix = 'Invalid package ';
+  if (typeof error?.message !== 'string' || !error.message.startsWith(prefix) || typeof expectedPath !== 'string') return 'unknown';
+  const messagePath = error.message.slice(prefix.length);
   const failedPath = error?.entry && typeof error.entry === 'object' ? error.entry.absolute : zipOutputPath;
-  return typeof failedPath === 'string' && path.resolve(failedPath) === path.resolve(expectedPath)
+  return typeof failedPath === 'string' &&
+    path.resolve(messagePath) === path.resolve(expectedPath) &&
+    path.resolve(failedPath) === path.resolve(expectedPath)
     ? 'asar-open-invalid-package' : 'unknown';
 }
 
