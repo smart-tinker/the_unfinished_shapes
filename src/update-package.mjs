@@ -158,6 +158,11 @@ const archiveFileSystemCodes = new Map([
   ['EIO', 'FILESYSTEM_IO'],
 ]);
 
+const archiveTarErrorCodes = new Set([
+  'TAR_ABORT', 'TAR_BAD_ARCHIVE', 'TAR_ENTRY_ERROR', 'TAR_ENTRY_INFO',
+  'TAR_ENTRY_INVALID', 'TAR_ENTRY_UNSUPPORTED',
+]);
+
 const archiveExtractionStages = new Set([
   'preflight', 'digest', 'zip-open', 'entry', 'symlink', 'write', 'executable',
 ]);
@@ -169,7 +174,8 @@ export function safeArchiveExtractionStage(value) {
 
 export function safeArchiveExtractionFailureCode(error) {
   return archiveFileSystemCodes.get(error?.code) ??
-    archiveExtractionFailureMessages.get(error?.message) ?? 'OTHER';
+    archiveExtractionFailureMessages.get(error?.message) ??
+    (archiveTarErrorCodes.has(error?.tarCode) ? error.tarCode : 'OTHER');
 }
 
 function updaterFailure(message, failureCode, httpStatus) {
