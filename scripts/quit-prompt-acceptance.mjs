@@ -110,8 +110,11 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
       outcome = /^TUS_UIA: modified-body-rejected$/m.test(result) ? 'mismatch'
         : /^TUS_UIA: modified-body-button-returned$/m.test(result) ? 'unexpected-match' : 'unexpected-result';
     } catch (error) {
-      const timeout = String(error?.message || '').match(/prompt-reader-timeout-phase-([a-z0-9-]+)/);
-      outcome = timeout ? 'timeout-' + timeout[1] : /modified-body-button-returned/.test(String(error?.message || ''))
+      const safeOutcome = /exit-[a-z0-9_-]+|timeout-[a-z0-9-]+|(?:script-start|window-api-ready)-no-status|ui-(?:child-(?:starting|started|waiting|finished|killing|kill-waiting|exit-checking|output-draining|finally-exit-checking|finally-killing|finally-waiting|disposing)|payload-(?:preparing|ready|writing|written))|prompt-reader-timeout-[a-z0-9-]+|expected-foreground-prompt-unavailable|quit-dialog-not-found|automation-error-[a-z0-9]+-at-[a-z0-9-]+|modified-body-(?:button-returned|unverified|rejected)|expected-body-(?:mismatch|unavailable|timeout)|prompt-(?:foreground-window-unavailable|foreground-title-mismatch|expected-body-(?:mismatch|unavailable|timeout)|(?:invalid-window|title-mismatch|button-count-mismatch|expected-buttons-missing|requested-button-missing|expected-message-mismatch|expected-message-unavailable|matched))/gi;
+      const outcomeTokens = [...String(error?.message || '').matchAll(safeOutcome)];
+      const safeFailure = outcomeTokens.length ? outcomeTokens[outcomeTokens.length - 1][0].toLowerCase() : 'probe-failed';
+      const timeout = safeFailure.match(/^prompt-reader-timeout-phase-([a-z0-9-]+)$/);
+      outcome = timeout ? 'timeout-' + timeout[1] : safeFailure === 'modified-body-button-returned'
         ? 'unexpected-match' : 'unavailable';
     }
     apartmentOutcomes.set(apartment, outcome);
