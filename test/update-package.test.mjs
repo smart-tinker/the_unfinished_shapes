@@ -384,6 +384,7 @@ test('reports terminal updater failures with safe provenance and verifier codes'
   async function expectFailure({
     responseStatus = 200, responseBody, verifySignature = async () => ({}),
     failureCode, verifierCode = 'OTHER', verifierErrorType = 'OTHER', httpStatus = null, noRawError = false,
+    verifierCauseCode = null, verifierCauseErrorType = null,
   }) {
     const bytes = Buffer.from('unverified update package');
     const digest = createHash('sha256').update(bytes).digest('hex');
@@ -393,11 +394,13 @@ test('reports terminal updater failures with safe provenance and verifier codes'
     const body = responseBody || { attestations: [{ bundle: bundle(provenance) }] };
     const directory = await mkdtemp(path.join(os.tmpdir(), 'tus-update-verifier-failure-'));
     const progress = [];
+    const diagnostics = [];
     try {
       let caught;
       await assert.rejects(downloadVerifiedAsset({
         asset: downloadAsset, tag, directory,
         onProgress: event => progress.push(event),
+        onProvenanceDiagnostic: event => diagnostics.push(event),
         fetcher: async url => {
           if (url.startsWith('https://github.com/')) {
             return new Response(bytes, { status: 200, headers: { 'content-length': String(bytes.length) } });
@@ -412,7 +415,15 @@ test('reports terminal updater failures with safe provenance and verifier codes'
       assert.deepEqual(progress.at(-1), {
         state: 'failed', phase: 'provenance', failureCode, verifierCode, verifierErrorType, httpStatus,
       });
-      if (noRawError) assert.doesNotMatch(caught.message, /private verifier detail/);
+      if (verifierCauseCode !== null || verifierCauseErrorType !== null) {
+        const diagnostic = diagnostics.findLast(event => event.stage === 'verify-result' && event.status === 'rejected');
+        assert.equal(diagnostic?.verifierCauseCode, verifierCauseCode);
+        assert.equal(diagnostic?.verifierCauseErrorType, verifierCauseErrorType);
+      }
+      if (noRawError) {
+        assert.doesNotMatch(caught.message, /private verifier detail|private cause detail/);
+        assert.doesNotMatch(JSON.stringify(diagnostics), /PrivateVerifierError|TUFError|private verifier detail|private cause detail/);
+      }
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -463,6 +474,16 @@ test('reports terminal updater failures with safe provenance and verifier codes'
       failureCode: 'SIGNATURE_REJECTED', verifierErrorType: 'OTHER', noRawError: true,
     });
     assert.equal(safeVerifierErrorType('PrivateVerifierError'), 'OTHER');
+  });
+  await t.test('reports a safe verifier cause without exposing its class or message', () => {
+    class PrivateVerifierError extends Error {}
+    class TUFError extends Error {}
+    const cause = Object.assign(new TUFError('private cause detail'), { code: 'TUF_REFRESH_METADATA_ERROR' });
+    return expectFailure({
+      verifySignature: async () => { throw new PrivateVerifierError('private verifier detail', { cause }); },
+      failureCode: 'SIGNATURE_REJECTED', verifierCode: 'OTHER', verifierErrorType: 'OTHER',
+      verifierCauseCode: 'TUF_REFRESH_METADATA_ERROR', verifierCauseErrorType: 'TUF_ERROR', noRawError: true,
+    });
   });
   await t.test('maps unknown verifier codes to OTHER', () => expectFailure({
     verifySignature: async () => { throw Object.assign(new Error('private verifier detail'), { code: 'PRIVATE_CODE' }); },
