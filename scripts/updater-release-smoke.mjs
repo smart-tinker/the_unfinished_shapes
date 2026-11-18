@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import { compareReleaseVersions } from '../src/update-release.mjs';
-import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType } from '../src/update-package.mjs';
+import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, verifyReleaseAttestation } from '../src/update-package.mjs';
 import { closeSmokeApp, observeGraphics, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 
@@ -143,6 +143,134 @@ async function fileDigest(filePath) {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(filePath)) hash.update(chunk);
   return hash.digest('hex');
+}
+
+
+function sigstoreTrustedRootTargetPath() {
+  const home = os.homedir();
+  const appData = process.platform === 'darwin'
+    ? path.join(home, 'Library', 'Application Support', 'sigstore-js')
+    : process.platform === 'win32'
+      ? path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'sigstore-js', 'Data')
+      : path.join(process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'sigstore-js');
+  return path.join(appData, encodeURIComponent('tuf-repo-cdn.sigstore.dev'), 'targets', 'trusted_root.json');
+}
+
+async function sigstoreTrustedRootInfo(rootPath) {
+  try { return { available: true, sha256: await fileDigest(rootPath) }; }
+  catch { return { available: false, sha256: null }; }
+}
+
+async function comparePinnedAttestation(instance, manifestFile, assetName, tag) {
+  const url = 'https://api.github.com/repos/smart-tinker/the_unfinished_shapes/attestations/sha256:' + manifestFile.sha256;
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: { Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch {
+    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-fetch-failed', httpStatus: null }));
+    return;
+  }
+  if (!response.ok) {
+    const httpStatus = Number.isInteger(response.status) && response.status >= 400 && response.status <= 599 ? response.status : null;
+    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-fetch-failed', httpStatus }));
+    return;
+  }
+
+  let body;
+  try {
+    const text = await response.text();
+    if (text.length > 2000000) throw new Error('bounded-response');
+    body = JSON.parse(text);
+  } catch {
+    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-response-invalid', httpStatus: null }));
+    return;
+  }
+  const bundle = Array.isArray(body.attestations) ? body.attestations.find(item => item?.bundle)?.bundle : null;
+  if (!bundle) {
+    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-unavailable', httpStatus: null }));
+    return;
+  }
+  const bundleText = JSON.stringify(bundle);
+  if (bundleText.length > 2000000) {
+    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-too-large', httpStatus: null }));
+    return;
+  }
+
+  const bundleSha256 = createHash('sha256').update(bundleText).digest('hex');
+  const asset = { name: assetName, size: manifestFile.size, digest: 'sha256:' + manifestFile.sha256 };
+  const rootPath = sigstoreTrustedRootTargetPath();
+  let node;
+  try {
+    await verifyReleaseAttestation({ bundle, asset, tag });
+    node = { status: 'verified' };
+  } catch (error) {
+    node = {
+      status: 'rejected',
+      failureCode: safeUpdaterFailureCode(error?.failureCode),
+      verifierCode: safeVerifierCode(error?.code, error?.verifierErrorType),
+      verifierErrorType: safeVerifierErrorType(error?.verifierErrorType),
+    };
+  }
+  node.trustedRoot = await sigstoreTrustedRootInfo(rootPath);
+
+  let electronMain;
+  try {
+    electronMain = await instance.evaluate(async ({ app }, input) => {
+      const { pathToFileURL } = process.getBuiltinModule('node:url');
+      const { join } = process.getBuiltinModule('node:path');
+      const { readFile } = process.getBuiltinModule('node:fs/promises');
+      const { createHash } = process.getBuiltinModule('node:crypto');
+      let result;
+      try {
+        const moduleUrl = pathToFileURL(join(app.getAppPath(), 'src', 'update-package.mjs')).href;
+        const { verifyReleaseAttestation } = await import(moduleUrl);
+        try {
+          await verifyReleaseAttestation({ bundle: input.bundle, asset: input.asset, tag: input.tag });
+          result = { status: 'verified' };
+        } catch (error) {
+          result = {
+            status: 'rejected',
+            failureCode: error?.failureCode,
+            verifierCode: error?.code,
+            verifierErrorType: error?.verifierErrorType,
+          };
+        }
+      } catch {
+        result = { status: 'control-unavailable' };
+      }
+      try {
+        const bytes = await readFile(input.rootPath);
+        result.trustedRoot = { available: true, sha256: createHash('sha256').update(bytes).digest('hex') };
+      } catch {
+        result.trustedRoot = { available: false, sha256: null };
+      }
+      return result;
+    }, { bundle, asset, tag, rootPath });
+  } catch {
+    electronMain = { status: 'control-unavailable', trustedRoot: { available: false, sha256: null } };
+  }
+
+  const safeRoot = value => ({
+    available: value?.available === true,
+    sha256: typeof value?.sha256 === 'string' && /^[a-f0-9]{64}$/.test(value.sha256) ? value.sha256 : null,
+  });
+  const safeMain = {
+    status: ['verified', 'rejected'].includes(electronMain.status) ? electronMain.status : 'control-unavailable',
+    failureCode: safeUpdaterFailureCode(electronMain.failureCode),
+    verifierCode: safeVerifierCode(electronMain.verifierCode, electronMain.verifierErrorType),
+    verifierErrorType: safeVerifierErrorType(electronMain.verifierErrorType),
+    trustedRoot: safeRoot(electronMain.trustedRoot),
+  };
+  node.trustedRoot = safeRoot(node.trustedRoot);
+  console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({
+    assetSha256: manifestFile.sha256,
+    bundleSha256,
+    node,
+    electronMain: safeMain,
+  }));
 }
 
 async function getManifest(tag) {
@@ -297,6 +425,11 @@ async function updateOnce(distribution) {
       verifierErrorType: safeVerifierErrorType(terminalFailure.verifierErrorType),
       httpStatus: Number.isInteger(terminalFailure.httpStatus) && terminalFailure.httpStatus >= 400 && terminalFailure.httpStatus <= 599 ? terminalFailure.httpStatus : null,
     };
+    if (process.platform === 'darwin' && diagnostic.phase === 'provenance' &&
+        diagnostic.failureCode === 'SIGNATURE_REJECTED' && diagnostic.verifierCode === 'OTHER' &&
+        diagnostic.verifierErrorType === 'OTHER') {
+      await comparePinnedAttestation(current.instance, manifestFile, assetName, tag);
+    }
     throw new Error('Updater failed before verification; update=' + JSON.stringify(diagnostic));
   }
   const verified = await current.page.locator('#updates-status').innerText();
