@@ -21,15 +21,31 @@ $startInfo.RedirectStandardOutput = $true
 $startInfo.RedirectStandardError = $true
 $process = New-Object System.Diagnostics.Process
 $process.StartInfo = $startInfo
-$outputReadComplete = [System.Threading.ManualResetEvent]::new($false)
-$outputHandler = {
-  param($sender, $eventArgs)
-  if ($null -eq $eventArgs.Data) {
-    try { [void]$outputReadComplete.Set() } catch {}
-    return
-  }
-}.GetNewClosure()
-$process.add_OutputDataReceived([System.Diagnostics.DataReceivedEventHandler]$outputHandler)
+Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Threading;
+public sealed class TusUiaWaitControlOutputCapture
+{
+    public readonly ManualResetEvent OutputReadComplete = new ManualResetEvent(false);
+    public readonly DataReceivedEventHandler Handler;
+
+    public TusUiaWaitControlOutputCapture()
+    {
+        Handler = new DataReceivedEventHandler(OnOutputDataReceived);
+    }
+
+    private void OnOutputDataReceived(object sender, DataReceivedEventArgs eventArgs)
+    {
+        if (eventArgs.Data == null)
+        {
+            try { OutputReadComplete.Set(); } catch (ObjectDisposedException) { }
+        }
+    }
+}
+'@
+$outputCapture = New-Object TusUiaWaitControlOutputCapture
+$process.add_OutputDataReceived($outputCapture.Handler)
 $processStarted = $false
 $waitCallReturned = $false
 $waitTimedOut = $false
@@ -101,7 +117,7 @@ try {
       Write-ControlMarker 'process-exited'
       Write-ControlMarker 'stdout-eof-started'
       try {
-        $drainComplete = $outputReadComplete.WaitOne(0)
+        $drainComplete = $outputCapture.OutputReadComplete.WaitOne(0)
         $drainObserved = $true
         if ($drainComplete) { Write-ControlMarker 'stdout-eof-completed' }
         else { Write-ControlMarker 'stdout-eof-pending' }
@@ -116,7 +132,8 @@ try {
   } catch {
     Write-ControlMarker 'control-failed'
   }
-  try { if ($drainComplete) { $outputReadComplete.Dispose() } } catch {}
+  try { $process.remove_OutputDataReceived($outputCapture.Handler) } catch {}
+  try { if ($drainComplete) { $outputCapture.OutputReadComplete.Dispose() } } catch {}
   try { $process.Dispose() } catch {}
 }
 if ($waitCallReturned -and $waitTimedOut -and $waitWithinBound -and

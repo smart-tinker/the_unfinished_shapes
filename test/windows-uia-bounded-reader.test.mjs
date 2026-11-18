@@ -98,6 +98,12 @@ test('allowlist output drops an unapproved sentinel', () => {
     'unapproved marker output is omitted');
 });
 
+test('synthetic wait control uses a .NET output delegate', () => {
+  const source = readFileSync(waitControlTest, 'utf8');
+  assert.match(source, /new DataReceivedEventHandler\(OnOutputDataReceived\)/);
+  assert.doesNotMatch(source, /GetNewClosure|\$outputHandler/);
+});
+
 test('bounded WaitForExit control honors 1000ms with redirected streams and async stdout drain', { skip: process.platform !== 'win32' }, async () => {
   const startedAt = Date.now();
   let stdout = '';
