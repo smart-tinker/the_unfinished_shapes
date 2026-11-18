@@ -198,13 +198,19 @@ async function extractFileFlags(extractDir, version) {
   };
 }
 
-async function extractRuntimeBoundary(current, extractDir, manifestFile, assetName, tag) {
+async function extractRuntimeBoundary(current, extractDir, targetVersion, manifestFile, assetName, tag) {
+  assert.equal(typeof targetVersion, 'string', 'published manifest version is required for extraction file snapshot');
   const emptyFileFlags = { targetExists: false, appAsarExists: false, appAsarFile: false, executableExists: false, stagedAsarExists: false };
-  const [mainStatus, renderer, fileFlags] = await Promise.all([
-    withTimeout(
-      current.instance.evaluate(() => globalThis.__tusUpdaterSmokeBoundary?.extractArchive || 'not-started'),
-      'Updater extraction main snapshot', 5000,
-    ).catch(() => 'unknown'),
+  const [main, renderer, fileFlags] = await Promise.all([
+    withTimeout(current.instance.evaluate(() => {
+      const boundary = globalThis.__tusUpdaterSmokeBoundary;
+      return boundary ? {
+        status: boundary.extractArchive || 'not-started',
+        extractModuleImport: boundary.extractModuleImport,
+        extractCall: boundary.extractCall,
+        extractPhase: boundary.extractPhase,
+      } : null;
+    }), 'Updater extraction main snapshot', 5000).catch(() => null),
     withTimeout(current.page.evaluate(() => {
       const status = document.querySelector('#updates-status');
       return {
@@ -216,11 +222,14 @@ async function extractRuntimeBoundary(current, extractDir, manifestFile, assetNa
         visibilityState: document.visibilityState,
       };
     }), 'Updater extraction renderer snapshot', 5000).catch(() => null),
-    withTimeout(extractFileFlags(extractDir, manifestFile.version), 'Updater extraction file snapshot', 5000).catch(() => emptyFileFlags),
+    withTimeout(extractFileFlags(extractDir, targetVersion), 'Updater extraction file snapshot', 5000).catch(() => emptyFileFlags),
   ]);
   const [safe] = safeMainDiagnostics([{
     stage: 'extract-archive',
-    status: mainStatus,
+    status: main?.status ?? 'unknown',
+    extractModuleImport: main?.extractModuleImport,
+    extractCall: main?.extractCall,
+    extractPhase: main?.extractPhase,
     rendererStatusText: renderer?.statusText,
     rendererInvokeStatus: renderer?.invokeStatus,
     failureCode: renderer?.failureCode,
@@ -231,6 +240,9 @@ async function extractRuntimeBoundary(current, extractDir, manifestFile, assetNa
   }], manifestFile, assetName, tag);
   return {
     mainStatus: safe.status,
+    extractModuleImport: safe.extractModuleImport,
+    extractCall: safe.extractCall,
+    extractPhase: safe.extractPhase,
     rendererStatus: safe.rendererStatus,
     rendererInvokeStatus: safe.rendererInvokeStatus,
     failureCode: safe.failureCode,
@@ -579,7 +591,7 @@ async function updateOnce(distribution) {
         if (error?.name === 'TimeoutError') timedOut = true;
         else observationFailed = true;
       }
-      const runtime = await extractRuntimeBoundary(current, extractDir, manifestFile, assetName, tag);
+      const runtime = await extractRuntimeBoundary(current, extractDir, manifest.version, manifestFile, assetName, tag);
       extractDiagnostic.runtime = runtime;
       if (timedOut) {
         extractDiagnostic.outcome = 'pending';

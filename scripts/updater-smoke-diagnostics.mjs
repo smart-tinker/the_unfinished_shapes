@@ -21,6 +21,8 @@ const safeExtractRendererStatuses = new Map([
   ['Folder selection cancelled.', 'cancelled'],
 ]);
 const safeExtractInvokeStatuses = new Set(['not-started', 'pending', 'fulfilled', 'rejected']);
+const safeExtractMainStatuses = new Set(['not-started', 'starting', 'fulfilled', 'rejected']);
+const safeExtractPhases = new Set(['preflight', 'digest', 'zip-open', 'zip-read', 'write', 'executable', 'cleanup', 'fulfilled', 'rejected', 'unknown']);
 const safeVisibilityStates = new Set(['visible', 'hidden', 'prerender', 'unloaded']);
 const safeArchiveFailureCodes = new Set([
   'ARCHIVE_PATH', 'ARCHIVE_LINK', 'ARCHIVE_FILE_TYPE', 'ARCHIVE_SIZE', 'ARCHIVE_DUPLICATE_PATH',
@@ -67,6 +69,9 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
     ...(item?.stage === 'extract-archive' ? {
       rendererStatus: safeExtractRendererStatuses.get(item.rendererStatusText) ?? (typeof item.rendererStatusText === 'string' && item.rendererStatusText ? 'other' : 'unknown'),
       rendererInvokeStatus: safeExtractInvokeStatuses.has(item.rendererInvokeStatus) ? item.rendererInvokeStatus : 'unknown',
+      extractModuleImport: safeExtractMainStatuses.has(item.extractModuleImport) ? item.extractModuleImport : 'unknown',
+      extractCall: safeExtractMainStatuses.has(item.extractCall) ? item.extractCall : 'unknown',
+      extractPhase: safeExtractPhases.has(item.extractPhase) ? item.extractPhase : 'unknown',
       failureCode: typeof item.failureCode === 'string' ? safeArchiveFailureCode(item.failureCode) : null,
       extractStage: typeof item.extractStage === 'string' ? safeArchiveExtractionStage(item.extractStage) : null,
       extractOperation: typeof item.extractOperation === 'string' ? safeArchiveExtractionOperation(item.extractOperation) : null,

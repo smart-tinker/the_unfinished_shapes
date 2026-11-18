@@ -617,10 +617,23 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath) 
 }
 
 export async function extractVerifiedArchive({ filePath, directory, tag, assetName, sha256, platform = process.platform }) {
-  const extraction = { value: 'preflight' };
+  let phase = 'preflight', archiveFormat = 'unknown';
+  const smokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic') ? globalThis.__tusUpdaterSmokeBoundary : null;
+  const extraction = {
+    get value() { return phase; },
+    set value(value) {
+      phase = value;
+      if (smokeBoundary) {
+        smokeBoundary.extractPhase = ['entry', 'symlink'].includes(value)
+          ? archiveFormat === 'zip' ? 'zip-read' : 'unknown'
+          : value;
+      }
+    },
+  };
   let target, appAsarPath, targetCreated = false;
   try {
     const spec = platformArchive(platform, assetName, tag);
+    archiveFormat = spec.zip ? 'zip' : 'tar';
     if (typeof filePath !== 'string' || !filePath || typeof directory !== 'string' || !directory ||
         typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256)) {
       throw new Error('Invalid verified update extraction request.');
@@ -708,7 +721,10 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
       }
       try { error.extractStage = extraction.value; } catch {}
     }
-    if (targetCreated) await (electronFs?.promises?.rm ?? rm)(target, { recursive: true, force: true }).catch(() => {});
+    if (targetCreated) {
+      extraction.value = 'cleanup';
+      await (electronFs?.promises?.rm ?? rm)(target, { recursive: true, force: true }).catch(() => {});
+    }
     throw error;
   }
 }
