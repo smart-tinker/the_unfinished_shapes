@@ -48,11 +48,15 @@ export function safeVerifierSetupStage(error) {
     cause.code.startsWith('TUF_') &&
     sigstoreVerifierCodes.has(cause.code))) return 'tuf-get-trusted-root';
 
-  const stack = causes.map(cause => typeof cause?.stack === 'string' ? cause.stack : '').join('\n');
-  if (/\btoTrustMaterial\b/.test(stack)) return 'trust-material';
-  if (/\bVerifier\b/.test(stack)) return 'verifier-construction';
-  if (/\bcreateVerificationPolicy\b/.test(stack)) return 'verification-policy';
-  if (/\bgetTrustedRoot\b/.test(stack)) return 'tuf-get-trusted-root';
+  const frames = causes.flatMap(cause => typeof cause?.stack === 'string'
+    ? cause.stack.split(/\r?\n/).map(line =>
+      line.match(/^\s*at\s+(?:async\s+)?(?:new\s+)?([\w$]+(?:\.[\w$]+)*)(?:\s+\(|$)/)?.[1]?.split('.').at(-1),
+    ).filter(Boolean)
+    : []);
+  if (frames.includes('toTrustMaterial')) return 'trust-material';
+  if (frames.includes('Verifier')) return 'verifier-construction';
+  if (frames.includes('createVerificationPolicy')) return 'verification-policy';
+  if (frames.includes('getTrustedRoot')) return 'tuf-get-trusted-root';
   return 'unknown';
 }
 

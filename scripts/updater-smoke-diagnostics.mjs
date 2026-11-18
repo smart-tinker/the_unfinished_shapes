@@ -1,5 +1,10 @@
 import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType } from '../src/update-package.mjs';
 
+const safeVerifierSetupStages = new Set([
+  'tuf-get-trusted-root', 'trust-material', 'verifier-construction',
+  'verification-policy', 'unknown',
+]);
+
 export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
   const safeRootTarget = value => ({
     available: value?.available === true,
@@ -14,6 +19,9 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
     assetMatches: item?.assetName === assetName && item?.assetSha256 === manifestFile.sha256 && item?.tag === tag,
     ...(item?.status === 'rejected' ? {
       failureCode: safeUpdaterFailureCode(item.failureCode),
+      ...(item?.stage === 'verifier-setup' ? {
+        verifierSetupStage: safeVerifierSetupStages.has(item.verifierSetupStage) ? item.verifierSetupStage : 'unknown',
+      } : {}),
       verifierCode: safeVerifierCode(item.verifierCode, item.verifierErrorType),
       verifierErrorType: safeVerifierErrorType(item.verifierErrorType),
       verifierCauseCode: safeVerifierCode(item.verifierCauseCode),
