@@ -59,6 +59,8 @@ test('TUS runtime boundary preserves only fixed import and renderer-invoke outco
     { stage: 'updater-module-import', status: 'pending' },
     { stage: 'updater-module-import', status: 'fulfilled' },
     { stage: 'updater-module-import', status: 'rejected', moduleFailureCode: 'MODULE_IMPORT_REJECTED', privateDetails: 'C:/private/path' },
+    { stage: 'updater-module-import', status: 'rejected', moduleFailureCode: 'ERR_MODULE_NOT_FOUND', privateDetails: 'private module path' },
+    { stage: 'updater-module-import', status: 'rejected', moduleFailureCode: 'SyntaxError', privateDetails: 'private syntax detail' },
     { stage: 'download-verified-asset', status: 'pending' },
     { stage: 'renderer-invoke', status: 'rejected', privateDetails: 'raw IPC exception' },
     { stage: 'private/path', status: 'private/path', moduleFailureCode: 'PRIVATE_CODE' },
@@ -68,11 +70,15 @@ test('TUS runtime boundary preserves only fixed import and renderer-invoke outco
     ['updater-module-import', 'pending'],
     ['updater-module-import', 'fulfilled'],
     ['updater-module-import', 'rejected'],
+    ['updater-module-import', 'rejected'],
+    ['updater-module-import', 'rejected'],
     ['download-verified-asset', 'pending'],
     ['renderer-invoke', 'rejected'],
     ['unknown', 'unknown'],
   ]);
   assert.equal(diagnostics[2].moduleFailureCode, 'MODULE_IMPORT_REJECTED');
+  assert.equal(diagnostics[3].moduleFailureCode, 'ERR_MODULE_NOT_FOUND');
+  assert.equal(diagnostics[4].moduleFailureCode, 'SyntaxError');
   const serialized = JSON.stringify(diagnostics);
   assert.equal(serialized.includes('C:/private/path'), false);
   assert.equal(serialized.includes('raw IPC exception'), false);
