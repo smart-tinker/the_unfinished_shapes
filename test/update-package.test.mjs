@@ -267,14 +267,14 @@ test('classifies ASAR open failures only for the exact app.asar output path', as
   assert.equal(typeof safeArchiveExtractionOperation, 'function', 'ASAR write failures have a safe operation classifier');
   const expected = path.join(os.tmpdir(), 'tus-asar-update', 'resources', 'app.asar');
   const failures = [
-    [Object.assign(new Error('Invalid package /private/runner/app.asar'), { entry: { absolute: expected } }), 'asar-open-invalid-package'],
-    [Object.assign(new Error('Invalid package /private/runner/app.asar'), { extractPath: expected }), 'asar-open-invalid-package'],
-    [Object.assign(new Error('Invalid package /private/runner/app.asar'), { entry: { absolute: expected + '.other' } }), 'unknown'],
-    [Object.assign(new Error('private open failure'), { entry: { absolute: expected } }), 'unknown'],
-    [new Error('Invalid package /private/runner/app.asar'), 'unknown'],
+    [Object.assign(new Error('Invalid package /private/runner/app.asar'), { entry: { absolute: expected } }), null, 'asar-open-invalid-package'],
+    [new Error('Invalid package /private/runner/app.asar'), expected, 'asar-open-invalid-package'],
+    [Object.assign(new Error('Invalid package /private/runner/app.asar'), { entry: { absolute: expected + '.other' } }), null, 'unknown'],
+    [Object.assign(new Error('private open failure'), { entry: { absolute: expected } }), null, 'unknown'],
+    [new Error('Invalid package /private/runner/app.asar'), null, 'unknown'],
   ];
-  const operations = failures.map(([error]) => classifyAppAsarOpenFailure(error, expected));
-  assert.deepEqual(operations, failures.map(([, expectedOperation]) => expectedOperation));
+  const operations = failures.map(([error, zipOutput]) => classifyAppAsarOpenFailure(error, expected, zipOutput));
+  assert.deepEqual(operations, failures.map(([, , expectedOperation]) => expectedOperation));
   assert.equal(safeArchiveExtractionOperation({ extractOperation: operations[0] }), 'asar-open-invalid-package');
   assert.equal(safeArchiveExtractionOperation({ extractOperation: expected }), 'unknown');
   assert.doesNotMatch(JSON.stringify({ operations, safe: safeArchiveExtractionOperation({ extractOperation: operations[0] }) }), /private|runner|app\.asar/);
