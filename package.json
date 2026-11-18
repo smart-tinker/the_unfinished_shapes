@@ -4,6 +4,7 @@
   "description": "A shared 3D construction world with your own Codex companion",
   "main": "src/main.mjs",
   "scripts": {
+    "postinstall": "node scripts/patch-sigstore-verification.mjs",
     "start": "electron .",
     "server": "node src/server.mjs",
     "test": "node --test",

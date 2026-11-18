@@ -418,6 +418,23 @@ async function updateOnce(distribution) {
     }
     throw new Error('Updater failed before verification; update=' + JSON.stringify(diagnostic));
   }
+  const successfulMainDiagnostics = safeMainDiagnostics(
+    await current.page.evaluate(() => window.__tusProvenanceDiagnostics || []).catch(() => []),
+    manifestFile, assetName, tag,
+  );
+  console.log('TUS_UPDATER_MAIN_DIAGNOSTIC ' + JSON.stringify(successfulMainDiagnostics));
+  const liveAttempt = successfulMainDiagnostics.find(item => item.stage === 'verify-start' && item.assetMatches && item.bundleSha256);
+  assert.ok(liveAttempt, 'packaged Electron verified the exact live release bundle');
+  assert.ok(successfulMainDiagnostics.some(item =>
+    item.stage === 'verifier-setup' && item.status === 'ready' && item.assetMatches &&
+    item.bundleSha256 === liveAttempt.bundleSha256), 'packaged Electron prepared the trust policy for that bundle');
+  assert.ok(successfulMainDiagnostics.some(item =>
+    item.stage === 'verifier-verify' && item.status === 'verified' && item.assetMatches &&
+    item.bundleSha256 === liveAttempt.bundleSha256), 'packaged Electron accepted the valid published bundle');
+  assert.ok(successfulMainDiagnostics.some(item =>
+    item.stage === 'verifier-tampered-control' && item.status === 'tampered-rejected' && item.assetMatches &&
+    item.bundleSha256 === liveAttempt.bundleSha256), 'the same Electron verifier rejected the tampered copy');
+
   const verified = await current.page.locator('#updates-status').innerText();
   assert.ok(verified.startsWith('Verified ' + assetName + ' (SHA-256 '), 'the UI reports the exact selected package only after digest and provenance verification');
   const downloadName = (await readdir(downloadsDir)).find(name => name.endsWith('-' + assetName));

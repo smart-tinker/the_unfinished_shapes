@@ -296,8 +296,27 @@ async function fetchAttestation({ fetcher, digest, tag, asset, signal, verifySig
             await reportVerifierStage('verifier-setup', 'ready');
             await reportVerifierStage('verifier-verify', 'starting');
             try {
-              const result = verifier.verify(bundleToVerify);
+              const result = await verifier.verify(bundleToVerify);
               await reportVerifierStage('verifier-verify', 'verified');
+              if (process.argv.includes('--tus-smoke-provenance-diagnostic')) {
+                const tamperedBundle = structuredClone(bundleToVerify);
+                const signatures = tamperedBundle?.dsseEnvelope?.signatures;
+                let status = 'tampered-unavailable';
+                if (Array.isArray(signatures) && signatures.length > 0 &&
+                    signatures.every(signature => typeof signature?.sig === 'string' && Buffer.from(signature.sig, 'base64').length > 0)) {
+                  for (const signature of signatures) {
+                    const bytes = Buffer.from(signature.sig, 'base64');
+                    bytes[0] ^= 1;
+                    signature.sig = bytes.toString('base64');
+                  }
+                  status = 'tampered-accepted';
+                  try { await verifier.verify(tamperedBundle); }
+                  catch { status = 'tampered-rejected'; }
+                }
+                await reportProvenanceDiagnostic(onProvenanceDiagnostic, {
+                  ...diagnostic, stage: 'verifier-tampered-control', status,
+                });
+              }
               return result;
             } catch (error) {
               await reportVerifierStage('verifier-verify', 'rejected', error);
