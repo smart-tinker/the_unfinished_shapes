@@ -78,3 +78,20 @@ test('TUS runtime boundary preserves only fixed import and renderer-invoke outco
   assert.equal(serialized.includes('raw IPC exception'), false);
   assert.equal(serialized.includes('PRIVATE_CODE'), false);
 });
+
+test('TUS extraction diagnostic carries only an allowlisted failure stage', () => {
+  const assetName = 'candidate.zip';
+  const tag = 'v0.1.0-rc11';
+  const manifestFile = { sha256: 'a'.repeat(64) };
+  const [entry, privateStage] = safeMainDiagnostics([
+    { stage: 'extract-failed', status: 'rejected', extractStage: 'entry', privateDetails: 'raw parser message' },
+    { stage: 'extract-failed', status: 'rejected', extractStage: 'C:/private/path', privateDetails: 'raw parser message' },
+  ], manifestFile, assetName, tag);
+
+  assert.equal(entry.stage, 'extract-failed');
+  assert.equal(entry.status, 'rejected');
+  assert.equal(entry.extractStage, 'entry');
+  assert.equal(privateStage.stage, 'extract-failed');
+  assert.equal(privateStage.extractStage, 'unknown');
+  assert.doesNotMatch(JSON.stringify([entry, privateStage]), /raw parser message|C:\/private\/path/);
+});

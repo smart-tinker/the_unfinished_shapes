@@ -453,11 +453,13 @@ test('rejects traversal inside ditto AppleDouble metadata without writing outsid
       { name: '__MACOSX/../outside', contents: Buffer.from('must not be written'), mode: 0o100644 },
     ]));
     const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+    let rejection;
     await assert.rejects(extractVerifiedArchive({
       filePath: archive, directory: parent, tag,
       assetName: 'TheUnfinishedShapes-0.1.0-rc.11-darwin-arm64.zip',
       sha256, platform: 'darwin',
-    }));
+    }), error => { rejection = error; return true; });
+    assert.equal(rejection?.extractStage, 'entry');
     const names = await readdir(parent);
     assert.equal(names.includes('outside'), false);
     assert.equal(names.includes('TheUnfinishedShapes-0.1.0-rc.11.app'), false);
