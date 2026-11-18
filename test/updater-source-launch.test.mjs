@@ -33,7 +33,7 @@ test('handoff identity events expose only separate safe match enums', async () =
     'TUS_INSTALLER_HANDOFF identity=user-data-mismatch',
     'TUS_INSTALLER_HANDOFF identity=source-sha-version-mismatch C:/private/app.exe',
     'raw error /private/profile',
-  ].join('\\n'));
+  ].join(String.fromCharCode(10)));
 
   assert.deepEqual(events, [
     'TUS_INSTALLER_HANDOFF identity=build-label-match',
