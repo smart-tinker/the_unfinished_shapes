@@ -177,6 +177,8 @@ function safeMainDiagnostics(live, manifestFile, assetName, tag) {
       failureCode: safeUpdaterFailureCode(item.failureCode),
       verifierCode: safeVerifierCode(item.verifierCode, item.verifierErrorType),
       verifierErrorType: safeVerifierErrorType(item.verifierErrorType),
+      verifierCauseCode: safeVerifierCode(item.verifierCauseCode),
+      verifierCauseErrorType: safeVerifierErrorType(item.verifierCauseErrorType),
     } : {}),
     trustedRootTarget: safeRootTarget(item?.trustedRootTarget),
   }));

@@ -23,7 +23,7 @@ const sigstoreVerifierCodes = new Set([
 ]);
 
 const safeVerifierErrorTypes = new Map([
-  ['Error', 'GENERIC_ERROR'], ['TypeError', 'TYPE_ERROR'],
+  ['Error', 'GENERIC_ERROR'], ['TypeError', 'TYPE_ERROR'], ['TUFError', 'TUF_ERROR'],
   ['ValidationError', 'BUNDLE_VALIDATION_ERROR'], ['ASN1ParseError', 'ASN1_PARSE_ERROR'],
   ['ASN1TypeError', 'ASN1_TYPE_ERROR'], ['RFC3161TimestampVerificationError', 'RFC3161_TIMESTAMP_VERIFICATION_ERROR'],
 ]);
@@ -110,6 +110,8 @@ export async function verifyReleaseAttestation({ bundle, asset, tag }, verifySig
     const rejection = updaterFailure('Release attestation signature rejected [verifier=' + code + '].', 'SIGNATURE_REJECTED');
     rejection.code = code;
     rejection.verifierErrorType = safeVerifierErrorType(error?.constructor?.name);
+    rejection.verifierCauseCode = safeVerifierCode(error?.cause?.code, error?.cause?.constructor?.name);
+    rejection.verifierCauseErrorType = safeVerifierErrorType(error?.cause?.constructor?.name);
     throw rejection;
   }
   const envelope = bundle.dsseEnvelope;
@@ -200,6 +202,8 @@ async function fetchAttestation({ fetcher, digest, tag, asset, signal, verifySig
         failureCode: safeUpdaterFailureCode(error?.failureCode),
         verifierCode: safeVerifierCode(error?.code, error?.verifierErrorType),
         verifierErrorType: safeVerifierErrorType(error?.verifierErrorType),
+        verifierCauseCode: safeVerifierCode(error?.verifierCauseCode),
+        verifierCauseErrorType: safeVerifierErrorType(error?.verifierCauseErrorType),
       });
       lastError = error;
     }
