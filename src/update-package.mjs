@@ -708,7 +708,7 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
       }
       try { error.extractStage = extraction.value; } catch {}
     }
-    if (targetCreated) await rm(target, { recursive: true, force: true }).catch(() => {});
+    if (targetCreated) await (electronFs?.promises?.rm ?? rm)(target, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
 }
