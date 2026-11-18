@@ -22,10 +22,20 @@ const packageVersion=JSON.parse(await readFile(new URL('../package.json',import.
 const expectedSourceSha=/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA||'')?process.env.GITHUB_SHA:null;
 const expectedBuildLabel=`v${packageVersion} · ${expectedSourceSha?expectedSourceSha.slice(0,7):'build unknown'}`;
 const expectedBuildTitle=expectedSourceSha?`Version ${packageVersion}; source SHA ${expectedSourceSha}`:`Version ${packageVersion}; source SHA unavailable. This build is not release-identified.`;
-const work = await mkdtemp(path.join(os.tmpdir(), 'tus-installer-'));
+const handoffMode = process.env.TUS_SMOKE_HANDOFF_MODE || '';
+assert.ok(['', 'prepare-source', 'verify-target'].includes(handoffMode), 'installer handoff mode is recognized');
+const handoffRoot = process.env.TUS_SMOKE_HANDOFF_ROOT ? path.resolve(process.env.TUS_SMOKE_HANDOFF_ROOT) : null;
+if (handoffMode) assert.ok(handoffRoot, 'handoff uses the updater smoke temporary root');
+const work = handoffRoot ? path.join(handoffRoot, 'fixture') : await mkdtemp(path.join(os.tmpdir(), 'tus-installer-'));
+if (handoffMode === 'prepare-source') await mkdir(work, { recursive: true });
 const dataDir = path.join(process.env.APPDATA, 'the-unfinished-shapes');
-try { await access(dataDir); throw new Error('Refusing to modify a pre-existing app data directory.'); }
-catch (error) { if (error.code !== 'ENOENT') throw error; }
+if (handoffMode === 'verify-target') {
+  await access(work);
+  await access(dataDir);
+} else {
+  try { await access(dataDir); throw new Error('Refusing to modify a pre-existing app data directory.'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
 let installer = process.env.TUS_SMOKE_INSTALLER;
 if (!installer) {
   const installerFiles = (await readdir('dist/installer')).filter(name => name.endsWith('.exe'));
@@ -37,8 +47,11 @@ await access(installer);
 const portableExecutable = process.env.TUS_SMOKE_PORTABLE_EXECUTABLE && path.resolve(process.env.TUS_SMOKE_PORTABLE_EXECUTABLE);
 if (portableExecutable) await access(portableExecutable);
 const installDir = path.join(process.env.LOCALAPPDATA, 'Programs', 'TUS-Installer-Smoke');
-try { await access(installDir); throw new Error('Refusing to replace an existing installation.'); }
-catch (error) { if (error.code !== 'ENOENT') throw error; }
+if (handoffMode === 'verify-target') await access(installDir);
+else {
+  try { await access(installDir); throw new Error('Refusing to replace an existing installation.'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
 const settingsFixture = {
   workspacePath: path.join(work, 'player-workspace'), codexPath: path.join(work, 'codex.exe'),
   serverUrl: '', threadId: 'saved-game-thread-fixture', agentControlThreadId: 'saved-game-thread-fixture', agentModelId: 'qwen3-local-cpu', agentEffort: 'medium', token: 'test-value-that-must-not-be-saved'
@@ -55,6 +68,7 @@ async function launch(executablePath, label, { realQuitPrompt = false } = {}) {
   await page.waitForFunction(() => document.querySelector('#build-version')?.getAttribute('title') !== 'Loading build metadata');
   assert.equal(await page.locator('#build-version').innerText(), expectedBuildLabel, 'installed UI version and short source SHA match the candidate');
   assert.equal(await page.locator('#build-version').getAttribute('title'), expectedBuildTitle, 'installed build identifies exact source or marks it unknown');
+  assert.equal(await instance.evaluate(({ app }) => app.getVersion()), packageVersion, 'installed process reports the expected application version');
   graphics.phase('world connection');
   const actualDataDir = await instance.evaluate(({ app }) => app.getPath('userData'));
   assert.equal(path.resolve(actualDataDir).toLowerCase(), path.resolve(dataDir).toLowerCase(), 'stable default user-data path');
@@ -88,7 +102,35 @@ async function verifyRestored(page) {
   assert.equal(saved.agentEffort, settingsFixture.agentEffort, 'agent reasoning preference survives restart');
   assert.equal('token' in saved, false, 'session tokens must not be persisted');
 }
-await withSmokeCleanup(async () => {
+const installedExe = path.join(installDir, 'TheUnfinishedShapes.exe');
+async function prepareSource() {
+  await run(installer, ['/S', `/D=${installDir}`], { timeout: 180000 });
+  const page = await launch(installedExe, 'installed updater source');
+  await page.evaluate(async fixture => {
+    await window.tus.saveSettings(fixture);
+    const s = await window.tus.loadSettings();
+    await window.tus.request({ ...s, path: '/command', method: 'POST', body: { type: 'build', objectType: 'bridge', position: { x: 7, y: 1, z: 0 } } });
+  }, settingsFixture);
+  await verifyRestored(page);
+  await close('source fixture ready');
+  console.log(`TUS_INSTALLER_HANDOFF stage=source-verified version=${packageVersion} sourceSha=${expectedSourceSha || 'unknown'} buildInfo=verified userData=verified fixture=written`);
+}
+async function verifyTarget() {
+  await access(installedExe);
+  const page = await launch(installedExe, 'installed updater target');
+  await verifyRestored(page);
+  await close('target fixture verified');
+  console.log(`TUS_INSTALLER_HANDOFF stage=target-verified version=${packageVersion} sourceSha=${expectedSourceSha || 'unknown'} buildInfo=verified userData=verified fixture=retained`);
+}
+if (handoffMode) {
+  try {
+    if (handoffMode === 'prepare-source') await prepareSource();
+    else await verifyTarget();
+  } finally {
+    await close('handoff cleanup').catch(() => {});
+  }
+} else {
+  await withSmokeCleanup(async () => {
   // A genuinely clean first install must launch before any profile directory exists.
   await run(installer, ['/S', `/D=${installDir}`], { timeout: 180000 });
   let page = await launch(path.join(installDir, 'TheUnfinishedShapes.exe'), 'clean install');
@@ -182,7 +224,6 @@ await withSmokeCleanup(async () => {
     await window.tus.request({ ...s, path: '/command', method: 'POST', body: { type: 'build', objectType: 'bridge', position: { x: 7, y: 1, z: 0 } } });
   }, settingsFixture);
   await close();
-  const installedExe = path.join(installDir, 'TheUnfinishedShapes.exe');
   page = await launch(installedExe, 'native quit prompt acceptance', { realQuitPrompt: true });
   graphics.phase('native window close and File -> Exit confirmation');
   await graphics.assertHealthy();
@@ -216,5 +257,8 @@ await withSmokeCleanup(async () => {
   () => rm(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }),
   () => rm(installDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
 );
-console.log(`Windows portable archive smoke: ${portableExecutable ? 'passed with exact supplied executable' : 'not requested; portable archive was not tested'}.`);
-console.log('Windows installer smoke passed: current candidate clean install, synthetic settings/world/thread ID persistence after restart, same-installer reinstall, uninstall data retention and reinstall after uninstall; graphics checked throughout each lifecycle; no credentials saved or model invoked.');
+}
+if (!handoffMode) {
+  console.log(`Windows portable archive smoke: ${portableExecutable ? 'passed with exact supplied executable' : 'not requested; portable archive was not tested'}.`);
+  console.log('Windows installer smoke passed: current candidate clean install, synthetic settings/world/thread ID persistence after restart, same-installer reinstall, uninstall data retention and reinstall after uninstall; graphics checked throughout each lifecycle; no credentials saved or model invoked.');
+}

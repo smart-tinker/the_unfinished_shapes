@@ -31,6 +31,9 @@ test('Windows updater workflow runs after native smoke failure only when both pa
       const end = job.indexOf('\n      - ', start + 8);
       return end < 0 ? job.slice(start) : job.slice(start, end);
     };
+    const parseStart = job.indexOf('      - name: Parse Windows UI automation script\n');
+    assert.ok(parseStart >= 0, 'Windows UI automation scripts are parsed before the package flow');
+    assert.match(step(parseStart), /ParseFile\('scripts\/windows-nsis-wizard\.ps1'/, 'the bounded installer observer is parsed before execution');
     assert.match(step(dependenciesStart), /run: npm ci/, 'Windows dependencies must install before packaging');
     assert.equal(step(checkStart).trim(), '- run: npm run check', 'the required check remains an ordinary failing step');
     assert.doesNotMatch(job, /continue-on-error\s*:\s*true/, 'check failures still fail Validate');

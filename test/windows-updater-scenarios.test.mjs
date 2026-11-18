@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { runWindowsUpdaterScenarios } from '../scripts/windows-updater-scenarios.mjs';
+import { runWindowsUpdaterScenarios, safeNsisWizardEvents } from '../scripts/windows-updater-scenarios.mjs';
 
 test('Windows installer acceptance still runs when portable acceptance fails', async () => {
   const calls = [];
@@ -20,4 +20,23 @@ test('Windows installer acceptance still runs when portable acceptance fails', a
   assert.equal(outcomes.portable.status, 'rejected');
   assert.equal(outcomes.portable.error, portableFailure);
   assert.deepEqual(outcomes.installer, { status: 'fulfilled', value: 'installed-source handoff' });
+});
+
+test('NSIS wizard output drops paths and raw details while keeping fixed events', () => {
+  const events = safeNsisWizardEvents([
+    'TUS_NSIS_WIZARD event=process-found pid=4321',
+    'TUS_NSIS_WIZARD event=destination-entered pid=4321',
+    'TUS_NSIS_WIZARD event=destination-verified pid=4321',
+    'TUS_NSIS_WIZARD event=completed pid=4321',
+    'TUS_NSIS_WIZARD event=automation-failed C:/private/path',
+    'raw exception C:/private/path',
+  ].join('\n'));
+
+  assert.deepEqual(events, [
+    'TUS_NSIS_WIZARD event=process-found pid=4321',
+    'TUS_NSIS_WIZARD event=destination-entered pid=4321',
+    'TUS_NSIS_WIZARD event=destination-verified pid=4321',
+    'TUS_NSIS_WIZARD event=completed pid=4321',
+  ]);
+  assert.equal(JSON.stringify(events).includes('C:/private/path'), false);
 });
