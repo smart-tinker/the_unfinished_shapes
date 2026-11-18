@@ -15,13 +15,13 @@ test('TUS main diagnostic preserves only safe verifier setup stages at the log b
     status: 'rejected',
   };
   const diagnostics = safeMainDiagnostics([
-    { ...base, stage: 'verifier-setup', verifierSetupStage: 'tuf-get-trusted-root', verifierSetupStep: 'tuf-metadata-refresh' },
+    { ...base, stage: 'verifier-setup', verifierSetupStage: 'tuf-get-trusted-root', verifierSetupStep: 'tuf-target-metadata-search' },
     { ...base, stage: 'verifier-setup', verifierSetupStage: 'private/path/token', verifierSetupStep: 'private/path/token' },
     { ...base, stage: 'verifier-verify', verifierSetupStage: 'trust-material' },
   ], manifestFile, assetName, tag);
 
   assert.equal(diagnostics[0].verifierSetupStage, 'tuf-get-trusted-root');
-  assert.equal(diagnostics[0].verifierSetupStep, 'tuf-metadata-refresh');
+  assert.equal(diagnostics[0].verifierSetupStep, 'tuf-target-metadata-search');
   assert.equal(diagnostics[1].verifierSetupStage, 'unknown');
   assert.equal(diagnostics[1].verifierSetupStep, 'unknown');
   assert.equal(Object.hasOwn(diagnostics[2], 'verifierSetupStage'), false);

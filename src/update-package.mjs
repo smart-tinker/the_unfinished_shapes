@@ -41,23 +41,84 @@ export function safeVerifierCode(code, errorType) {
   return typeof errorType === 'string' ? safeVerifierCodesByErrorType.get(errorType) || 'OTHER' : 'OTHER';
 }
 
-export function safeVerifierSetupStage(error) {
-  const causes = [error, error?.cause];
-  if (causes.some(cause =>
-    typeof cause?.code === 'string' &&
-    cause.code.startsWith('TUF_') &&
-    sigstoreVerifierCodes.has(cause.code))) return 'tuf-get-trusted-root';
+const tufSetupSteps = new Map([
+  ['TUF_INIT_CACHE_ERROR', 'tuf-cache-init'],
+  ['TUF_FIND_TARGET_ERROR', 'tuf-target-metadata-search'],
+  ['TUF_REFRESH_METADATA_ERROR', 'tuf-target-metadata-search'],
+  ['TUF_DOWNLOAD_TARGET_ERROR', 'tuf-target-download'],
+  ['TUF_READ_TARGET_ERROR', 'tuf-target-read'],
+]);
+const verifierSetupFrameSteps = new Map([
+  ['initTufCache', 'tuf-cache-init'],
+  ['seedCache', 'tuf-cache-seed'],
+  ['initClient', 'tuf-client-init'],
+  ['TUFClient', 'tuf-client-init'],
+  ['Updater', 'tuf-client-init'],
+  ['preorderDepthFirstWalk', 'tuf-target-metadata-search'],
+  ['getTargetInfo', 'tuf-target-metadata-search'],
+  ['findCachedTarget', 'tuf-target-cache-lookup'],
+  ['downloadTarget', 'tuf-target-download'],
+  ['getTargetPath', 'tuf-target-read'],
+  ['readTarget', 'tuf-target-read'],
+  ['getTarget', 'tuf-target-read'],
+  ['toTrustMaterial', 'trust-material'],
+  ['Verifier', 'verifier-construction'],
+  ['createVerificationPolicy', 'verification-policy'],
+]);
 
-  const frames = causes.flatMap(cause => typeof cause?.stack === 'string'
+function verifierSetupFrames(error) {
+  return [error?.cause, error].flatMap(cause => typeof cause?.stack === 'string'
     ? cause.stack.split(/\r?\n/).map(line =>
-      line.match(/^\s*at\s+(?:async\s+)?(?:new\s+)?([\w$]+(?:\.[\w$]+)*)(?:\s+\(|$)/)?.[1]?.split('.').at(-1),
+      line.match(/^\s*at\s+(?:async\s+)?(?:new\s+)?([\w$]+(?:\.[\w$]+)*)(?:\s+\(|$)/)?.[1],
     ).filter(Boolean)
     : []);
-  if (frames.includes('toTrustMaterial')) return 'trust-material';
-  if (frames.includes('Verifier')) return 'verifier-construction';
-  if (frames.includes('createVerificationPolicy')) return 'verification-policy';
-  if (frames.includes('getTrustedRoot')) return 'tuf-get-trusted-root';
-  return 'unknown';
+}
+
+function verifierSetupFrameIs(frames, name) {
+  return frames.some(frame => frame === name || frame.endsWith('.' + name));
+}
+
+function safeVerifierSetupDiagnostics(error) {
+  const causes = [error, error?.cause];
+  const code = causes.map(cause => cause?.code).find(value =>
+    typeof value === 'string' && sigstoreVerifierCodes.has(value));
+  const frames = verifierSetupFrames(error);
+  const frameNames = frames.map(frame => frame.split('.').at(-1));
+  const isTufError = typeof code === 'string' && code.startsWith('TUF_');
+
+  let verifierSetupStage = 'unknown';
+  if (isTufError || verifierSetupFrameIs(frames, 'getTrustedRoot')) verifierSetupStage = 'tuf-get-trusted-root';
+  else if (verifierSetupFrameIs(frames, 'toTrustMaterial')) verifierSetupStage = 'trust-material';
+  else if (verifierSetupFrameIs(frames, 'Verifier')) verifierSetupStage = 'verifier-construction';
+  else if (verifierSetupFrameIs(frames, 'createVerificationPolicy')) verifierSetupStage = 'verification-policy';
+
+  const firstMetadataFrame = frameNames.find(name =>
+    ['refresh', 'getTargetInfo', 'preorderDepthFirstWalk'].includes(name));
+  let verifierSetupStep = 'unknown';
+  if (firstMetadataFrame === 'refresh' && verifierSetupFrameIs(frames, 'getTargetInfo')) {
+    verifierSetupStep = 'tuf-metadata-refresh';
+  } else if (verifierSetupFrameIs(frames, 'getTrustedRoot') && verifierSetupFrameIs(frames, 'JSON.parse')) {
+    verifierSetupStep = 'trusted-root-json-parse';
+  } else if (verifierSetupFrameIs(frames, 'getTrustedRoot') && verifierSetupFrameIs(frames, 'fromJSON')) {
+    verifierSetupStep = 'trusted-root-deserialize';
+  } else if (typeof code === 'string' && tufSetupSteps.has(code)) {
+    verifierSetupStep = tufSetupSteps.get(code);
+  } else {
+    for (const frame of frames) {
+      const step = verifierSetupFrameSteps.get(frame.split('.').at(-1));
+      if (step) { verifierSetupStep = step; break; }
+    }
+  }
+
+  return { verifierSetupStage, verifierSetupStep };
+}
+
+export function safeVerifierSetupStage(error) {
+  return safeVerifierSetupDiagnostics(error).verifierSetupStage;
+}
+
+export function safeVerifierSetupStep(error) {
+  return safeVerifierSetupDiagnostics(error).verifierSetupStep;
 }
 
 const updaterFailureCodes = new Set([
@@ -218,7 +279,7 @@ async function fetchAttestation({ fetcher, digest, tag, asset, signal, verifySig
               ...diagnostic, stage, status,
               ...(error ? {
                 failureCode: 'SIGNATURE_REJECTED',
-                ...(stage === 'verifier-setup' ? { verifierSetupStage: safeVerifierSetupStage(error) } : {}),
+                ...(stage === 'verifier-setup' ? safeVerifierSetupDiagnostics(error) : {}),
                 verifierCode: safeVerifierCode(error?.code, error?.constructor?.name),
                 verifierErrorType: safeVerifierErrorType(error?.constructor?.name),
                 verifierCauseCode: safeVerifierCode(error?.cause?.code, error?.cause?.constructor?.name),

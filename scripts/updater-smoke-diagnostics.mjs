@@ -5,6 +5,14 @@ const safeVerifierSetupStages = new Set([
   'verification-policy', 'unknown',
 ]);
 
+const safeVerifierSetupSteps = new Set([
+  'tuf-cache-init', 'tuf-cache-seed', 'tuf-client-init',
+  'tuf-target-metadata-search', 'tuf-metadata-refresh', 'tuf-target-cache-lookup',
+  'tuf-target-download', 'tuf-target-read', 'trusted-root-json-parse',
+  'trusted-root-deserialize', 'trust-material', 'verifier-construction',
+  'verification-policy', 'unknown',
+]);
+
 export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
   const safeRootTarget = value => ({
     available: value?.available === true,
@@ -21,6 +29,7 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
       failureCode: safeUpdaterFailureCode(item.failureCode),
       ...(item?.stage === 'verifier-setup' ? {
         verifierSetupStage: safeVerifierSetupStages.has(item.verifierSetupStage) ? item.verifierSetupStage : 'unknown',
+        verifierSetupStep: safeVerifierSetupSteps.has(item.verifierSetupStep) ? item.verifierSetupStep : 'unknown',
       } : {}),
       verifierCode: safeVerifierCode(item.verifierCode, item.verifierErrorType),
       verifierErrorType: safeVerifierErrorType(item.verifierErrorType),

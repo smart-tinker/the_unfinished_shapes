@@ -577,7 +577,7 @@ test('classifies verifier setup failures into safe internal stages', () => {
   ]);
   assert.doesNotMatch(JSON.stringify(result), /private diagnostic details|unclassifiedSetup/);
 });
-test('classifies the inner TUF setup operation from a named stack frame', async () => {
+test('distinguishes target metadata search from refresh only by its own frame', async () => {
   const { safeVerifierSetupStep } = await import('../src/update-package.mjs');
   assert.equal(typeof safeVerifierSetupStep, 'function');
 
@@ -585,23 +585,31 @@ test('classifies the inner TUF setup operation from a named stack frame', async 
     try { run(); } catch (error) { return error; }
     throw new Error('Expected the TUF setup fixture to fail.');
   }
-  function getTargetInfo() { throw new Error('private diagnostic details'); }
-  function getTrustedRoot() { return getTargetInfo(); }
 
-  const error = captureSetupError(getTrustedRoot);
-  assert.equal(safeVerifierSetupStep(error), 'tuf-metadata-refresh');
-});
-test('reports the innermost TUF operation using a safe frame category', async () => {
-  const { safeVerifierSetupStep } = await import('../src/update-package.mjs');
-  assert.equal(typeof safeVerifierSetupStep, 'function');
-
-  function captureSetupError(run) {
-    try { run(); } catch (error) { return error; }
-    throw new Error('Expected the TUF setup fixture to fail.');
+  let metadataSearchError;
+  {
+    function preorderDepthFirstWalk() { throw new Error('private diagnostic details'); }
+    function getTargetInfo() { return preorderDepthFirstWalk(); }
+    function getTrustedRoot() { return getTargetInfo(); }
+    metadataSearchError = captureSetupError(getTrustedRoot);
   }
-  function getTargetInfo() { throw new Error('private diagnostic details'); }
-  function getTrustedRoot() { return getTargetInfo(); }
+  assert.equal(safeVerifierSetupStep(metadataSearchError), 'tuf-target-metadata-search');
+  metadataSearchError.code = 'TUF_REFRESH_METADATA_ERROR';
+  assert.equal(safeVerifierSetupStep(metadataSearchError), 'tuf-target-metadata-search');
 
-  const error = captureSetupError(getTrustedRoot);
-  assert.equal(safeVerifierSetupStep(error), 'tuf-metadata-refresh');
+  let refreshError;
+  {
+    function refresh() { throw new Error('private diagnostic details'); }
+    function getTargetInfo() { return refresh(); }
+    function getTrustedRoot() { return getTargetInfo(); }
+    refreshError = captureSetupError(getTrustedRoot);
+  }
+  assert.equal(safeVerifierSetupStep(refreshError), 'tuf-metadata-refresh');
+
+  let rootOnlyError;
+  {
+    function getTrustedRoot() { throw new Error('private diagnostic details'); }
+    rootOnlyError = captureSetupError(getTrustedRoot);
+  }
+  assert.equal(safeVerifierSetupStep(rootOnlyError), 'unknown');
 });
