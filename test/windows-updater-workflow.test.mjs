@@ -15,7 +15,16 @@ test('Windows updater workflow runs after native smoke failure only when both pa
     assert.ok(updaterStart >= 0, 'the packaged updater acceptance step exists');
     const native = job.slice(job.indexOf('      - name: Verify clean install, current-candidate lifecycle and retained data'), updaterStart);
     const updater = job.slice(updaterStart);
-    assert.match(job, /- id: package\s*\n\s*run: npm run package:win/);
+    const packageStart = job.indexOf('      - id: package\n');
+    assert.ok(packageStart >= 0, 'the Windows package step exists');
+    const installerStart = job.indexOf('      - id: installer\n', packageStart);
+    assert.ok(installerStart > packageStart, 'the installer step follows packaging');
+    const packageStep = job.slice(packageStart, installerStart);
+    assert.match(packageStep, /npm run package:win/, 'the standard package command remains');
+    assert.match(packageStep, /PACKAGER_ARGV %\*/, 'the actual packager argv is recorded after cmd.exe parsing');
+    assert.match(packageStep, /TUS_TAR_PACKAGE stage=before/, 'the installed tar ESM entry is recorded before packaging');
+    assert.match(packageStep, /TUS_TAR_PACKAGE stage=after/, 'the bundled tar ESM entry is recorded after packaging');
+    assert.match(packageStep, /exports[\s\S]*import\.default/, 'the check follows tar exports[\".\"].import.default');
     assert.match(job, /- id: installer\s*\n\s*run: npm run installer:win/);
     assert.doesNotMatch(native, /continue-on-error\s*:\s*true/, 'the native smoke failure remains job-failing');
     const condition = updater.match(/^\s*if:\s*\$\{\{([^}]+)\}\}/m)?.[1] || '';
