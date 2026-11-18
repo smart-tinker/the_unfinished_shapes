@@ -67,7 +67,7 @@ async function start(executablePath, label, dataDir, useBaseline = false) {
     console.log('Updater smoke ' + label + ': launching packaged app.');
     instance = await electron.launch({
       executablePath,
-      args: [...runnerFlags, '--tus-smoke-confirm-quit', ...gpu.args],
+      args: [...runnerFlags, '--tus-smoke-confirm-quit', '--tus-smoke-provenance-diagnostic', ...gpu.args],
       env,
       timeout: 45000,
     });
@@ -161,21 +161,44 @@ async function sigstoreTrustedRootInfo(rootPath) {
   catch { return { available: false, sha256: null }; }
 }
 
-async function comparePinnedAttestation(instance, manifestFile, assetName, tag) {
+function safeMainDiagnostics(live, manifestFile, assetName, tag) {
+  const safeRootTarget = value => ({
+    available: value?.available === true,
+    sha256: typeof value?.sha256 === 'string' && /^[a-f0-9]{64}$/.test(value.sha256) ? value.sha256 : null,
+  });
+  return (Array.isArray(live) ? live : []).slice(0, 40).map(item => ({
+    bundleIndex: Number.isInteger(item?.bundleIndex) && item.bundleIndex >= 0 && item.bundleIndex < 20 ? item.bundleIndex : null,
+    bundleSha256: typeof item?.bundleSha256 === 'string' && /^[a-f0-9]{64}$/.test(item.bundleSha256) ? item.bundleSha256 : null,
+    stage: ['updater-module-import', 'download-verified-asset', 'main-catch-fallback', 'verify-start', 'verify-result'].includes(item?.stage) ? item.stage : 'unknown',
+    status: ['starting', 'ready', 'synthetic-other', 'verified', 'rejected'].includes(item?.status)
+      ? item.status : item?.stage === 'verify-start' ? 'started' : 'unknown',
+    assetMatches: item?.assetName === assetName && item?.assetSha256 === manifestFile.sha256 && item?.tag === tag,
+    ...(item?.status === 'rejected' ? {
+      failureCode: safeUpdaterFailureCode(item.failureCode),
+      verifierCode: safeVerifierCode(item.verifierCode, item.verifierErrorType),
+      verifierErrorType: safeVerifierErrorType(item.verifierErrorType),
+    } : {}),
+    trustedRootTarget: safeRootTarget(item?.trustedRootTarget),
+  }));
+}
+
+async function comparePinnedAttestation(electronMain, manifestFile, assetName, tag) {
+  assert.ok(Array.isArray(electronMain) && electronMain.some(item => item.stage === 'verify-start'), 'the packaged updater reports its live Sigstore attempt');
   const url = 'https://api.github.com/repos/smart-tinker/the_unfinished_shapes/attestations/sha256:' + manifestFile.sha256;
   let response;
   try {
     response = await fetch(url, {
-      headers: { Accept: 'application/vnd.github+json' },
+      headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' },
       signal: AbortSignal.timeout(15000),
+      redirect: 'error',
     });
   } catch {
-    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-fetch-failed', httpStatus: null }));
+    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-fetch-failed', httpStatus: null, electronMain }));
     return;
   }
   if (!response.ok) {
     const httpStatus = Number.isInteger(response.status) && response.status >= 400 && response.status <= 599 ? response.status : null;
-    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-fetch-failed', httpStatus }));
+    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-fetch-failed', httpStatus, electronMain }));
     return;
   }
 
@@ -185,94 +208,56 @@ async function comparePinnedAttestation(instance, manifestFile, assetName, tag) 
     if (text.length > 2000000) throw new Error('bounded-response');
     body = JSON.parse(text);
   } catch {
-    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-response-invalid', httpStatus: null }));
+    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-response-invalid', httpStatus: null, electronMain }));
     return;
   }
-  const bundle = Array.isArray(body.attestations) ? body.attestations.find(item => item?.bundle)?.bundle : null;
-  if (!bundle) {
-    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-unavailable', httpStatus: null }));
-    return;
-  }
-  const bundleText = JSON.stringify(bundle);
-  if (bundleText.length > 2000000) {
-    console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({ status: 'bundle-too-large', httpStatus: null }));
-    return;
-  }
-
-  const bundleSha256 = createHash('sha256').update(bundleText).digest('hex');
+  const candidates = Array.isArray(body.attestations) ? body.attestations.flatMap((item, bundleIndex) => {
+    if (!item?.bundle) return [];
+    const bundleText = JSON.stringify(item.bundle);
+    return bundleText.length <= 2000000 ? [{
+      bundle: item.bundle, bundleIndex,
+      bundleSha256: createHash('sha256').update(bundleText).digest('hex'),
+    }] : [];
+  }) : [];
+  const mainHashes = new Set(electronMain
+    .filter(item => item.stage === 'verify-start' && item.assetMatches)
+    .map(item => item.bundleSha256).filter(Boolean));
+  const selected = candidates.find(item => mainHashes.has(item.bundleSha256));
+  const bundle = selected?.bundle;
+  const bundleSha256 = selected?.bundleSha256 || null;
   const asset = { name: assetName, size: manifestFile.size, digest: 'sha256:' + manifestFile.sha256 };
   const rootPath = sigstoreTrustedRootTargetPath();
-  let node;
-  try {
-    await verifyReleaseAttestation({ bundle, asset, tag });
-    node = { status: 'verified' };
-  } catch (error) {
-    node = {
-      status: 'rejected',
-      failureCode: safeUpdaterFailureCode(error?.failureCode),
-      verifierCode: safeVerifierCode(error?.code, error?.verifierErrorType),
-      verifierErrorType: safeVerifierErrorType(error?.verifierErrorType),
-    };
+  const trustedRootBefore = await sigstoreTrustedRootInfo(rootPath);
+  let node = { status: 'no-exact-main-bundle-match' };
+  if (bundle) {
+    try {
+      await verifyReleaseAttestation({ bundle, asset, tag });
+      node = { status: 'verified' };
+    } catch (error) {
+      node = {
+        status: 'rejected',
+        failureCode: safeUpdaterFailureCode(error?.failureCode),
+        verifierCode: safeVerifierCode(error?.code, error?.verifierErrorType),
+        verifierErrorType: safeVerifierErrorType(error?.verifierErrorType),
+      };
+    }
   }
-  node.trustedRoot = await sigstoreTrustedRootInfo(rootPath);
-
-  let electronMain;
-  try {
-    electronMain = await instance.evaluate(async ({ app }, input) => {
-      const { pathToFileURL } = process.getBuiltinModule('node:url');
-      const { join } = process.getBuiltinModule('node:path');
-      const { readFile } = process.getBuiltinModule('node:fs/promises');
-      const { createHash } = process.getBuiltinModule('node:crypto');
-      let result;
-      try {
-        const moduleUrl = pathToFileURL(join(app.getAppPath(), 'src', 'update-package.mjs')).href;
-        const { verifyReleaseAttestation } = await import(moduleUrl);
-        try {
-          await verifyReleaseAttestation({ bundle: input.bundle, asset: input.asset, tag: input.tag });
-          result = { status: 'verified' };
-        } catch (error) {
-          result = {
-            status: 'rejected',
-            failureCode: error?.failureCode,
-            verifierCode: error?.code,
-            verifierErrorType: error?.verifierErrorType,
-          };
-        }
-      } catch {
-        result = { status: 'control-unavailable' };
-      }
-      try {
-        const bytes = await readFile(input.rootPath);
-        result.trustedRoot = { available: true, sha256: createHash('sha256').update(bytes).digest('hex') };
-      } catch {
-        result.trustedRoot = { available: false, sha256: null };
-      }
-      return result;
-    }, { bundle, asset, tag, rootPath });
-  } catch {
-    electronMain = { status: 'control-unavailable', trustedRoot: { available: false, sha256: null } };
-  }
-
-  const safeRoot = value => ({
-    available: value?.available === true,
-    sha256: typeof value?.sha256 === 'string' && /^[a-f0-9]{64}$/.test(value.sha256) ? value.sha256 : null,
-  });
+  node.trustedRootTarget = { before: trustedRootBefore, after: await sigstoreTrustedRootInfo(rootPath) };
   const safeMain = {
-    status: ['verified', 'rejected'].includes(electronMain.status) ? electronMain.status : 'control-unavailable',
-    failureCode: safeUpdaterFailureCode(electronMain.failureCode),
-    verifierCode: safeVerifierCode(electronMain.verifierCode, electronMain.verifierErrorType),
-    verifierErrorType: safeVerifierErrorType(electronMain.verifierErrorType),
-    trustedRoot: safeRoot(electronMain.trustedRoot),
+    attempts: electronMain,
+    firstFailure: electronMain.find(item => item.stage === 'verify-result' && item.status === 'rejected') || null,
+    lastResult: [...electronMain].reverse().find(item => item.stage === 'verify-result') || null,
   };
-  node.trustedRoot = safeRoot(node.trustedRoot);
   console.log('TUS_PROVENANCE_CONTROL ' + JSON.stringify({
     assetSha256: manifestFile.sha256,
     bundleSha256,
+    controlBundleIndex: selected?.bundleIndex ?? null,
+    matchedMainBundle: !!bundle,
     node,
     electronMain: safeMain,
   }));
+  assert.ok(bundle, 'the Node control verifies the exact bundle attempted by the packaged updater');
 }
-
 async function getManifest(tag) {
   const filename = 'candidate-' + platform + '.json';
   const url = 'https://github.com/smart-tinker/the_unfinished_shapes/releases/download/' +
@@ -367,6 +352,14 @@ async function updateOnce(distribution) {
     dialogMarker: path.join(workDir, 'update-dialog.json'),
     relaunchMarker: path.join(workDir, 'relaunch.json'),
   });
+  await current.page.evaluate(() => {
+    window.__tusProvenanceDiagnostics = [];
+    window.tus.onUpdateProgress(progress => {
+      if (progress?.provenanceDiagnostic && window.__tusProvenanceDiagnostics.length < 40) {
+        window.__tusProvenanceDiagnostics.push(progress.provenanceDiagnostic);
+      }
+    });
+  });
   await current.page.locator('#updates-download').click();
   try {
     await current.page.waitForFunction(() => {
@@ -418,6 +411,9 @@ async function updateOnce(distribution) {
       : null;
   });
   if (terminalFailure) {
+    const liveMainDiagnostics = await current.page.evaluate(() => window.__tusProvenanceDiagnostics || []).catch(() => []);
+    const mainDiagnostics = safeMainDiagnostics(liveMainDiagnostics, manifestFile, assetName, tag);
+    console.log('TUS_UPDATER_MAIN_DIAGNOSTIC ' + JSON.stringify(mainDiagnostics));
     const diagnostic = {
       phase: ['download', 'provenance'].includes(terminalFailure.phase) ? terminalFailure.phase : 'unknown',
       failureCode: safeUpdaterFailureCode(terminalFailure.failureCode),
@@ -425,10 +421,9 @@ async function updateOnce(distribution) {
       verifierErrorType: safeVerifierErrorType(terminalFailure.verifierErrorType),
       httpStatus: Number.isInteger(terminalFailure.httpStatus) && terminalFailure.httpStatus >= 400 && terminalFailure.httpStatus <= 599 ? terminalFailure.httpStatus : null,
     };
-    if (process.platform === 'darwin' && diagnostic.phase === 'provenance' &&
-        diagnostic.failureCode === 'SIGNATURE_REJECTED' && diagnostic.verifierCode === 'OTHER' &&
-        diagnostic.verifierErrorType === 'OTHER') {
-      await comparePinnedAttestation(current.instance, manifestFile, assetName, tag);
+    if (diagnostic.phase === 'provenance' && diagnostic.failureCode === 'SIGNATURE_REJECTED' &&
+        diagnostic.verifierCode === 'OTHER' && diagnostic.verifierErrorType === 'OTHER') {
+      await comparePinnedAttestation(mainDiagnostics, manifestFile, assetName, tag);
     }
     throw new Error('Updater failed before verification; update=' + JSON.stringify(diagnostic));
   }

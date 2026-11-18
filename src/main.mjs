@@ -3,7 +3,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { CodexBridge } from './codex.mjs';
 import { createGameToolSession, captureSceneSnapshot } from './game-tools.mjs';
 import { createWorldServer } from './server.mjs';
@@ -19,6 +19,17 @@ let win, bridge, localServer, connectedWorld, gameToolSession, fullscreenRestore
 let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, extractedUpdate = null, updateDownloadController = null;
 if (!app.requestSingleInstanceLock()) app.quit();
 const settings = () => loadSettings(app.getPath('userData'));
+async function sigstoreTrustedRootTargetInfo() {
+  const home = app.getPath('home');
+  const appData = process.platform === 'darwin'
+    ? path.join(home, 'Library', 'Application Support', 'sigstore-js')
+    : process.platform === 'win32'
+      ? path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'sigstore-js', 'Data')
+      : path.join(process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'sigstore-js');
+  const target = path.join(appData, encodeURIComponent('tuf-repo-cdn.sigstore.dev'), 'targets', 'trusted_root.json');
+  try { return { available: true, sha256: createHash('sha256').update(await readFile(target)).digest('hex') }; }
+  catch { return { available: false, sha256: null }; }
+}
 async function readBuildIdentity() {
   const version = app.getVersion();
   if (!app.isPackaged) return { version, sourceSha: null };
@@ -109,11 +120,24 @@ app.whenReady().then(async()=>{
     let failureReported = false;
     try {
       const directory = path.join(app.getPath('downloads'), 'TheUnfinishedShapes-Updates');
+      const diagnosticEnabled = process.argv.includes('--tus-smoke-provenance-diagnostic');
+      const reportDiagnostic = async diagnostic => {
+        if (!diagnosticEnabled) return;
+        try {
+          const trustedRootTarget = await sigstoreTrustedRootTargetInfo();
+          win?.webContents.send('updates:progress', {
+            state: 'verifying', provenanceDiagnostic: { ...diagnostic, trustedRootTarget },
+          });
+        } catch {}
+      };
+      await reportDiagnostic({ stage: 'updater-module-import', status: 'starting' });
       const { downloadVerifiedAsset } = await import('./update-package.mjs');
+      await reportDiagnostic({ stage: 'download-verified-asset', status: 'ready' });
       const result = await downloadVerifiedAsset({
         ...availableUpdate,
         tag: availableUpdate.release.tag_name,
         directory, signal: controller.signal,
+        ...(diagnosticEnabled ? { onProvenanceDiagnostic: reportDiagnostic } : {}),
         onProgress: progress => {
           if (progress?.state === 'failed') failureReported = true;
           win?.webContents.send('updates:progress', { state: 'downloading', ...progress });
@@ -125,6 +149,7 @@ app.whenReady().then(async()=>{
       return { assetName: result.assetName, sha256: result.sha256, distribution: availableUpdate.distribution };
     } catch (error) {
       if (!failureReported) {
+        await reportDiagnostic({ stage: 'main-catch-fallback', status: 'synthetic-other' });
         win?.webContents.send('updates:progress', { state: 'failed', phase: 'download', failureCode: 'OTHER', verifierCode: 'OTHER', verifierErrorType: 'OTHER', httpStatus: null });
       }
       throw error;

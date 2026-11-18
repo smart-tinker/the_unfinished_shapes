@@ -159,7 +159,12 @@ export async function verifyDownloadedFile({ filePath, sha256 }) {
   return true;
 }
 
-async function fetchAttestation({ fetcher, digest, tag, asset, signal, verifySignature }) {
+async function reportProvenanceDiagnostic(callback, diagnostic) {
+  if (typeof callback !== 'function') return;
+  try { await callback(diagnostic); } catch {}
+}
+
+async function fetchAttestation({ fetcher, digest, tag, asset, signal, verifySignature, onProvenanceDiagnostic }) {
   let response;
   try {
     response = await fetcher('https://api.github.com/repos/' + repository + '/attestations/sha256:' + digest, {
@@ -179,16 +184,32 @@ async function fetchAttestation({ fetcher, digest, tag, asset, signal, verifySig
   if (body.attestations.length < 1) throw updaterFailure('No GitHub release provenance was found.', 'MISSING_PROVENANCE');
   if (body.attestations.length > 20) throw updaterFailure('Invalid GitHub provenance response.', 'PROVENANCE_RESPONSE_ERROR');
   let lastError;
-  for (const item of body.attestations) {
-    if (!item?.bundle) continue;
-    try { return await verifyReleaseAttestation({ bundle: item.bundle, asset, tag }, verifySignature); }
-    catch (error) { lastError = error; }
+  for (let bundleIndex = 0; bundleIndex < body.attestations.length; bundleIndex++) {
+    const bundle = body.attestations[bundleIndex]?.bundle;
+    if (!bundle) continue;
+    const bundleSha256 = createHash('sha256').update(JSON.stringify(bundle)).digest('hex');
+    const diagnostic = { bundleIndex, bundleSha256, assetName: asset.name, assetSha256: digest, tag };
+    await reportProvenanceDiagnostic(onProvenanceDiagnostic, { ...diagnostic, stage: 'verify-start' });
+    try {
+      const result = await verifyReleaseAttestation({ bundle, asset, tag }, verifySignature);
+      await reportProvenanceDiagnostic(onProvenanceDiagnostic, { ...diagnostic, stage: 'verify-result', status: 'verified' });
+      return result;
+    } catch (error) {
+      await reportProvenanceDiagnostic(onProvenanceDiagnostic, {
+        ...diagnostic, stage: 'verify-result', status: 'rejected',
+        failureCode: safeUpdaterFailureCode(error?.failureCode),
+        verifierCode: safeVerifierCode(error?.code, error?.verifierErrorType),
+        verifierErrorType: safeVerifierErrorType(error?.verifierErrorType),
+      });
+      lastError = error;
+    }
   }
   throw lastError || updaterFailure('No matching GitHub release provenance was found.', 'NO_MATCHING_PROVENANCE');
 }
 
 export async function downloadVerifiedAsset({
   asset, tag, directory, fetcher = fetch, signal, verifySignature = verify, onProgress = () => {},
+  onProvenanceDiagnostic,
 }) {
   const digest = validateAsset(asset, tag);
   if (typeof directory !== 'string' || !directory || typeof fetcher !== 'function' || typeof onProgress !== 'function') {
@@ -266,7 +287,7 @@ export async function downloadVerifiedAsset({
     }
     phase = 'provenance';
     onProgress({ state: 'verifying', phase });
-    const provenance = await fetchAttestation({ fetcher, digest, tag, asset, signal: requestSignal, verifySignature });
+    const provenance = await fetchAttestation({ fetcher, digest, tag, asset, signal: requestSignal, verifySignature, onProvenanceDiagnostic });
     onProgress({ received: asset.size, total: asset.size, verified: true });
     return { filePath: finalPath, sha256: digest, size: asset.size, sourceSha: provenance.sourceSha, assetName: asset.name };
   } catch (error) {
