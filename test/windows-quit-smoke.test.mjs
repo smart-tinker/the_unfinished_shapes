@@ -108,7 +108,10 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
   assert.match(uia, /TUS_UIA_CHILD: phase-current-name-\' \+ \$index \+ \'-start/);
   assert.match(uia, /TUS_UIA_CHILD: phase-next-sibling-/);
   assert.match(uia, /Test-ExpectedPromptDetail/);
-  assert.match(uia, /-STA -EncodedCommand/);
+  assert.match(uia, /\[ValidateSet\('STA','MTA'\)\]\[string\]\$Apartment = 'MTA'/);
+  assert.match(uia, /NonInteractive -' \+ \$Apartment \+ ' -EncodedCommand/);
+  assert.match(uia, /fromHandleWatch = Stopwatch\.StartNew\(\)/);
+  assert.match(uia, /FromHandleMilliseconds/);
   assert.match(uia, /UseShellExecute = \$false/);
   assert.match(uia, /RedirectStandardInput = \$true/);
   assert.match(uia, /WaitForExit\(\$remaining\)/);
@@ -126,7 +129,11 @@ test('Windows quit prompt acceptance mutates message and detail independently', 
   assert.match(automation, /Modified activity detail\./);
   assert.match(automation, /TUS_UIA_TEST: detail-probe-/);
   assert.match(automation, /if \(matcherRejected\)\s*\{\s*try\s*\{\s*await ui\('keep-open', pid\)/);
-  assert.match(automation, /prompt-reader-timeout-\[a-z0-9-\]\+/);
+  assert.match(automation, /prompt-reader-timeout-phase-\(\[a-z0-9-\]\+\)/);
+  assert.match(automation, /TUS_UIA_COMPARE: /);
+  assert.match(automation, /fromhandle/);
+  assert.match(automation, /-ms=\\d\{1,6\}/);
+  assert.match(automation, /const apartmentOrder = modifiedField === 'detail' \? \['STA', 'MTA'\] : \['MTA', 'STA'\]/);
   assert.match(automation, /expected-foreground-prompt-unavailable/);
   assert.match(automation, /quit-dialog-not-found/);
   assert.match(automation, /automation-error-\[a-z0-9\]\+-at-\[a-z0-9-\]\+/i);

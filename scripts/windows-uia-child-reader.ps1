@@ -4,7 +4,8 @@ function Get-UiaPromptBodyResult {
     [Parameter(Mandatory=$true)][string[]]$ExpectedMessages,
     [Parameter(Mandatory=$true)][string[]]$ExpectedDetails,
     [Parameter(Mandatory=$true)][string]$GoalStatusPrefix,
-    [string]$ChildScriptOverride = ''
+    [string]$ChildScriptOverride = '',
+    [ValidateSet('STA','MTA')][string]$Apartment = 'MTA'
   )
   $childScript = @'
 $ErrorActionPreference = 'Stop'
@@ -118,7 +119,7 @@ try {
   $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childScript))
   $startInfo = New-Object System.Diagnostics.ProcessStartInfo
   $startInfo.FileName = Join-Path $PSHOME 'powershell.exe'
-  $startInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -STA -EncodedCommand ' + $encodedScript
+  $startInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -' + $Apartment + ' -EncodedCommand ' + $encodedScript
   $startInfo.UseShellExecute = $false
   $startInfo.CreateNoWindow = $true
   $startInfo.RedirectStandardInput = $true
@@ -129,7 +130,7 @@ try {
   function Write-UiaTimingMarker {
     param(
       [Parameter(Mandatory=$true)]
-      [ValidateSet('reader-setup','process-start','payload-encode','payload-write','reader-wait','child-kill','child-reap','output-drain','child-finally-kill','child-finally-reap')]
+      [ValidateSet('reader-setup','process-start','fromhandle','payload-encode','payload-write','reader-wait','child-kill','child-reap','output-drain','child-finally-kill','child-finally-reap')]
       [string]$Phase,
       [Parameter(Mandatory=$true)][long]$Milliseconds
     )
@@ -151,6 +152,11 @@ public sealed class TusUiaOutputCapture
 {
     private static readonly Regex TokenMatcher = new Regex(@"^TUS_UIA_CHILD: (phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-\d+-(?:start|done)|current-name-\d+(?:-\d+)?-(?:start|done)|next-sibling-\d+-\d+-(?:start|done))|matched-[01]|mismatch)$", RegexOptions.CultureInvariant);
     public readonly List<string> Tokens = new List<string>();
+    private Stopwatch fromHandleWatch;
+    public long FromHandleMilliseconds
+    {
+        get { return fromHandleWatch == null ? -1 : fromHandleWatch.ElapsedMilliseconds; }
+    }
     public readonly ManualResetEvent OutputReadComplete = new ManualResetEvent(false);
     public readonly DataReceivedEventHandler Handler;
 
@@ -167,7 +173,13 @@ public sealed class TusUiaOutputCapture
             return;
         }
         Match token = TokenMatcher.Match(eventArgs.Data);
-        if (token.Success) Tokens.Add(token.Groups[1].Value);
+        if (token.Success)
+        {
+            string value = token.Groups[1].Value;
+            Tokens.Add(value);
+            if (value == "phase-fromhandle-start") fromHandleWatch = Stopwatch.StartNew();
+            else if (value == "phase-fromhandle-done" && fromHandleWatch != null) fromHandleWatch.Stop();
+        }
     }
 }
 '@
@@ -371,6 +383,10 @@ public sealed class TusUiaOutputCapture
           Write-UiaTimingMarker 'child-finally-reap' $phaseWatch.ElapsedMilliseconds
         }
       }
+    } catch {}
+    try {
+      $fromHandleMilliseconds = $outputCapture.FromHandleMilliseconds
+      if ($fromHandleMilliseconds -ge 0) { Write-UiaTimingMarker 'fromhandle' $fromHandleMilliseconds }
     } catch {}
     try { Write-UiaPhaseMarker 'ui-child-disposing' } catch {}
     try { $process.remove_OutputDataReceived($outputCapture.Handler) } catch {}

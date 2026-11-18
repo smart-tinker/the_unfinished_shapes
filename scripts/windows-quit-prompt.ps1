@@ -1,11 +1,13 @@
 param(
   [Parameter(Mandatory=$true)][ValidateSet('keep-open','quit-anyway','assert-body-mismatch-rejected','assert-exact-body-recognized','dismiss-test-prompt','file-menu-open','file-menu-exit')][string]$Action,
   [Parameter(Mandatory=$true)][int]$ProcessId,
+  [ValidateSet('STA','MTA')][string]$Apartment = 'MTA',
   [string]$MenuKey
 )
 $ErrorActionPreference = 'Stop'
 $script:uiPhase = 'startup'
 $script:uiaPromptTimeoutPhase = 'none'
+$script:uiaApartment = $Apartment
 $script:windowApiWatch = [Diagnostics.Stopwatch]::StartNew()
 trap {
   $errorType = $_.Exception.GetType().Name -replace '[^A-Za-z0-9]', ''
@@ -209,7 +211,7 @@ function Find-ValidatedPromptButton {
   $cacheKey = $WindowHandle.ToInt64().ToString()
   if (-not $script:uiaPromptResults.ContainsKey($cacheKey)) {
     $script:uiPhase = 'checking-accessible-prompt-body'
-    $script:uiaPromptResults[$cacheKey] = Get-UiaPromptBodyResult $WindowHandle $ExpectedMessages $ExpectedDetails $GoalStatusPrefix
+    $script:uiaPromptResults[$cacheKey] = Get-UiaPromptBodyResult $WindowHandle $ExpectedMessages $ExpectedDetails $GoalStatusPrefix -Apartment $script:uiaApartment
   }
   $script:uiPhase = 'checking-exact-dialog-buttons'
   $uiaResult = [string]$script:uiaPromptResults[$cacheKey]

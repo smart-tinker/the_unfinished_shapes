@@ -26,7 +26,7 @@ const safeUiActions = new Set([
   'keep-open', 'quit-anyway', 'assert-body-mismatch-rejected',
   'assert-exact-body-recognized', 'dismiss-test-prompt', 'file-menu-open', 'file-menu-exit',
 ]);
-const safeUiTimingPattern = /^TUS_UIA_TIMING: (?:(?:window-api-init|reader-setup|process-start|payload-encode|payload-write|reader-wait|child-kill|child-reap|output-drain|child-finally-kill|child-finally-reap|taskkill|graphics-health|graphics-errors)-ms=\d{1,6}|app-close-ms=\d{1,8}|ui-(?:keep-open|quit-anyway|assert-body-mismatch-rejected|assert-exact-body-recognized|dismiss-test-prompt|file-menu-open|file-menu-exit)-ms=\d{1,6})$/;
+const safeUiTimingPattern = /^TUS_UIA_TIMING: (?:(?:window-api-init|reader-setup|process-start|fromhandle|payload-encode|payload-write|reader-wait|child-kill|child-reap|output-drain|child-finally-kill|child-finally-reap|taskkill|graphics-health|graphics-errors)-ms=\d{1,6}|app-close-ms=\d{1,8}|ui-(?:keep-open|quit-anyway|assert-body-mismatch-rejected|assert-exact-body-recognized|dismiss-test-prompt|file-menu-open|file-menu-exit)-ms=\d{1,6})$/;
 
 export function safeUiTimingLine(line) {
   return typeof line === 'string' && safeUiTimingPattern.test(line) ? line : null;
@@ -47,11 +47,11 @@ export function safeUiFailureOutcome(tokens = [], processFailure = 'probe-failed
   return marker || (/^(?:exit-[A-Za-z0-9_-]{1,32}|timeout-[A-Za-z0-9-]{1,32})$/.test(failure) ? failure : 'probe-failed');
 }
 
-async function ui(action, pid, menuKey) {
+async function ui(action, pid, menuKey, apartment = 'MTA') {
   const startedAt = Date.now();
   const args = [
     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', automationScript,
-    '-Action', action, '-ProcessId', String(pid),
+    '-Action', action, '-ProcessId', String(pid), '-Apartment', apartment,
   ];
   if (action === 'file-menu-exit') args.push('-MenuKey', menuKey);
   const { error, stdout, stderr } = await new Promise(resolve => {
@@ -101,18 +101,25 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
     window.close();
   });
 
-  let matcherRejected = false;
-  let matcherOutcome = 'unverified';
-  try {
-    const result = await ui('assert-body-mismatch-rejected', pid);
-    matcherRejected = /^TUS_UIA: modified-body-rejected$/m.test(result);
-    matcherOutcome = matcherRejected ? 'mismatch' : 'unexpected-result';
-  } catch (error) {
-    const safeOutcome = /exit-[a-z0-9_-]+|timeout-[a-z0-9-]+|(?:script-start|window-api-ready)-no-status|ui-(?:child-(?:starting|started|waiting|finished|killing|kill-waiting|exit-checking|output-draining|finally-exit-checking|finally-killing|finally-waiting|disposing)|payload-(?:preparing|ready|writing|written))|prompt-reader-timeout-[a-z0-9-]+|expected-foreground-prompt-unavailable|quit-dialog-not-found|automation-error-[a-z0-9]+-at-[a-z0-9-]+|modified-body-(?:button-returned|unverified|rejected)|expected-body-(?:mismatch|unavailable|timeout)|prompt-(?:foreground-window-unavailable|foreground-title-mismatch|expected-body-(?:mismatch|unavailable|timeout)|(?:invalid-window|title-mismatch|button-count-mismatch|expected-buttons-missing|requested-button-missing|expected-message-mismatch|expected-message-unavailable|matched))/gi;
-    const outcomeTokens = [...String(error?.message || '').matchAll(safeOutcome)];
-    matcherOutcome = outcomeTokens.length ? outcomeTokens[outcomeTokens.length - 1][0].toLowerCase() : 'probe-failed';
-    console.log('TUS_UIA_TEST: detail-probe-' + matcherOutcome);
+  const apartmentOrder = modifiedField === 'detail' ? ['STA', 'MTA'] : ['MTA', 'STA'];
+  const apartmentOutcomes = new Map();
+  for (const apartment of apartmentOrder) {
+    let outcome = 'unavailable';
+    try {
+      const result = await ui('assert-body-mismatch-rejected', pid, undefined, apartment);
+      outcome = /^TUS_UIA: modified-body-rejected$/m.test(result) ? 'mismatch'
+        : /^TUS_UIA: modified-body-button-returned$/m.test(result) ? 'unexpected-match' : 'unexpected-result';
+    } catch (error) {
+      const timeout = String(error?.message || '').match(/prompt-reader-timeout-phase-([a-z0-9-]+)/);
+      outcome = timeout ? 'timeout-' + timeout[1] : /modified-body-button-returned/.test(String(error?.message || ''))
+        ? 'unexpected-match' : 'unavailable';
+    }
+    apartmentOutcomes.set(apartment, outcome);
+    console.log('TUS_UIA_COMPARE: ' + apartment.toLowerCase() + '=' + outcome);
   }
+  const matcherRejected = apartmentOutcomes.get('MTA') === 'mismatch';
+  const matcherOutcome = apartmentOutcomes.get('MTA') || 'unavailable';
+  console.log('TUS_UIA_TEST: detail-probe-' + matcherOutcome);
 
   let keepOpenRejected = false;
   if (matcherRejected) {
