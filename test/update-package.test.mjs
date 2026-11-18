@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
@@ -778,3 +779,61 @@ test('extracts TAR app.asar when Electron rejects a direct archive write', async
   }
 });
 
+
+
+test('removes a materialized update target with Electron original-fs after a later failure', async () => {
+  const electronExecutable = createRequire(import.meta.url)('electron');
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-asar-cleanup-'));
+  const root = path.join(parent, 'TheUnfinishedShapes-linux-x64');
+  const resources = path.join(root, 'resources');
+  const archive = path.join(parent, 'linux.tar.gz');
+  const target = path.join(parent, 'TheUnfinishedShapes-0.1.0-rc.11');
+  try {
+    await mkdir(resources, { recursive: true });
+    await writeFile(path.join(resources, 'app.asar'), Buffer.from('verified app.asar fixture'));
+    await createTar({ file: archive, gzip: true, cwd: parent, portable: true }, ['TheUnfinishedShapes-linux-x64']);
+    const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+    const childSource = [
+      "import fs from 'node:fs';",
+      "import { syncBuiltinESMExports } from 'node:module';",
+      "const wrappedRm = fs.promises.rm;",
+      "let intercepted = false;",
+      "fs.promises.rm = async (target, options) => {",
+      "  if (typeof target === 'string' && target.endsWith('TheUnfinishedShapes-0.1.0-rc.11')) {",
+      "    intercepted = true;",
+      "    return;",
+      "  }",
+      "  return wrappedRm(target, options);",
+      "};",
+      "syncBuiltinESMExports();",
+      "const { rm: testRm } = await import('node:fs/promises');",
+      "const [moduleUrl, filePath, directory, tag, assetName, sha256, target] = process.argv.slice(1);",
+      "await testRm(target, { recursive: true, force: true });",
+      "if (!intercepted) { process.stdout.write('control-failed'); process.exitCode = 2; }",
+      "else {",
+      "  intercepted = false;",
+      "  const { extractVerifiedArchive } = await import(moduleUrl);",
+      "  try {",
+      "    await extractVerifiedArchive({ filePath, directory, tag, assetName, sha256, platform: 'linux' });",
+      "    process.stdout.write('unexpected-success');",
+      "  } catch (error) {",
+      "    let targetExists = false;",
+      "    try { await fs.promises.lstat(target); targetExists = true; } catch {}",
+      "    process.stdout.write(error?.code === 'ENOENT' ? targetExists ? 'target-left' : 'cleaned' : 'original-error-changed');",
+      "  }",
+      "}",
+    ].join(String.fromCharCode(10));
+    const child = spawnSync(electronExecutable, [
+      '--input-type=module', '-e', childSource,
+      new URL('../src/update-package.mjs', import.meta.url).href,
+      archive, parent, tag, asset.name, sha256, target,
+    ], {
+      encoding: 'utf8', windowsHide: true,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    });
+    assert.equal(child.status, 0, 'the Electron cleanup boundary control ran');
+    assert.equal(child.stdout, 'cleaned', 'a post-materialization error removes the target and stays intact');
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
