@@ -73,5 +73,8 @@ test('TUS runtime boundary preserves only fixed import and renderer-invoke outco
     ['unknown', 'unknown'],
   ]);
   assert.equal(diagnostics[2].moduleFailureCode, 'MODULE_IMPORT_REJECTED');
-  assert.doesNotMatch(JSON.stringify(diagnostics), /C:\\/private\\/path|raw IPC exception|PRIVATE_CODE/);
+  const serialized = JSON.stringify(diagnostics);
+  assert.equal(serialized.includes('C:/private/path'), false);
+  assert.equal(serialized.includes('raw IPC exception'), false);
+  assert.equal(serialized.includes('PRIVATE_CODE'), false);
 });
