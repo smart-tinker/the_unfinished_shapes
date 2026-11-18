@@ -1265,7 +1265,9 @@ $('updates-download').addEventListener('click', async () => {
   delete status.dataset.updateHttpStatus;
   updateDownloading = true; updateBusy = true; updateButtons(); updateStatus('Downloading release package…');
   try {
+    status.dataset.updateInvokeStatus = 'pending';
     const result = await bridge.downloadUpdate();
+    status.dataset.updateInvokeStatus = 'fulfilled';
     if (result?.cancelled === true) {
       updateStatus('Download cancelled. You can try again.');
       return;
@@ -1273,6 +1275,7 @@ $('updates-download').addEventListener('click', async () => {
     updateDownloaded = true;
     updateStatus('Verified ' + result.assetName + ' (SHA-256 ' + result.sha256.slice(0, 12) + '…).');
   } catch (error) {
+    status.dataset.updateInvokeStatus = 'rejected';
     if (error?.name === 'AbortError' || error?.code === 'ABORT_ERR') updateStatus('Download cancelled. You can try again.');
     else updateStatus(String(error?.message || error).slice(0, 300));
   }

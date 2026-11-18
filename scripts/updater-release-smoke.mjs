@@ -156,6 +156,17 @@ async function fileDigest(filePath) {
   return hash.digest('hex');
 }
 
+async function updaterRuntimeBoundary(current, manifestFile, assetName, tag) {
+  const [main, rendererInvoke] = await Promise.all([
+    withTimeout(current.instance.evaluate(() => globalThis.__tusUpdaterSmokeBoundary || null), 'Updater main boundary snapshot', 5000).catch(() => null),
+    withTimeout(current.page.evaluate(() => document.querySelector('#updates-status')?.dataset.updateInvokeStatus || 'not-started'), 'Updater renderer invoke snapshot', 5000).catch(() => null),
+  ]);
+  return safeMainDiagnostics([
+    { stage: 'updater-module-import', status: main?.moduleImport, moduleFailureCode: main?.moduleFailureCode },
+    { stage: 'download-verified-asset', status: main?.downloadVerifiedAsset },
+    { stage: 'renderer-invoke', status: rendererInvoke },
+  ], manifestFile, assetName, tag);
+}
 
 function sigstoreTrustedRootTargetPath() {
   const home = os.homedir();
@@ -404,8 +415,10 @@ async function updateOnce(distribution) {
       await current.page.evaluate(() => window.__tusProvenanceDiagnostics || []).catch(() => []),
       manifestFile, assetName, tag,
     );
+    const runtimeBoundary = await updaterRuntimeBoundary(current, manifestFile, assetName, tag);
+    console.log('TUS_UPDATER_RUNTIME_BOUNDARY ' + JSON.stringify(runtimeBoundary));
     assert.ok([diagnostic.receivedMB, diagnostic.totalMB].every(value => value === null || value >= 0 && value <= 500), 'timeout progress diagnostic stays bounded');
-    throw new Error(error.message + '; update=' + JSON.stringify(safeDiagnostic) + '; main=' + JSON.stringify(mainDiagnostics));
+    throw new Error(error.message + '; update=' + JSON.stringify(safeDiagnostic) + '; main=' + JSON.stringify(mainDiagnostics) + '; runtime=' + JSON.stringify(runtimeBoundary));
   }
   const terminalFailure = await current.page.evaluate(() => {
     const status = document.querySelector('#updates-status');
@@ -423,6 +436,8 @@ async function updateOnce(distribution) {
     const liveMainDiagnostics = await current.page.evaluate(() => window.__tusProvenanceDiagnostics || []).catch(() => []);
     const mainDiagnostics = safeMainDiagnostics(liveMainDiagnostics, manifestFile, assetName, tag);
     console.log('TUS_UPDATER_MAIN_DIAGNOSTIC ' + JSON.stringify(mainDiagnostics));
+    const runtimeBoundary = await updaterRuntimeBoundary(current, manifestFile, assetName, tag);
+    console.log('TUS_UPDATER_RUNTIME_BOUNDARY ' + JSON.stringify(runtimeBoundary));
     const diagnostic = {
       phase: ['download', 'provenance'].includes(terminalFailure.phase) ? terminalFailure.phase : 'unknown',
       failureCode: safeUpdaterFailureCode(terminalFailure.failureCode),
@@ -434,13 +449,18 @@ async function updateOnce(distribution) {
         diagnostic.verifierCode === 'OTHER' && diagnostic.verifierErrorType === 'OTHER') {
       await comparePinnedAttestation(mainDiagnostics, manifestFile, assetName, tag);
     }
-    throw new Error('Updater failed before verification; update=' + JSON.stringify(diagnostic));
+    throw new Error('Updater failed before verification; update=' + JSON.stringify(diagnostic) + '; runtime=' + JSON.stringify(runtimeBoundary));
   }
   const successfulMainDiagnostics = safeMainDiagnostics(
     await current.page.evaluate(() => window.__tusProvenanceDiagnostics || []).catch(() => []),
     manifestFile, assetName, tag,
   );
   console.log('TUS_UPDATER_MAIN_DIAGNOSTIC ' + JSON.stringify(successfulMainDiagnostics));
+  const runtimeBoundary = await updaterRuntimeBoundary(current, manifestFile, assetName, tag);
+  console.log('TUS_UPDATER_RUNTIME_BOUNDARY ' + JSON.stringify(runtimeBoundary));
+  assert.equal(runtimeBoundary.find(item => item.stage === 'updater-module-import')?.status, 'fulfilled', 'the packaged main process completed the normal relative updater import');
+  assert.equal(runtimeBoundary.find(item => item.stage === 'download-verified-asset')?.status, 'fulfilled', 'the packaged main process completed the selected asset download');
+  assert.equal(runtimeBoundary.find(item => item.stage === 'renderer-invoke')?.status, 'fulfilled', 'the renderer received a fulfilled updater IPC invoke');
   const liveAttempt = successfulMainDiagnostics.find(item => item.stage === 'verify-start' && item.assetMatches && item.bundleSha256);
   assert.ok(liveAttempt, 'packaged Electron verified the exact live release bundle');
   assert.ok(successfulMainDiagnostics.some(item =>

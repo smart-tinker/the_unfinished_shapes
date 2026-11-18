@@ -17,6 +17,10 @@ app.setPath('userData',userData);
 const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld, gameToolSession, fullscreenRestoreBounds;
 let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, extractedUpdate = null, updateDownloadController = null;
+const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic')
+  ? { moduleImport: 'not-started', moduleFailureCode: null, downloadVerifiedAsset: 'not-started' }
+  : null;
+if (updaterSmokeBoundary) globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
 if (!app.requestSingleInstanceLock()) app.quit();
 const settings = () => loadSettings(app.getPath('userData'));
 async function sigstoreTrustedRootTargetInfo() {
@@ -142,8 +146,22 @@ app.whenReady().then(async()=>{
         } catch {}
       };
       await reportDiagnostic({ stage: 'updater-module-import', status: 'starting' });
-      const { downloadVerifiedAsset } = await import('./update-package.mjs');
-      await reportDiagnostic({ stage: 'download-verified-asset', status: 'ready' });
+      if (updaterSmokeBoundary) updaterSmokeBoundary.moduleImport = 'pending';
+      let downloadVerifiedAsset;
+      try {
+        ({ downloadVerifiedAsset } = await import('./update-package.mjs'));
+        if (updaterSmokeBoundary) updaterSmokeBoundary.moduleImport = 'fulfilled';
+      } catch (error) {
+        if (updaterSmokeBoundary) {
+          updaterSmokeBoundary.moduleImport = 'rejected';
+          updaterSmokeBoundary.moduleFailureCode = 'MODULE_IMPORT_REJECTED';
+        }
+        await reportDiagnostic({ stage: 'updater-module-import', status: 'rejected', moduleFailureCode: 'MODULE_IMPORT_REJECTED' });
+        throw error;
+      }
+      await reportDiagnostic({ stage: 'updater-module-import', status: 'ready' });
+      await reportDiagnostic({ stage: 'download-verified-asset', status: 'starting' });
+      if (updaterSmokeBoundary) updaterSmokeBoundary.downloadVerifiedAsset = 'pending';
       const result = await downloadVerifiedAsset({
         ...availableUpdate,
         tag: availableUpdate.release.tag_name,
@@ -154,11 +172,13 @@ app.whenReady().then(async()=>{
           win?.webContents.send('updates:progress', { state: 'downloading', ...progress });
         },
       });
+      if (updaterSmokeBoundary) updaterSmokeBoundary.downloadVerifiedAsset = 'fulfilled';
       if (result?.cancelled === true) return result;
       downloadedUpdate = { ...availableUpdate, ...result };
       win?.webContents.send('updates:progress', { state: 'verified', assetName: result.assetName, sha256: result.sha256 });
       return { assetName: result.assetName, sha256: result.sha256, distribution: availableUpdate.distribution };
     } catch (error) {
+      if (updaterSmokeBoundary?.downloadVerifiedAsset === 'pending') updaterSmokeBoundary.downloadVerifiedAsset = 'rejected';
       if (!failureReported) {
         await reportDiagnostic({ stage: 'main-catch-fallback', status: 'synthetic-other' });
         win?.webContents.send('updates:progress', { state: 'failed', phase: 'download', failureCode: 'OTHER', verifierCode: 'OTHER', verifierErrorType: 'OTHER', httpStatus: null });
