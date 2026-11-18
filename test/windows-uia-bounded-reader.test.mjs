@@ -102,6 +102,7 @@ test('bounded WaitForExit control honors 1000ms with redirected streams and asyn
   const startedAt = Date.now();
   let stdout = '';
   let processFailed = false;
+  let processOutcome = 'success';
   try {
     ({ stdout } = await run('powershell.exe', [
       '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
@@ -109,6 +110,12 @@ test('bounded WaitForExit control honors 1000ms with redirected streams and asyn
     ], { timeout: 15000, windowsHide: true }));
   } catch (error) {
     processFailed = true;
+    const status = Number.isInteger(error?.code) ? 'exit-' + error.code
+      : typeof error?.code === 'string' && /^[A-Z0-9_]{1,32}$/.test(error.code) ? error.code
+      : error?.killed === true ? 'killed' : 'unknown';
+    const signal = ['SIGABRT', 'SIGBREAK', 'SIGFPE', 'SIGILL', 'SIGINT', 'SIGSEGV', 'SIGTERM'].includes(error?.signal)
+      ? error.signal : 'none';
+    processOutcome = status + ';signal=' + signal;
     stdout = String(error?.stdout ?? '');
   }
   const safeOutput = filterAllowlistedOutput(stdout, safeControlMarkers);
@@ -116,7 +123,7 @@ test('bounded WaitForExit control honors 1000ms with redirected streams and asyn
   const elapsed = Date.now() - startedAt;
 
   assert.ok(elapsed < 6000, 'the bounded WaitForExit control completes within six seconds');
-  assert.equal(processFailed, false, 'the control PowerShell process exits successfully');
+  assert.equal(processFailed, false, 'the control PowerShell process exits successfully (' + processOutcome + ')');
   for (const marker of [
     'control-start', 'child-started', 'wait-started',
     'wait-returned', 'wait-timed-out', 'wait-within-bound',
