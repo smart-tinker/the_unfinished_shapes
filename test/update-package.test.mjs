@@ -335,42 +335,52 @@ test('extracts the verified Linux archive into a new version folder', async () =
 });
 
 function zipFixture(name, contents) {
-  const filename = Buffer.from(name);
-  let crc = 0xffffffff;
-  for (const byte of contents) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+  const entries = Array.isArray(name) ? name : [{ name, contents, mode: 0o100755 }];
+  const localFiles = [];
+  const centralFiles = [];
+  let localSize = 0, directorySize = 0;
+  for (const item of entries) {
+    const filename = Buffer.from(item.name);
+    const bytes = Buffer.from(item.contents);
+    let crc = 0xffffffff;
+    for (const byte of bytes) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+    }
+    crc = (crc ^ 0xffffffff) >>> 0;
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x800, 6);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(bytes.length, 18);
+    local.writeUInt32LE(bytes.length, 22);
+    local.writeUInt16LE(filename.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(0x0314, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0x800, 8);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(bytes.length, 20);
+    central.writeUInt32LE(bytes.length, 24);
+    central.writeUInt16LE(filename.length, 28);
+    central.writeUInt32LE((item.mode ?? 0o100755) * 0x10000, 38);
+    central.writeUInt32LE(localSize, 42);
+    const localFile = Buffer.concat([local, filename, bytes]);
+    localFiles.push(localFile);
+    centralFiles.push(Buffer.concat([central, filename]));
+    localSize += localFile.length;
+    directorySize += central.length + filename.length;
   }
-  crc = (crc ^ 0xffffffff) >>> 0;
-  const local = Buffer.alloc(30);
-  local.writeUInt32LE(0x04034b50, 0);
-  local.writeUInt16LE(20, 4);
-  local.writeUInt16LE(0x800, 6);
-  local.writeUInt32LE(crc, 14);
-  local.writeUInt32LE(contents.length, 18);
-  local.writeUInt32LE(contents.length, 22);
-  local.writeUInt16LE(filename.length, 26);
-  const central = Buffer.alloc(46);
-  central.writeUInt32LE(0x02014b50, 0);
-  central.writeUInt16LE(0x0314, 4);
-  central.writeUInt16LE(20, 6);
-  central.writeUInt16LE(0x800, 8);
-  central.writeUInt32LE(crc, 16);
-  central.writeUInt32LE(contents.length, 20);
-  central.writeUInt32LE(contents.length, 24);
-  central.writeUInt16LE(filename.length, 28);
-  central.writeUInt32LE(0o100755 * 0x10000, 38);
-  const localSize = local.length + filename.length + contents.length;
-  const directorySize = central.length + filename.length;
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(1, 8);
-  end.writeUInt16LE(1, 10);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
   end.writeUInt32LE(directorySize, 12);
   end.writeUInt32LE(localSize, 16);
-  return Buffer.concat([local, filename, contents, central, filename, end]);
+  return Buffer.concat([...localFiles, ...centralFiles, end]);
 }
-
 test('extracts Windows portable and macOS app archives under the selected folder', async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-zip-'));
   const cases = [
@@ -402,6 +412,55 @@ test('extracts Windows portable and macOS app archives under the selected folder
       assert.equal(result.executablePath, path.join(await realpath(parent), item.targetName, item.executable));
       assert.deepEqual(await readFile(result.executablePath), payload);
     }
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+
+test('accepts ditto AppleDouble metadata without writing it outside the macOS app', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-appledouble-'));
+  const archive = path.join(parent, 'macos.zip');
+  const payload = Buffer.from('macOS executable fixture');
+  try {
+    await writeFile(archive, zipFixture([
+      { name: 'TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes', contents: payload, mode: 0o100755 },
+      { name: '__MACOSX/', contents: Buffer.alloc(0), mode: 0o040755 },
+      { name: '__MACOSX/._TheUnfinishedShapes.app', contents: Buffer.from('root AppleDouble metadata'), mode: 0o100644 },
+      { name: '__MACOSX/TheUnfinishedShapes.app/Contents/MacOS/._TheUnfinishedShapes', contents: Buffer.from('file AppleDouble metadata'), mode: 0o100644 },
+    ]));
+    const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+    const result = await extractVerifiedArchive({
+      filePath: archive, directory: parent, tag,
+      assetName: 'TheUnfinishedShapes-0.1.0-rc.11-darwin-arm64.zip',
+      sha256, platform: 'darwin',
+    });
+    assert.equal(result.target, path.join(await realpath(parent), 'TheUnfinishedShapes-0.1.0-rc.11.app'));
+    assert.deepEqual(await readFile(result.executablePath), payload);
+    assert.equal((await readdir(parent)).includes('__MACOSX'), false);
+    assert.equal((await readdir(path.join(result.target, 'Contents', 'MacOS'))).includes('._TheUnfinishedShapes'), false);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test('rejects traversal inside ditto AppleDouble metadata without writing outside the app', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-appledouble-path-'));
+  const archive = path.join(parent, 'macos.zip');
+  try {
+    await writeFile(archive, zipFixture([
+      { name: 'TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes', contents: Buffer.from('fixture'), mode: 0o100755 },
+      { name: '__MACOSX/../outside', contents: Buffer.from('must not be written'), mode: 0o100644 },
+    ]));
+    const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+    await assert.rejects(extractVerifiedArchive({
+      filePath: archive, directory: parent, tag,
+      assetName: 'TheUnfinishedShapes-0.1.0-rc.11-darwin-arm64.zip',
+      sha256, platform: 'darwin',
+    }), /archive|unsafe/i);
+    const names = await readdir(parent);
+    assert.equal(names.includes('outside'), false);
+    assert.equal(names.includes('TheUnfinishedShapes-0.1.0-rc.11.app'), false);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
