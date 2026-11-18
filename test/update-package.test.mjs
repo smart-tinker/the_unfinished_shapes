@@ -261,18 +261,23 @@ test('classifies real archive-path rejection and known file-type, size and files
   assert.doesNotMatch(JSON.stringify(safeCodes), /private|runner|path|PRIVATE_TAR_CODE/);
 });
 
-test('classifies only an Invalid package error while opening the expected app.asar for writing', async () => {
-  const { safeArchiveExtractionOperation } = await import('../src/update-package.mjs');
+test('classifies ASAR open failures only for the exact app.asar output path', async () => {
+  const { classifyAppAsarOpenFailure, safeArchiveExtractionOperation } = await import('../src/update-package.mjs');
+  assert.equal(typeof classifyAppAsarOpenFailure, 'function', 'ASAR attribution compares the failing output path');
   assert.equal(typeof safeArchiveExtractionOperation, 'function', 'ASAR write failures have a safe operation classifier');
+  const expected = path.join(os.tmpdir(), 'tus-asar-update', 'resources', 'app.asar');
   const failures = [
-    [Object.assign(new Error('Invalid package C:/private/app.asar'), { extractOperation: 'app-asar-write' }), 'asar-open-invalid-package'],
-    [Object.assign(new Error('Invalid package C:/private/app.asar'), { extractOperation: 'other' }), 'unknown'],
-    [Object.assign(new Error('private open failure'), { extractOperation: 'app-asar-write' }), 'unknown'],
-    [new Error('Invalid package C:/private/app.asar'), 'unknown'],
+    [Object.assign(new Error('Invalid package /private/runner/app.asar'), { entry: { absolute: expected } }), 'asar-open-invalid-package'],
+    [Object.assign(new Error('Invalid package /private/runner/app.asar'), { extractPath: expected }), 'asar-open-invalid-package'],
+    [Object.assign(new Error('Invalid package /private/runner/app.asar'), { entry: { absolute: expected + '.other' } }), 'unknown'],
+    [Object.assign(new Error('private open failure'), { entry: { absolute: expected } }), 'unknown'],
+    [new Error('Invalid package /private/runner/app.asar'), 'unknown'],
   ];
-  const results = failures.map(([error]) => safeArchiveExtractionOperation(error));
-  assert.deepEqual(results, failures.map(([, expected]) => expected));
-  assert.doesNotMatch(JSON.stringify(results), /Invalid|private|C:|app\.asar/);
+  const operations = failures.map(([error]) => classifyAppAsarOpenFailure(error, expected));
+  assert.deepEqual(operations, failures.map(([, expectedOperation]) => expectedOperation));
+  assert.equal(safeArchiveExtractionOperation({ extractOperation: operations[0] }), 'asar-open-invalid-package');
+  assert.equal(safeArchiveExtractionOperation({ extractOperation: expected }), 'unknown');
+  assert.doesNotMatch(JSON.stringify({ operations, safe: safeArchiveExtractionOperation({ extractOperation: operations[0] }) }), /private|runner|app\.asar/);
 });
 
 test('archive extraction refuses to replace an existing version folder', async () => {
