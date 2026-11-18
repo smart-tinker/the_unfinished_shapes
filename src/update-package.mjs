@@ -519,12 +519,21 @@ async function extractZip(filePath, destination, spec) {
         entry.uncompressedSize < 0 || (extractedBytes += entry.uncompressedSize) > maxExtractedBytes) {
       throw new Error('Update archive exceeds extraction limits.');
     }
+    const mode = (entry.externalFileAttributes >>> 16) & 0o170000;
+    if (spec.root === 'TheUnfinishedShapes.app' &&
+        (entry.fileName === '__MACOSX' || entry.fileName.startsWith('__MACOSX/'))) {
+      const relative = safeArchiveEntryPath(entry.fileName, '__MACOSX');
+      const directory = entry.fileName.endsWith('/') || mode === 0o040000;
+      if (directory && (mode === 0 || mode === 0o040000)) continue;
+      const name = relative.slice(relative.lastIndexOf('/') + 1);
+      if (!directory && (mode === 0 || mode === 0o100000) && name.startsWith('._') && name.length > 2) continue;
+      throw new Error('Update archive contains an unsupported file type.');
+    }
     const relative = safeArchiveEntryPath(entry.fileName, spec.root);
     if (!relative) continue;
     const output = path.resolve(destination, ...relative.split('/'));
     if (!isWithin(destination, output)) throw new Error('Update archive path escapes its destination.');
     const directory = entry.fileName.endsWith('/');
-    const mode = (entry.externalFileAttributes >>> 16) & 0o170000;
     if (directory || mode === 0o040000) {
       await mkdir(output, { recursive: true, mode: 0o700 });
       continue;
