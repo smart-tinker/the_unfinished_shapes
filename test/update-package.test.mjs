@@ -251,12 +251,14 @@ test('classifies real archive-path rejection and known file-type, size and files
     [pathFailure, 'ARCHIVE_PATH'],
     [new Error('Update archive contains an unsupported file type.'), 'ARCHIVE_FILE_TYPE'],
     [new Error('Update archive exceeds extraction limits.'), 'ARCHIVE_SIZE'],
-    [Object.assign(new Error('/private/runner/path'), { code: 'ENOSPC' }), 'FILESYSTEM_SPACE'],
+    [Object.assign(new Error('/private/runner/path'), { code: 'ENOSPC', tarCode: 'TAR_ENTRY_ERROR' }), 'FILESYSTEM_SPACE'],
+    [Object.assign(new Error('private tar message'), { code: 'TAR_ENTRY_ERROR', tarCode: 'TAR_ENTRY_ERROR' }), 'TAR_ENTRY_ERROR'],
+    [Object.assign(new Error('private tar code'), { tarCode: 'PRIVATE_TAR_CODE' }), 'OTHER'],
     [new Error('private archive path'), 'OTHER'],
   ];
   const safeCodes = failures.map(([error]) => safeArchiveExtractionFailureCode(error));
   assert.deepEqual(safeCodes, failures.map(([, expected]) => expected));
-  assert.doesNotMatch(JSON.stringify(safeCodes), /private|runner|path/);
+  assert.doesNotMatch(JSON.stringify(safeCodes), /private|runner|path|PRIVATE_TAR_CODE/);
 });
 
 test('archive extraction refuses to replace an existing version folder', async () => {
