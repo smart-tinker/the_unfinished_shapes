@@ -1,8 +1,9 @@
 import { test } from 'node:test';
+import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { create as createTar } from 'tar';
@@ -723,3 +724,57 @@ test('distinguishes target metadata search from refresh only by its own frame', 
   }
   assert.equal(safeVerifierSetupStep(rootOnlyError), 'unknown');
 });
+
+test('extracts TAR app.asar when Electron rejects a direct archive write', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-asar-tar-'));
+  const root = path.join(parent, 'TheUnfinishedShapes-linux-x64');
+  const resources = path.join(root, 'resources');
+  const archive = path.join(parent, 'linux.tar.gz');
+  const payload = Buffer.from('verified app.asar fixture');
+  try {
+    await mkdir(resources, { recursive: true });
+    await writeFile(path.join(root, 'TheUnfinishedShapes'), 'Linux executable fixture', { mode: 0o755 });
+    await writeFile(path.join(resources, 'app.asar'), payload);
+    await createTar({ file: archive, gzip: true, cwd: parent, portable: true }, ['TheUnfinishedShapes-linux-x64']);
+    const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+    const childSource = [
+      "import fs from 'node:fs';",
+      "import path from 'node:path';",
+      "import { syncBuiltinESMExports } from 'node:module';",
+      "const open = fs.open;",
+      "fs.open = function (file, ...args) {",
+      "  if (typeof file === 'string' && path.basename(file) === 'app.asar') {",
+      "    const callback = args.at(-1);",
+      "    queueMicrotask(() => callback(new Error('Invalid package ' + file)));",
+      "    return;",
+      "  }",
+      "  return open.call(fs, file, ...args);",
+      "};",
+      "syncBuiltinESMExports();",
+      "const [moduleUrl, filePath, directory, tag, assetName, sha256, platform] = process.argv.slice(1);",
+      "const { extractVerifiedArchive } = await import(moduleUrl);",
+      "try {",
+      "  await extractVerifiedArchive({ filePath, directory, tag, assetName, sha256, platform });",
+      "  process.stdout.write('success');",
+      "} catch (error) {",
+      "  process.stdout.write(error?.extractOperation === 'asar-open-invalid-package' ? 'asar-open-invalid-package' : 'other');",
+      "  process.exitCode = 1;",
+      "}",
+    ].join('\n');
+    const child = spawnSync(process.execPath, [
+      '--input-type=module', '-e', childSource,
+      new URL('../src/update-package.mjs', import.meta.url).href,
+      archive, parent, tag, asset.name, sha256, 'linux',
+    ], { encoding: 'utf8', windowsHide: true });
+    assert.equal(child.stdout, 'success', 'the verified app.asar must survive the Electron ASAR open boundary');
+    assert.equal(child.status, 0);
+    const target = path.join(parent, 'TheUnfinishedShapes-0.1.0-rc.11');
+    const extractedAsar = path.join(target, 'resources', 'app.asar');
+    assert.deepEqual(await readFile(extractedAsar), payload);
+    assert.equal((await lstat(extractedAsar)).isFile(), true);
+    assert.deepEqual(await readdir(path.join(target, 'resources')), ['app.asar']);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
