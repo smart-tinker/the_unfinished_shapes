@@ -37,3 +37,14 @@ test('structured IPC cancellation reports cancellation and restores retry contro
   assert.equal(h.element('updates-download').disabled, false, 'the selected package can be retried');
   assert.equal(h.element('updates-cancel').disabled, true, 'a completed cancellation cannot be repeated');
 });
+
+
+test('startup release rate limit is explained from its safe category',()=>{
+ const h=rendererHarness();
+ h.run("const updateStatus = text => { $('updates-status').textContent = text; };");
+ h.load('function showStartupUpdateNotice(', 'let checkedUpdate = null,');
+ h.run("showStartupUpdateNotice({ status: 'unavailable', errorCode: 'rate_limited' })");
+ assert.equal(h.element('updates-notice').dataset.errorCode,'rate_limited');
+ assert.match(h.element('updates-notice').title,/rate limit/i);
+ assert.match(h.element('updates-status').textContent,/rate limit/i);
+});

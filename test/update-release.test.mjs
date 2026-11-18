@@ -43,3 +43,17 @@ test('labels older candidates as downgrades and equal versions as current',async
  assert.equal(releaseRelation('v0.1.0-rc11','0.1.0-rc.11'),'current');
  assert.equal(releaseRelation('v0.1.0','0.1.0-rc.11'),'update');
 });
+
+
+test('reports a release API rate limit from the first request without retrying', async()=>{
+ const {listPublishedReleases}=await updater();
+ let requests=0;
+ await assert.rejects(listPublishedReleases(async()=>{
+  requests++;
+  return new Response('',{status:429});
+ }),error=>{
+  assert.equal(error.releaseCheckErrorCode,'rate_limited');
+  return true;
+ });
+ assert.equal(requests,1);
+});
