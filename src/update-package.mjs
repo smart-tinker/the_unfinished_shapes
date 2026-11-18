@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { constants, createReadStream, createWriteStream } from 'node:fs';
 import { access, lstat, mkdir, rm, symlink, realpath, rename } from 'node:fs/promises';
 import path from 'node:path';
@@ -7,6 +8,8 @@ import { extract as extractTar } from 'tar';
 import yauzl from 'yauzl';
 import { createVerifier, verify } from 'sigstore';
 import { parseReleaseTag } from './update-release.mjs';
+
+const electronFs = process.versions.electron ? createRequire(import.meta.url)('original-fs') : null;
 
 const repository = 'smart-tinker/the_unfinished_shapes';
 const repositoryUrl = 'https://github.com/' + repository;
@@ -542,6 +545,7 @@ function platformArchive(platform, assetName, tag) {
 }
 
 async function extractZip(filePath, destination, spec, extraction, appAsarPath) {
+  const appAsarRelative = path.relative(destination, appAsarPath).split(path.sep).join('/');
   extraction.value = 'zip-open';
   const zip = await yauzl.openPromise(filePath, { strictFileNames: true, validateEntrySizes: true });
   let count = 0, extractedBytes = 0;
@@ -565,9 +569,12 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath) 
     }
     const relative = safeArchiveEntryPath(entry.fileName, spec.root);
     if (!relative) continue;
+    if (relative.startsWith(appAsarRelative + '/')) throw new Error('Update archive contains an unsupported file type.');
     const output = path.resolve(destination, ...relative.split('/'));
     if (!isWithin(destination, output)) throw new Error('Update archive path escapes its destination.');
     const directory = entry.fileName.endsWith('/');
+    const isAppAsar = output === appAsarPath;
+    if (isAppAsar && (directory || mode === 0o040000)) throw new Error('Update archive contains an unsupported file type.');
     if (directory || mode === 0o040000) {
       extraction.value = 'write';
       await mkdir(output, { recursive: true, mode: 0o700 });
@@ -585,6 +592,7 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath) 
       for await (const chunk of stream) chunks.push(chunk);
       const target = Buffer.concat(chunks).toString('utf8');
       safeArchiveLinkTarget(target, path.dirname(output), destination);
+      if (isAppAsar) throw new Error('Update archive contains an unsupported file type.');
       await symlink(target, output);
       extraction.value = 'entry';
       continue;
@@ -593,7 +601,10 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath) 
     const stream = await zip.openReadStreamPromise(entry);
     const fileMode = ((entry.externalFileAttributes >>> 16) & 0o777) || 0o600;
     try {
-      await pipeline(stream, createWriteStream(output, { flags: 'wx', mode: fileMode }));
+      const writeStream = isAppAsar && electronFs
+        ? electronFs.createWriteStream(output, { flags: 'wx', mode: fileMode })
+        : createWriteStream(output, { flags: 'wx', mode: fileMode });
+      await pipeline(stream, writeStream);
     } catch (error) {
       const operation = classifyAppAsarOpenFailure(error, appAsarPath, output);
       if (operation !== 'unknown' && error && typeof error === 'object') {
@@ -629,6 +640,10 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
     if (spec.zip) await extractZip(filePath, target, spec, extraction, appAsarPath);
     else {
       let count = 0, extractedBytes = 0;
+      const appAsarRelative = path.relative(target, appAsarPath).split(path.sep).join('/');
+      const stagedAsarRelative = path.posix.join(path.posix.dirname(appAsarRelative), '.tus-app-asar-' + randomUUID() + '.tmp');
+      const stagedAsarPath = path.join(target, ...stagedAsarRelative.split('/'));
+      let appAsarStaged = false;
       const paths = new Set();
       extraction.value = 'entry';
       await extractTar({
@@ -640,6 +655,10 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
               (extractedBytes += entry.size) > maxExtractedBytes) throw new Error('Update archive exceeds extraction limits.');
           const relative = safeArchiveEntryPath(entryPath, spec.root);
           if (!relative) return false;
+          if (relative === stagedAsarRelative || relative.startsWith(stagedAsarRelative + '/')) {
+            throw new Error('Update archive contains duplicate paths.');
+          }
+          if (relative.startsWith(appAsarRelative + '/')) throw new Error('Update archive contains an unsupported file type.');
           if (paths.has(relative)) throw new Error('Update archive contains duplicate paths.');
           paths.add(relative);
           const output = path.resolve(target, ...relative.split('/'));
@@ -651,11 +670,31 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
           if (entry.type === 'Link') {
             extraction.value = 'symlink';
             safeArchiveLinkTarget(entry.linkpath, target, target);
+            const linkRelative = path.posix.normalize(entry.linkpath.split('/').slice(1).join('/'));
+            if (linkRelative === stagedAsarRelative) throw new Error('Update archive contains duplicate paths.');
+            if (linkRelative.startsWith(appAsarRelative + '/')) throw new Error('Update archive contains an unsupported file type.');
+            if (linkRelative === appAsarRelative) {
+              if (relative === appAsarRelative) throw new Error('Update archive contains an unsupported file type.');
+              entry.linkpath = spec.root + '/' + stagedAsarRelative;
+            }
+          }
+          if (relative === appAsarRelative) {
+            if (!['File', 'OldFile', 'ContiguousFile', 'Link'].includes(entry.type)) {
+              throw new Error('Update archive contains an unsupported file type.');
+            }
+            if (paths.has(stagedAsarRelative)) throw new Error('Update archive contains duplicate paths.');
+            paths.add(stagedAsarRelative);
+            entry.path = spec.root + '/' + stagedAsarRelative;
+            appAsarStaged = true;
           }
           extraction.value = 'write';
           return true;
         },
       });
+      if (appAsarStaged) {
+        extraction.value = 'write';
+        await (electronFs?.promises?.rename ?? rename)(stagedAsarPath, appAsarPath);
+      }
     }
     extraction.value = 'executable';
     const executablePath = path.join(target, ...spec.executable.split('/'));
