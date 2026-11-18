@@ -5,7 +5,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { extract as extractTar } from 'tar';
 import yauzl from 'yauzl';
-import { verify } from 'sigstore';
+import { createVerifier, verify } from 'sigstore';
 import { parseReleaseTag } from './update-release.mjs';
 
 const repository = 'smart-tinker/the_unfinished_shapes';
@@ -193,7 +193,38 @@ async function fetchAttestation({ fetcher, digest, tag, asset, signal, verifySig
     const diagnostic = { bundleIndex, bundleSha256, assetName: asset.name, assetSha256: digest, tag };
     await reportProvenanceDiagnostic(onProvenanceDiagnostic, { ...diagnostic, stage: 'verify-start' });
     try {
-      const result = await verifyReleaseAttestation({ bundle, asset, tag }, verifySignature);
+      const diagnosticVerifySignature = verifySignature === verify
+        ? async (bundleToVerify, options) => {
+            const reportVerifierStage = (stage, status, error) => reportProvenanceDiagnostic(onProvenanceDiagnostic, {
+              ...diagnostic, stage, status,
+              ...(error ? {
+                failureCode: 'SIGNATURE_REJECTED',
+                verifierCode: safeVerifierCode(error?.code, error?.constructor?.name),
+                verifierErrorType: safeVerifierErrorType(error?.constructor?.name),
+                verifierCauseCode: safeVerifierCode(error?.cause?.code, error?.cause?.constructor?.name),
+                verifierCauseErrorType: safeVerifierErrorType(error?.cause?.constructor?.name),
+              } : {}),
+            });
+            await reportVerifierStage('verifier-setup', 'starting');
+            let verifier;
+            try { verifier = await createVerifier(options); }
+            catch (error) {
+              await reportVerifierStage('verifier-setup', 'rejected', error);
+              throw error;
+            }
+            await reportVerifierStage('verifier-setup', 'ready');
+            await reportVerifierStage('verifier-verify', 'starting');
+            try {
+              const result = verifier.verify(bundleToVerify);
+              await reportVerifierStage('verifier-verify', 'verified');
+              return result;
+            } catch (error) {
+              await reportVerifierStage('verifier-verify', 'rejected', error);
+              throw error;
+            }
+          }
+        : verifySignature;
+      const result = await verifyReleaseAttestation({ bundle, asset, tag }, diagnosticVerifySignature);
       await reportProvenanceDiagnostic(onProvenanceDiagnostic, { ...diagnostic, stage: 'verify-result', status: 'verified' });
       return result;
     } catch (error) {
