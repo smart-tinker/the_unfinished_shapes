@@ -462,7 +462,11 @@ async function updateOnce(distribution) {
     const successStatus = 'Verified archive extracted. You can now launch the new copy.';
     await current.page.locator('#updates-extract').click();
     const folderChooserInvoked = await waitForFile(path.join(workDir, 'extract-folder-chooser.json'), 5000);
-    let extractOutcome = folderChooserInvoked ? 'pending' : 'chooser-not-invoked';
+    const extractDiagnostic = {
+      folderChooserInvoked,
+      outcome: folderChooserInvoked ? 'pending' : 'chooser-not-invoked',
+      reason: folderChooserInvoked ? 'no-terminal-renderer-status' : 'folder-chooser-not-invoked',
+    };
     if (folderChooserInvoked) {
       try {
         await current.page.waitForFunction(({ pending, prior }) => {
@@ -470,11 +474,25 @@ async function updateOnce(distribution) {
           return Boolean(status && status !== pending && status !== prior);
         }, { pending: pendingStatus, prior: verified }, { timeout: 120000 });
         const status = await current.page.locator('#updates-status').innerText();
-        extractOutcome = status === successStatus ? 'verified' : 'rejected';
-      } catch {}
+        if (status === successStatus) {
+          extractDiagnostic.outcome = 'verified';
+          extractDiagnostic.reason = 'none';
+        } else if (status === 'Folder selection cancelled.') {
+          extractDiagnostic.outcome = 'cancelled';
+          extractDiagnostic.reason = 'folder-selection-cancelled';
+        } else {
+          extractDiagnostic.outcome = 'rejected';
+          extractDiagnostic.reason = 'renderer-reported-error';
+        }
+      } catch (error) {
+        if (error?.name !== 'TimeoutError') {
+          extractDiagnostic.outcome = 'unobserved';
+          extractDiagnostic.reason = 'status-observation-failed';
+        }
+      }
     }
-    console.log('TUS_UPDATE_EXTRACT_DIAGNOSTIC ' + JSON.stringify({ folderChooserInvoked, outcome: extractOutcome }));
-    assert.equal(extractOutcome, 'verified', 'the selected verified archive reaches a terminal extraction success');
+    console.log('TUS_UPDATE_EXTRACT_DIAGNOSTIC ' + JSON.stringify(extractDiagnostic));
+    assert.equal(extractDiagnostic.outcome, 'verified', 'the selected verified archive reaches a terminal extraction success');
   }
 
   await current.page.locator('#updates-launch').click();
