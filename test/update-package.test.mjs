@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import { create as createTar } from 'tar';
-import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeVerifierErrorType, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeVerifierErrorType, safeVerifierSetupStage, verifyReleaseAttestation } from '../src/update-package.mjs';
 
 const tag = 'v0.1.0-rc11';
 const asset = {
@@ -539,18 +539,35 @@ test('reports package-download failures with safe codes', async t => {
   ));
 });
 
-test('classifies verifier setup failures into safe internal stages', async () => {
-  const { safeVerifierSetupStage } = await import('../src/update-package.mjs');
-  assert.equal(typeof safeVerifierSetupStage, 'function');
+test('classifies verifier setup failures into safe internal stages', () => {
+  function captureSetupError(run) {
+    try { run(); } catch (error) { return error; }
+    throw new Error('Expected the setup fixture to fail.');
+  }
+  function getTrustedRoot() { throw new Error('private diagnostic details'); }
+  function toTrustMaterial() { throw new Error('private diagnostic details'); }
+  function Verifier() { throw new Error('private diagnostic details'); }
+  function createVerificationPolicy() { throw new Error('private diagnostic details'); }
+  function unclassifiedSetup() { throw new Error('private diagnostic details'); }
 
-  const cases = [
-    [{ code: 'TUF_REFRESH_METADATA_ERROR', stack: 'TUFError\\n    at getTrustedRoot (sigstore.js:1:1)' }, 'tuf-get-trusted-root'],
-    [{ stack: 'Error\\n    at getTrustedRoot (sigstore.js:1:1)' }, 'tuf-get-trusted-root'],
-    [{ stack: 'Error\\n    at toTrustMaterial (sigstore.js:1:1)' }, 'trust-material'],
-    [{ stack: 'Error\\n    at new Verifier (sigstore.js:1:1)' }, 'verifier-construction'],
-    [{ stack: 'Error\\n    at createVerificationPolicy (config.js:1:1)' }, 'verification-policy'],
-    [{ stack: 'Error\\n    at /private/path/secret-token.js:1:1' }, 'unknown'],
+  const tufError = captureSetupError(getTrustedRoot);
+  assert.equal(safeVerifierSetupStage(tufError), 'tuf-get-trusted-root');
+  tufError.code = 'TUF_REFRESH_METADATA_ERROR';
+  assert.equal(safeVerifierSetupStage(tufError), 'tuf-get-trusted-root');
+
+  const trustMaterialError = captureSetupError(toTrustMaterial);
+  const verifierError = captureSetupError(() => new Verifier());
+  const policyError = captureSetupError(createVerificationPolicy);
+  const unknownError = captureSetupError(unclassifiedSetup);
+  const result = [
+    safeVerifierSetupStage(trustMaterialError),
+    safeVerifierSetupStage(verifierError),
+    safeVerifierSetupStage(policyError),
+    safeVerifierSetupStage(unknownError),
   ];
 
-  for (const [error, expected] of cases) assert.equal(safeVerifierSetupStage(error), expected);
+  assert.deepEqual(result, [
+    'trust-material', 'verifier-construction', 'verification-policy', 'unknown',
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /private diagnostic details|unclassifiedSetup/);
 });

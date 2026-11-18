@@ -41,6 +41,21 @@ export function safeVerifierCode(code, errorType) {
   return typeof errorType === 'string' ? safeVerifierCodesByErrorType.get(errorType) || 'OTHER' : 'OTHER';
 }
 
+export function safeVerifierSetupStage(error) {
+  const causes = [error, error?.cause];
+  if (causes.some(cause =>
+    typeof cause?.code === 'string' &&
+    cause.code.startsWith('TUF_') &&
+    sigstoreVerifierCodes.has(cause.code))) return 'tuf-get-trusted-root';
+
+  const stack = causes.map(cause => typeof cause?.stack === 'string' ? cause.stack : '').join('\n');
+  if (/\btoTrustMaterial\b/.test(stack)) return 'trust-material';
+  if (/\bVerifier\b/.test(stack)) return 'verifier-construction';
+  if (/\bcreateVerificationPolicy\b/.test(stack)) return 'verification-policy';
+  if (/\bgetTrustedRoot\b/.test(stack)) return 'tuf-get-trusted-root';
+  return 'unknown';
+}
+
 const updaterFailureCodes = new Set([
   'PROVENANCE_FETCH_ERROR', 'PROVENANCE_HTTP_ERROR', 'PROVENANCE_RESPONSE_ERROR',
   'MISSING_PROVENANCE', 'NO_MATCHING_PROVENANCE', 'INVALID_ATTESTATION',
@@ -199,6 +214,7 @@ async function fetchAttestation({ fetcher, digest, tag, asset, signal, verifySig
               ...diagnostic, stage, status,
               ...(error ? {
                 failureCode: 'SIGNATURE_REJECTED',
+                ...(stage === 'verifier-setup' ? { verifierSetupStage: safeVerifierSetupStage(error) } : {}),
                 verifierCode: safeVerifierCode(error?.code, error?.constructor?.name),
                 verifierErrorType: safeVerifierErrorType(error?.constructor?.name),
                 verifierCauseCode: safeVerifierCode(error?.cause?.code, error?.cause?.constructor?.name),

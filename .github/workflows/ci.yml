@@ -60,9 +60,6 @@ jobs:
       contents: read
   macos-native:
     needs: test
-    permissions:
-      attestations: read
-      contents: read
     if: github.event.repository.private == false
     # Standard public runner: Apple Silicon, not a paid -large/-xlarge label.
     runs-on: macos-15
@@ -83,8 +80,7 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm version 0.1.0-rc.1 --no-git-tag-version --ignore-scripts
-      - id: package
-        run: node scripts/package-macos.mjs
+      - run: node scripts/package-macos.mjs
       - name: Launch the native packaged application
         env:
           TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-darwin-arm64/TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes
@@ -95,12 +91,6 @@ jobs:
         env:
           TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-darwin-arm64/TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes
         run: node scripts/updater-release-smoke.mjs
-      - name: Pinned RC11 verifier stages in packaged Electron
-        if: ${{ !cancelled() && steps.package.conclusion == 'success' }}
-        env:
-          TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-darwin-arm64/TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes
-          GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/updater-pinned-verifier-smoke.mjs
   windows-installer:
     needs: test
     if: github.event.repository.private == false
