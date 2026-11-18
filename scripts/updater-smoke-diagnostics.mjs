@@ -13,6 +13,8 @@ const safeVerifierSetupSteps = new Set([
   'verification-policy', 'unknown',
 ]);
 
+const safeModuleFailureCodes = new Set(['MODULE_IMPORT_REJECTED', 'ERR_MODULE_NOT_FOUND', 'SyntaxError']);
+
 export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
   const safeRootTarget = value => ({
     available: value?.available === true,
@@ -37,7 +39,7 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
       verifierCauseErrorType: safeVerifierErrorType(item.verifierCauseErrorType),
     } : {}),
     ...(item?.stage === 'updater-module-import' && item?.status === 'rejected' ? {
-      moduleFailureCode: item?.moduleFailureCode === 'MODULE_IMPORT_REJECTED' ? 'MODULE_IMPORT_REJECTED' : 'OTHER',
+      moduleFailureCode: safeModuleFailureCodes.has(item?.moduleFailureCode) ? item.moduleFailureCode : 'OTHER',
     } : {}),
     ...(item?.stage === 'extract-failed' && item?.status === 'rejected' ? { extractStage: safeArchiveExtractionStage(item.extractStage) } : {}),
     trustedRootTarget: safeRootTarget(item?.trustedRootTarget),

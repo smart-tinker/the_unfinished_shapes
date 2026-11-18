@@ -152,11 +152,14 @@ app.whenReady().then(async()=>{
         ({ downloadVerifiedAsset } = await import('./update-package.mjs'));
         if (updaterSmokeBoundary) updaterSmokeBoundary.moduleImport = 'fulfilled';
       } catch (error) {
+        const moduleFailureCode = error?.code === 'ERR_MODULE_NOT_FOUND'
+          ? 'ERR_MODULE_NOT_FOUND'
+          : error?.name === 'SyntaxError' ? 'SyntaxError' : 'MODULE_IMPORT_REJECTED';
         if (updaterSmokeBoundary) {
           updaterSmokeBoundary.moduleImport = 'rejected';
-          updaterSmokeBoundary.moduleFailureCode = 'MODULE_IMPORT_REJECTED';
+          updaterSmokeBoundary.moduleFailureCode = moduleFailureCode;
         }
-        await reportDiagnostic({ stage: 'updater-module-import', status: 'rejected', moduleFailureCode: 'MODULE_IMPORT_REJECTED' });
+        await reportDiagnostic({ stage: 'updater-module-import', status: 'rejected', moduleFailureCode });
         throw error;
       }
       await reportDiagnostic({ stage: 'updater-module-import', status: 'ready' });
