@@ -118,13 +118,16 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm version 0.1.0-rc.1 --no-git-tag-version --ignore-scripts
-      - run: npm run package:win
-      - run: npm run installer:win
+      - id: package
+        run: npm run package:win
+      - id: installer
+        run: npm run installer:win
       - name: Verify clean install, current-candidate lifecycle and retained data
         env:
           TUS_SMOKE_PORTABLE_EXECUTABLE: dist/TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe
         run: node scripts/windows-installer-smoke.mjs
       - name: Published update download and exact installer/portable acceptance
+        if: ${{ !cancelled() && steps.package.conclusion == 'success' && steps.installer.conclusion == 'success' }}
         env:
           TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe
         run: node scripts/updater-release-smoke.mjs
