@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import { create as createTar } from 'tar';
-import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeVerifierErrorType, safeVerifierSetupStage, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeUpdaterFailureCode, safeVerifierErrorType, safeVerifierSetupStage, verifyReleaseAttestation } from '../src/update-package.mjs';
 
 const tag = 'v0.1.0-rc11';
 const asset = {
@@ -231,6 +231,33 @@ test('rejects a byte digest mismatch before asking GitHub for provenance', async
   }
 });
 
+
+test('maps early download guards to fixed updater failure codes', () => {
+  for (const code of ['UPDATE_NOT_AVAILABLE', 'DOWNLOAD_ALREADY_RUNNING']) {
+    assert.equal(safeUpdaterFailureCode(code), code);
+  }
+  assert.equal(safeUpdaterFailureCode('PRIVATE_PATH_TOKEN'), 'OTHER');
+});
+
+test('classifies real archive-path rejection and known file-type, size and filesystem errors without raw details', async () => {
+  let pathFailure;
+  assert.throws(
+    () => safeArchiveEntryPath('../private-file', 'TheUnfinishedShapes-linux-x64'),
+    error => { pathFailure = error; return true; },
+  );
+  const { safeArchiveExtractionFailureCode } = await import('../src/update-package.mjs');
+  assert.equal(typeof safeArchiveExtractionFailureCode, 'function', 'extraction failures have a safe diagnostic classifier');
+  const failures = [
+    [pathFailure, 'ARCHIVE_PATH'],
+    [new Error('Update archive contains an unsupported file type.'), 'ARCHIVE_FILE_TYPE'],
+    [new Error('Update archive exceeds extraction limits.'), 'ARCHIVE_SIZE'],
+    [Object.assign(new Error('/private/runner/path'), { code: 'ENOSPC' }), 'FILESYSTEM_SPACE'],
+    [new Error('private archive path'), 'OTHER'],
+  ];
+  const safeCodes = failures.map(([error]) => safeArchiveExtractionFailureCode(error));
+  assert.deepEqual(safeCodes, failures.map(([, expected]) => expected));
+  assert.doesNotMatch(JSON.stringify(safeCodes), /private|runner|path/);
+});
 
 test('archive extraction refuses to replace an existing version folder', async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-target-'));
