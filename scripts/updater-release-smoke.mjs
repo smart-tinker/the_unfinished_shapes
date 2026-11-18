@@ -59,6 +59,16 @@ function withTimeout(promise, label, timeoutMs = 30000) {
   ]).finally(() => clearTimeout(timer));
 }
 
+
+async function waitForFile(filePath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try { await access(filePath); return true; } catch {}
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  return false;
+}
+
 async function start(executablePath, label, dataDir, useBaseline = false) {
   const gpu = await createGpuDiagnostics(label);
   let instance;
@@ -273,18 +283,21 @@ function expectedAssetName(version, distribution) {
   return 'TheUnfinishedShapes-' + version + '-' + suffix;
 }
 
-async function configureUpdateDialogs(instance, { downloadsDir, extractDir, dialogMarker, relaunchMarker }) {
+async function configureUpdateDialogs(instance, { downloadsDir, extractDir, dialogMarker, extractMarker, relaunchMarker }) {
   await instance.evaluate(({ app, dialog }, config) => {
     const { writeFileSync } = process.getBuiltinModule('node:fs');
     app.setPath('downloads', config.downloadsDir);
     globalThis.__tusUpdateChoice = 0;
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [config.extractDir] });
+    dialog.showOpenDialog = async () => {
+      writeFileSync(config.extractMarker, JSON.stringify({ invoked: true, selected: true }));
+      return { canceled: false, filePaths: [config.extractDir] };
+    };
     dialog.showMessageBox = async (_window, options) => {
       writeFileSync(config.dialogMarker, JSON.stringify({ title: options.title, buttons: options.buttons }));
       return { response: globalThis.__tusUpdateChoice };
     };
     app.relaunch = ({ execPath, args }) => writeFileSync(config.relaunchMarker, JSON.stringify({ execPath, args }));
-  }, { downloadsDir, extractDir, dialogMarker, relaunchMarker });
+  }, { downloadsDir, extractDir, dialogMarker, extractMarker, relaunchMarker });
 }
 
 async function updateOnce(distribution) {
@@ -341,6 +354,7 @@ async function updateOnce(distribution) {
   await configureUpdateDialogs(current.instance, {
     downloadsDir, extractDir,
     dialogMarker: path.join(workDir, 'update-dialog.json'),
+    extractMarker: path.join(workDir, 'extract-folder-chooser.json'),
     relaunchMarker: path.join(workDir, 'relaunch.json'),
   });
   await current.page.evaluate(() => {
@@ -444,8 +458,23 @@ async function updateOnce(distribution) {
   assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'downloaded bytes match the published release manifest');
 
   if (distribution !== 'installer') {
+    const pendingStatus = 'Choose a destination folder…';
+    const successStatus = 'Verified archive extracted. You can now launch the new copy.';
     await current.page.locator('#updates-extract').click();
-    await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.includes('Verified archive extracted.'), null, { timeout: 120000 });
+    const folderChooserInvoked = await waitForFile(path.join(workDir, 'extract-folder-chooser.json'), 5000);
+    let extractOutcome = folderChooserInvoked ? 'pending' : 'chooser-not-invoked';
+    if (folderChooserInvoked) {
+      try {
+        await current.page.waitForFunction(({ pending, prior }) => {
+          const status = document.querySelector('#updates-status')?.textContent;
+          return Boolean(status && status !== pending && status !== prior);
+        }, { pending: pendingStatus, prior: verified }, { timeout: 120000 });
+        const status = await current.page.locator('#updates-status').innerText();
+        extractOutcome = status === successStatus ? 'verified' : 'rejected';
+      } catch {}
+    }
+    console.log('TUS_UPDATE_EXTRACT_DIAGNOSTIC ' + JSON.stringify({ folderChooserInvoked, outcome: extractOutcome }));
+    assert.equal(extractOutcome, 'verified', 'the selected verified archive reaches a terminal extraction success');
   }
 
   await current.page.locator('#updates-launch').click();
