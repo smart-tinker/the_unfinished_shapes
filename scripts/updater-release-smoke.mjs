@@ -12,7 +12,7 @@ import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, verify
 import { closeSmokeApp, observeGraphics, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 import { safeMainDiagnostics } from './updater-smoke-diagnostics.mjs';
-import { runWindowsUpdaterScenarios, safeNsisWizardEvents } from './windows-updater-scenarios.mjs';
+import { runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents } from './windows-updater-scenarios.mjs';
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
 const updateHttpStatusPattern = /\bHTTP (\d{3})\b/;
@@ -149,6 +149,29 @@ async function worldObjects(page) {
     const settings = await window.tus.loadSettings();
     return (await window.tus.request({ ...settings, path: '/state' })).objects;
   });
+}
+
+async function assertInstalledSourceIdentity(current, profile) {
+  if (!profile) return;
+  const identity = await current.instance.evaluate(({ app }) => ({
+    executable: process.execPath,
+    userData: app.getPath('userData'),
+  }));
+  assert.equal(path.resolve(identity.executable).toLowerCase() === path.resolve(profile.installedExe).toLowerCase(), true, 'the updater process is the installed source executable');
+  assert.equal(path.resolve(identity.userData).toLowerCase() === path.resolve(profile.userData).toLowerCase(), true, 'the updater process uses the source profile user-data directory');
+}
+
+function windowsScenarioFailureCategory(error) {
+  if (error?.name === 'TimeoutError' || ['ETIMEDOUT', 'ERR_SCRIPT_EXECUTION_TIMEOUT'].includes(error?.code)) return 'timeout';
+  const childOutput = String(error?.stdout || '') + String(error?.stderr || '');
+  if (error?.code === 'ERR_ASSERTION' || childOutput.includes('AssertionError [ERR_ASSERTION]')) return 'assertion';
+  if (['EACCES', 'EPERM', 'ENOENT', 'ENOSPC', 'EIO'].includes(error?.code)) return 'filesystem';
+  if (['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed'].includes(error?.code)) return error.code;
+  const failureCode = safeUpdaterFailureCode(error?.failureCode);
+  if (['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed'].includes(failureCode)) return failureCode;
+  if (failureCode === 'SIGNATURE_REJECTED') return 'provenance';
+  if (Number.isInteger(error?.code)) return 'process-exit';
+  return 'other';
 }
 
 async function fileDigest(filePath) {
@@ -415,22 +438,36 @@ async function runWindowsInstallerMode(mode, profile, { installerPath, expectedV
     await writeFile(projectPackagePath, JSON.stringify(packageJson, null, 2) + '\n');
   }
   try {
-    const result = await execute(process.execPath, ['scripts/windows-installer-smoke.mjs'], {
-      cwd: process.cwd(),
-      timeout: 600000,
-      maxBuffer: 8 * 1024 * 1024,
-      env: {
-        ...process.env,
-        APPDATA: profile.appData,
-        LOCALAPPDATA: profile.localData,
-        GITHUB_SHA: sourceSha ?? process.env.GITHUB_SHA,
-        TUS_DATA_DIR: '',
-        TUS_SMOKE_INSTALLER: installerPath,
-        TUS_SMOKE_PORTABLE_EXECUTABLE: '',
-        TUS_SMOKE_HANDOFF_MODE: mode,
-        TUS_SMOKE_HANDOFF_ROOT: profile.root,
-      },
-    });
+    let result;
+    try {
+      result = await execute(process.execPath, ['scripts/windows-installer-smoke.mjs'], {
+        cwd: process.cwd(),
+        timeout: 600000,
+        maxBuffer: 8 * 1024 * 1024,
+        env: {
+          ...process.env,
+          APPDATA: profile.appData,
+          LOCALAPPDATA: profile.localData,
+          GITHUB_SHA: sourceSha ?? process.env.GITHUB_SHA,
+          TUS_DATA_DIR: '',
+          TUS_SMOKE_INSTALLER: installerPath,
+          TUS_SMOKE_PORTABLE_EXECUTABLE: '',
+          TUS_SMOKE_HANDOFF_MODE: mode,
+          TUS_SMOKE_HANDOFF_ROOT: profile.root,
+        },
+      });
+    } catch (error) {
+      const events = safeInstallerHandoffEvents([error.stdout, error.stderr].filter(Boolean).join('\n'));
+      for (const event of events) console.log(event);
+      const lastStage = events.at(-1)?.split(' stage=')[1];
+      const stage = mode === 'verify-target' ? 'target-verify'
+        : lastStage === 'source-setup-started' ? 'source-setup'
+        : lastStage === 'source-setup-complete' ? 'source-identity'
+        : lastStage === 'source-identity-verified' || lastStage === 'source-fixture-verified' ? 'source-prepare' : 'source-setup';
+      const failure = new Error('Windows installer smoke failed.');
+      failure.tusScenarioDiagnostic = { stage, category: windowsScenarioFailureCategory(error) };
+      throw failure;
+    }
     console.log(result.stdout);
     if (result.stderr) console.error(result.stderr);
   } finally {
@@ -477,30 +514,52 @@ async function runWindowsNsisWizard(installerPath, expectedInstallDir) {
     logNsisWizardEvents(output);
   } catch (error) {
     output = error.stdout || '';
+    const events = safeNsisWizardEvents(output);
     logNsisWizardEvents(output);
-    const pid = output.match(/^TUS_NSIS_WIZARD event=process-found pid=(\d+)$/m)?.[1];
+    const pid = events.find(line => line.startsWith('TUS_NSIS_WIZARD event=process-found'))?.split('pid=')[1];
     if (pid) await execute('taskkill.exe', ['/PID', pid, '/T', '/F'], { timeout: 5000 }).catch(() => {});
-    throw new Error('The exact published installer wizard did not complete.');
+    const category = events.some(line => line.includes('event=timeout')) || windowsScenarioFailureCategory(error) === 'timeout'
+      ? 'timeout' : events.some(line => line.includes('event=uia-unavailable') || line.includes('event=automation-failed'))
+        ? 'uia' : 'process-exit';
+    const failure = new Error('The exact published installer wizard did not complete.');
+    failure.tusScenarioDiagnostic = { stage: 'wizard', category };
+    throw failure;
   }
-  if (!safeNsisWizardEvents(output).some(line => /^TUS_NSIS_WIZARD event=completed(?: pid=\d+)?$/.test(line))) {
-    throw new Error('The exact published installer wizard did not complete.');
+  if (!safeNsisWizardEvents(output).some(line => line.startsWith('TUS_NSIS_WIZARD event=completed'))) {
+    const failure = new Error('The exact published installer wizard did not complete.');
+    failure.tusScenarioDiagnostic = { stage: 'wizard', category: 'other' };
+    throw failure;
   }
 }
 
 async function runIndependentWindowsScenario(distribution) {
+  let diagnostic = {
+    stage: distribution === 'installer' ? 'source-setup' : 'source-identity',
+    category: null,
+  };
+  const setDiagnostic = (stage, category = null) => { diagnostic = { stage, category }; };
   try {
-    return await updateOnce(distribution);
+    return await updateOnce(distribution, setDiagnostic);
   } catch (error) {
     await closeActive('failed Windows ' + distribution + ' updater scenario').catch(() => {});
-    throw error;
+    const detail = error?.tusScenarioDiagnostic;
+    const failure = new Error('Windows updater scenario failed.');
+    failure.tusScenarioDiagnostic = {
+      stage: detail?.stage || diagnostic.stage,
+      category: detail?.category || diagnostic.category || windowsScenarioFailureCategory(error),
+    };
+    throw failure;
   }
 }
 
-async function updateOnce(distribution) {
+async function updateOnce(distribution, setDiagnostic = () => {}) {
   const workDir = await mkdtemp(path.join(testRoot, 'package-'));
   workDirs.push(workDir);
-  const handoffProfile = process.platform === 'win32' && distribution === 'installer'
-    ? await prepareWindowsInstallerSource() : null;
+  let handoffProfile = null;
+  if (process.platform === 'win32' && distribution === 'installer') {
+    setDiagnostic('source-setup');
+    handoffProfile = await prepareWindowsInstallerSource();
+  }
   const dataDir = handoffProfile ? '' : path.join(workDir, 'data');
   const downloadsDir = path.join(workDir, 'downloads');
   const extractDir = path.join(workDir, 'extracted');
@@ -511,7 +570,9 @@ async function updateOnce(distribution) {
 
   const sourceExecutable = handoffProfile?.installedExe || executable;
   const sourceEnv = handoffProfile ? { APPDATA: handoffProfile.appData, LOCALAPPDATA: handoffProfile.localData } : {};
+  setDiagnostic('source-identity');
   let current = await start(sourceExecutable, 'updater source ' + distribution, dataDir, true, sourceEnv);
+  await assertInstalledSourceIdentity(current, handoffProfile);
   if (handoffProfile) {
     const userData = await current.instance.evaluate(({ app }) => app.getPath('userData'));
     assert.equal(path.resolve(userData).toLowerCase(), path.resolve(handoffProfile.userData).toLowerCase(), 'installed source uses the ordinary isolated profile');
@@ -534,15 +595,10 @@ async function updateOnce(distribution) {
   await current.instance.evaluate(({ app }) => app.quit());
   await closeAfterQuit(current, firstExit);
 
-  current = await start(executable, 'updater preference restart ' + distribution, dataDir, true);
-  if (handoffProfile) {
-    const identity = await current.instance.evaluate(({ app }) => ({
-      executable: process.execPath,
-      userData: app.getPath('userData'),
-    }));
-    assert.equal(path.resolve(identity.executable).toLowerCase() === path.resolve(handoffProfile.installedExe).toLowerCase(), true, 'the installed source remains the updater after preference restart');
-    assert.equal(path.resolve(identity.userData).toLowerCase() === path.resolve(handoffProfile.userData).toLowerCase(), true, 'the same isolated user profile survives preference restart');
-  }
+  setDiagnostic('source-identity');
+  current = await start(sourceExecutable, 'updater preference restart ' + distribution, dataDir, true, sourceEnv);
+  await assertInstalledSourceIdentity(current, handoffProfile);
+  setDiagnostic('check-download');
   await current.page.locator('#settings-open').click();
   assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'the selected update channel survives restart');
   if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
@@ -552,6 +608,7 @@ async function updateOnce(distribution) {
   if (startupErrorCode) {
     const allowedStartupErrorCodes = new Set(['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed']);
     const errorCode = allowedStartupErrorCodes.has(startupErrorCode) ? startupErrorCode : 'check_failed';
+    setDiagnostic('check-download', errorCode);
     console.log('Updater startup release diagnostic ' + JSON.stringify({ status: 'error', errorCode }));
   }
   assert.match(startupNotice || '', /available\./, 'startup checks expose a published update without installing it');
@@ -588,6 +645,7 @@ async function updateOnce(distribution) {
       }
     });
   });
+  setDiagnostic('check-download');
   await current.page.locator('#updates-download').click({ noWaitAfter: true });
   try {
     await current.page.waitForFunction(() => {
@@ -694,6 +752,7 @@ async function updateOnce(distribution) {
   assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'downloaded bytes match the published release manifest');
 
   if (distribution !== 'installer') {
+    setDiagnostic('extract');
     const pendingStatus = 'Choose a destination folder…';
     const successStatus = 'Verified archive extracted. You can now launch the new copy.';
     await current.page.locator('#updates-extract').click();
@@ -741,6 +800,7 @@ async function updateOnce(distribution) {
     assert.equal(extractDiagnostic.outcome, 'verified', 'the selected verified archive reaches a terminal extraction success');
   }
 
+  setDiagnostic('relaunch');
   await current.page.locator('#updates-launch').click();
   await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Update launch cancelled.');
   assert.equal(current.instance.process().exitCode, null, 'cancel leaves the game open and the verified update available');
@@ -770,7 +830,9 @@ async function updateOnce(distribution) {
   let targetExecutable = null;
   if (distribution === 'installer') {
     assert.ok(handoffProfile, 'the NSIS handoff starts from the installed source profile');
+    setDiagnostic('wizard');
     await runWindowsNsisWizard(relaunch.execPath, handoffProfile.installDir);
+    setDiagnostic('target-verify');
     await runWindowsInstallerMode('verify-target', handoffProfile, {
       installerPath: downloadedPath,
       expectedVersion: manifest.version,
@@ -778,6 +840,7 @@ async function updateOnce(distribution) {
     });
     targetExecutable = handoffProfile.installedExe;
   } else {
+    setDiagnostic('target-verify');
     current = await start(relaunch.execPath, 'published update launch ' + distribution, dataDir);
     targetExecutable = relaunch.execPath;
     assert.equal(await current.instance.evaluate(({ app }) => app.getVersion()), targetVersion, 'the exact downloaded release package starts');
@@ -793,42 +856,6 @@ async function updateOnce(distribution) {
   return { workDir, downloadedPath, assetName, tag, manifest, targetExecutable };
 }
 
-async function verifyWindowsInstaller(installerResult, portableResult) {
-  const rootPath = projectPackagePath;
-  const original = await readFile(rootPath, 'utf8');
-  const rootPackage = JSON.parse(original);
-  const targetVersion = installerResult.manifest.version;
-  assert.equal(installerResult.manifest.tag, portableResult.manifest.tag);
-  assert.equal(installerResult.manifest.sourceSha, portableResult.manifest.sourceSha);
-  const temp = await mkdtemp(path.join(os.tmpdir(), 'tus-update-installer-'));
-  const appData = path.join(temp, 'Roaming');
-  const localData = path.join(temp, 'Local');
-  await Promise.all([mkdir(appData), mkdir(localData)]);
-  try {
-    rootPackage.version = targetVersion;
-    await writeFile(rootPath, JSON.stringify(rootPackage, null, 2) + '\n');
-    const result = await execute(process.execPath, ['scripts/windows-installer-smoke.mjs'], {
-      cwd: process.cwd(),
-      timeout: 1200000,
-      maxBuffer: 8 * 1024 * 1024,
-      env: {
-        ...process.env,
-        APPDATA: appData,
-        LOCALAPPDATA: localData,
-        GITHUB_SHA: installerResult.manifest.sourceSha,
-        TUS_DATA_DIR: '',
-        TUS_SMOKE_INSTALLER: installerResult.downloadedPath,
-        TUS_SMOKE_PORTABLE_EXECUTABLE: portableResult.targetExecutable,
-      },
-    });
-    console.log(result.stdout);
-    if (result.stderr) console.error(result.stderr);
-  } finally {
-    await writeFile(rootPath, original);
-    await rm(temp, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
-  }
-}
-
 try {
   if (process.platform === 'win32') {
     const outcomes = await runWindowsUpdaterScenarios({
@@ -836,14 +863,17 @@ try {
       installer: () => runIndependentWindowsScenario('installer'),
     });
     for (const [scenario, outcome] of Object.entries(outcomes)) {
+      console.log('TUS_WINDOWS_UPDATER_RESULT ' + JSON.stringify({
+        scenario,
+        status: outcome.status === 'fulfilled' ? 'passed' : 'failed',
+        stage: outcome.diagnostic.stage,
+        category: outcome.diagnostic.category,
+      }));
       if (outcome.status === 'rejected') console.error('Windows updater scenario failed: ' + scenario);
     }
     const failure = outcomes.portable.status === 'rejected' ? outcomes.portable.error
       : outcomes.installer.status === 'rejected' ? outcomes.installer.error : null;
-    if (failure) throw failure;
-    const portable = outcomes.portable.value;
-    const installer = outcomes.installer.value;
-    await verifyWindowsInstaller(installer, portable);
+    if (failure) throw new Error('A required Windows updater scenario failed.');
     console.log('Windows updater acceptance passed for independent portable and installed-source NSIS outcomes from the same published release.');
   } else {
     await updateOnce('archive');

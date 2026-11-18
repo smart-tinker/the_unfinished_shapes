@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { runWindowsUpdaterScenarios, safeNsisWizardEvents } from '../scripts/windows-updater-scenarios.mjs';
+import { runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents } from '../scripts/windows-updater-scenarios.mjs';
 
 test('Windows installer acceptance still runs when portable acceptance fails', async () => {
   const calls = [];
   const portableFailure = new Error('portable acceptance failed');
+  portableFailure.tusScenarioDiagnostic = { stage: 'extract', category: 'timeout', path: 'C:/private/path' };
   let outcomes, failure;
   try {
     outcomes = await runWindowsUpdaterScenarios({
@@ -19,7 +20,33 @@ test('Windows installer acceptance still runs when portable acceptance fails', a
   assert.equal(failure, undefined, 'the runner returns both outcomes before the caller fails the job');
   assert.equal(outcomes.portable.status, 'rejected');
   assert.equal(outcomes.portable.error, portableFailure);
-  assert.deepEqual(outcomes.installer, { status: 'fulfilled', value: 'installed-source handoff' });
+  assert.deepEqual(outcomes.portable.diagnostic, { stage: 'extract', category: 'timeout' });
+  assert.deepEqual(outcomes.installer, {
+    status: 'fulfilled',
+    value: 'installed-source handoff',
+    diagnostic: { stage: 'complete', category: 'none' },
+  });
+  assert.equal(JSON.stringify([outcomes.portable.diagnostic, outcomes.installer.diagnostic]).includes('C:/private/path'), false);
+});
+
+test('independent Windows scenario failures retain only safe stage and category', async () => {
+  const calls = [];
+  const portable = new Error('C:/private/archive exception');
+  portable.tusScenarioDiagnostic = { stage: 'extract', category: 'timeout', path: 'C:/private/archive' };
+  const installer = new Error('raw setup output /private/token');
+  installer.tusScenarioDiagnostic = { stage: 'source-identity', category: 'process-exit', message: '/private/token' };
+  const outcomes = await runWindowsUpdaterScenarios({
+    portable: async () => { calls.push('portable'); throw portable; },
+    installer: async () => { calls.push('installer'); throw installer; },
+  });
+
+  assert.deepEqual(calls, ['portable', 'installer']);
+  assert.deepEqual(outcomes.portable.diagnostic, { stage: 'extract', category: 'timeout' });
+  assert.deepEqual(outcomes.installer.diagnostic, { stage: 'source-identity', category: 'process-exit' });
+  assert.equal(outcomes.portable.error, portable);
+  assert.equal(outcomes.installer.error, installer);
+  assert.equal(JSON.stringify([outcomes.portable.diagnostic, outcomes.installer.diagnostic]).includes('C:/private/archive'), false);
+  assert.equal(JSON.stringify([outcomes.portable.diagnostic, outcomes.installer.diagnostic]).includes('token'), false);
 });
 
 test('NSIS wizard output drops paths and raw details while keeping fixed events', () => {
@@ -40,3 +67,24 @@ test('NSIS wizard output drops paths and raw details while keeping fixed events'
   ]);
   assert.equal(JSON.stringify(events).includes('C:/private/path'), false);
 });
+
+test('installer helper failures expose only fixed progress stages', () => {
+  const events = safeInstallerHandoffEvents([
+    'TUS_INSTALLER_HANDOFF stage=source-setup-started',
+    'TUS_INSTALLER_HANDOFF stage=source-setup-complete',
+    'TUS_INSTALLER_HANDOFF stage=source-identity-verified',
+    'TUS_INSTALLER_HANDOFF stage=source-fixture-verified',
+    'TUS_INSTALLER_HANDOFF stage=target-fixture-verified C:/private/path',
+    'raw error /private/token',
+  ].join('\n'));
+
+  assert.deepEqual(events, [
+    'TUS_INSTALLER_HANDOFF stage=source-setup-started',
+    'TUS_INSTALLER_HANDOFF stage=source-setup-complete',
+    'TUS_INSTALLER_HANDOFF stage=source-identity-verified',
+    'TUS_INSTALLER_HANDOFF stage=source-fixture-verified',
+  ]);
+  assert.equal(JSON.stringify(events).includes('C:/private/path'), false);
+  assert.equal(JSON.stringify(events).includes('token'), false);
+});
+

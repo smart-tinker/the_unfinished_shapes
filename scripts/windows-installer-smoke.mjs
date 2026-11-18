@@ -104,21 +104,27 @@ async function verifyRestored(page) {
 }
 const installedExe = path.join(installDir, 'TheUnfinishedShapes.exe');
 async function prepareSource() {
+  console.log('TUS_INSTALLER_HANDOFF stage=source-setup-started');
   await run(installer, ['/S', `/D=${installDir}`], { timeout: 180000 });
+  console.log('TUS_INSTALLER_HANDOFF stage=source-setup-complete');
   const page = await launch(installedExe, 'installed updater source');
+  console.log('TUS_INSTALLER_HANDOFF stage=source-identity-verified');
   await page.evaluate(async fixture => {
     await window.tus.saveSettings(fixture);
     const s = await window.tus.loadSettings();
     await window.tus.request({ ...s, path: '/command', method: 'POST', body: { type: 'build', objectType: 'bridge', position: { x: 7, y: 1, z: 0 } } });
   }, settingsFixture);
   await verifyRestored(page);
+  console.log('TUS_INSTALLER_HANDOFF stage=source-fixture-verified');
   await close('source fixture ready');
   console.log(`TUS_INSTALLER_HANDOFF stage=source-verified version=${packageVersion} sourceSha=${expectedSourceSha || 'unknown'} buildInfo=verified userData=verified fixture=written`);
 }
 async function verifyTarget() {
   await access(installedExe);
   const page = await launch(installedExe, 'installed updater target');
+  console.log('TUS_INSTALLER_HANDOFF stage=target-identity-verified');
   await verifyRestored(page);
+  console.log('TUS_INSTALLER_HANDOFF stage=target-fixture-verified');
   await close('target fixture verified');
   console.log(`TUS_INSTALLER_HANDOFF stage=target-verified version=${packageVersion} sourceSha=${expectedSourceSha || 'unknown'} buildInfo=verified userData=verified fixture=retained`);
 }
