@@ -27,10 +27,13 @@ const safeVerifierErrorTypes = new Map([
   ['ValidationError', 'BUNDLE_VALIDATION_ERROR'], ['ASN1ParseError', 'ASN1_PARSE_ERROR'],
   ['ASN1TypeError', 'ASN1_TYPE_ERROR'], ['RFC3161TimestampVerificationError', 'RFC3161_TIMESTAMP_VERIFICATION_ERROR'],
 ]);
+const safeVerifierErrorCategories = new Set(safeVerifierErrorTypes.values());
 const safeVerifierCodesByErrorType = new Map([['ValidationError', 'BUNDLE_VALIDATION_ERROR']]);
 
 export function safeVerifierErrorType(errorType) {
-  return typeof errorType === 'string' ? safeVerifierErrorTypes.get(errorType) || 'OTHER' : 'OTHER';
+  return typeof errorType === 'string'
+    ? safeVerifierErrorTypes.get(errorType) || (safeVerifierErrorCategories.has(errorType) ? errorType : 'OTHER')
+    : 'OTHER';
 }
 
 export function safeVerifierCode(code, errorType) {
