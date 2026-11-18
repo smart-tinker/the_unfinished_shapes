@@ -10,3 +10,63 @@ test('installed-source restart reuses the source executable and profile configur
   assert.ok(smoke.includes(sourceLaunch), 'the first launch uses the installed source identity');
   assert.ok(smoke.includes(restartLaunch), 'the preference restart keeps the executable, data directory and environment');
 });
+
+
+test('Windows installed-source handoff pins one user-data profile before fixture writes', async () => {
+  const smoke = await readFile(new URL('../scripts/updater-release-smoke.mjs', import.meta.url), 'utf8');
+  const helper = await readFile(new URL('../scripts/windows-installer-smoke.mjs', import.meta.url), 'utf8');
+
+  assert.ok(smoke.includes("const dataDir = handoffProfile ? handoffProfile.userData : path.join(workDir, 'data')"));
+  assert.ok(smoke.includes('TUS_DATA_DIR: profile.userData'));
+  assert.ok(helper.includes("const dataDir = path.resolve(process.env.TUS_DATA_DIR || path.join(process.env.APPDATA, 'the-unfinished-shapes'))"));
+
+  const identity = helper.indexOf("console.log('TUS_INSTALLER_HANDOFF stage=source-identity-verified')");
+  const fixture = helper.indexOf('await mkdir(settingsFixture.workspacePath', identity);
+  assert.ok(identity >= 0 && fixture > identity, 'settings/world fixture writes follow the complete identity gate');
+});
+
+test('handoff identity events expose only separate safe match enums', async () => {
+  const { safeInstallerHandoffEvents } = await import('../scripts/windows-updater-scenarios.mjs');
+  const events = safeInstallerHandoffEvents([
+    'TUS_INSTALLER_HANDOFF identity=build-label-match',
+    'TUS_INSTALLER_HANDOFF identity=source-sha-version-match',
+    'TUS_INSTALLER_HANDOFF identity=user-data-mismatch',
+    'TUS_INSTALLER_HANDOFF identity=source-sha-version-mismatch C:/private/app.exe',
+    'raw error /private/profile',
+  ].join('\\n'));
+
+  assert.deepEqual(events, [
+    'TUS_INSTALLER_HANDOFF identity=build-label-match',
+    'TUS_INSTALLER_HANDOFF identity=source-sha-version-match',
+    'TUS_INSTALLER_HANDOFF identity=user-data-mismatch',
+  ]);
+  assert.equal(JSON.stringify(events).includes('C:/private/app.exe'), false);
+  assert.equal(JSON.stringify(events).includes('/private/profile'), false);
+});
+
+test('pending ZIP extraction exposes capped stream state without entry data', async () => {
+  const updatePackage = await import('../src/update-package.mjs');
+  assert.equal(typeof updatePackage.safeZipExtractionStreamSnapshot, 'function');
+  const source = { readableEnded: false, actualByteCount: 999, path: 'C:/private/archive.zip' };
+  const sink = {
+    writableFinished: false,
+    closed: false,
+    bytesWritten: 3_000_000_000,
+    writableLength: Number.MAX_SAFE_INTEGER,
+    path: 'C:/private/app.asar',
+    entryName: 'private-entry',
+  };
+  assert.deepEqual(updatePackage.safeZipExtractionStreamSnapshot(source, sink), {
+    sourceReadableEnded: false,
+    sinkWritableFinished: false,
+    sinkClosed: false,
+    sinkBytesWritten: 2_147_483_647,
+    sinkWritableLength: 2_147_483_647,
+  });
+
+  const sourceText = await readFile(new URL('../src/update-package.mjs', import.meta.url), 'utf8');
+  const smoke = await readFile(new URL('../scripts/updater-release-smoke.mjs', import.meta.url), 'utf8');
+  assert.ok(sourceText.includes('extractStreamSnapshot = () => safeZipExtractionStreamSnapshot(stream, writeStream)'));
+  assert.ok(smoke.includes('extractStreamSnapshot: boundary.extractStreamSnapshot?.() ?? null'));
+  assert.ok(smoke.includes('streamSnapshot: main?.extractStreamSnapshot ?? null'));
+});
