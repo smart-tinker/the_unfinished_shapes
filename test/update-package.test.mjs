@@ -819,7 +819,7 @@ test('removes a materialized update target with Electron original-fs after a lat
       "  } catch (error) {",
       "    let targetExists = false;",
       "    try { await fs.promises.lstat(target); targetExists = true; } catch {}",
-      "    process.stdout.write(error?.code === 'ENOENT' ? targetExists ? 'target-left' : 'cleaned' : 'original-error-changed');",
+      "    process.stdout.write(error?.code === 'ENOENT' && error?.extractStage === 'executable' ? targetExists ? 'target-left' : 'cleaned' : 'original-error-changed');",
       "  }",
       "}",
     ].join(String.fromCharCode(10));

@@ -2,7 +2,7 @@ import { _electron as electron } from 'playwright-core';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -553,7 +553,7 @@ async function updateOnce(distribution) {
   assert.deepEqual(relaunch.args, [], 'the update launches without carrying commands or conversation text');
   const targetVersion = manifest.version;
   const expectedExecutable = distribution === 'installer' ? downloadedPath : path.join(
-    extractDir,
+    await realpath(extractDir),
     'TheUnfinishedShapes-' + targetVersion + (process.platform === 'darwin' ? '.app' : ''),
     ...(process.platform === 'darwin' ? ['Contents', 'MacOS', 'TheUnfinishedShapes'] : [process.platform === 'win32' ? 'TheUnfinishedShapes.exe' : 'TheUnfinishedShapes']),
   );
