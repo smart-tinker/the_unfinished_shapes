@@ -467,7 +467,7 @@ async function updateOnce(distribution) {
       }
     });
   });
-  await current.page.locator('#updates-download').click();
+  await current.page.locator('#updates-download').click({ noWaitAfter: true });
   try {
     await current.page.waitForFunction(() => {
       const status = document.querySelector('#updates-status');
