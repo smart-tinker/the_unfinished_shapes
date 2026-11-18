@@ -1,5 +1,18 @@
 const releaseTag = /^(?:v)?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-rc\.?(0|[1-9]\d*))?$/;
 const releasesUrl = 'https://api.github.com/repos/smart-tinker/the_unfinished_shapes/releases';
+const releaseCheckFailureCodes = new Set(['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed']);
+
+function releaseCheckFailure(message, code) {
+  const error = new Error(message);
+  error.releaseCheckErrorCode = code;
+  return error;
+}
+
+export function safeReleaseCheckErrorCode(error) {
+  const code = error?.releaseCheckErrorCode;
+  if (releaseCheckFailureCodes.has(code)) return code;
+  return ['AbortError', 'TimeoutError'].includes(error?.name) || error?.code === 'ABORT_ERR' ? 'timeout' : 'check_failed';
+}
 
 export function parseReleaseTag(value) {
   if (typeof value !== 'string') return null;
@@ -50,20 +63,20 @@ export async function listPublishedReleases(fetcher = fetch, { signal = AbortSig
     const response = await fetcher(`${releasesUrl}?per_page=100&page=${page}`, {
       headers: { accept: 'application/vnd.github+json' }, signal, redirect: 'error',
     });
-    if (!response || !Number.isInteger(response.status)) throw new Error('Invalid GitHub releases response.');
+    if (!response || !Number.isInteger(response.status)) throw releaseCheckFailure('Invalid GitHub releases response.', 'invalid_response');
     if (!response.ok) {
       if (response.status === 429 || (response.status === 403 && response.headers?.get('x-ratelimit-remaining') === '0')) {
-        throw new Error('GitHub release check rate limit reached.');
+        throw releaseCheckFailure('GitHub release check rate limit reached.', 'rate_limited');
       }
-      throw new Error(`GitHub release check failed (HTTP ${response.status}).`);
+      throw releaseCheckFailure(`GitHub release check failed (HTTP ${response.status}).`, 'http_error');
     }
     let pageReleases;
-    try { pageReleases = await response.json(); } catch { throw new Error('Invalid releases response.'); }
-    if (!Array.isArray(pageReleases) || pageReleases.length > 100) throw new Error('Invalid releases response.');
+    try { pageReleases = await response.json(); } catch { throw releaseCheckFailure('Invalid releases response.', 'invalid_response'); }
+    if (!Array.isArray(pageReleases) || pageReleases.length > 100) throw releaseCheckFailure('Invalid releases response.', 'invalid_response');
     releases.push(...pageReleases);
     if (pageReleases.length < 100) return selectReleaseCandidates(releases);
   }
-  throw new Error('GitHub release check page limit reached.');
+  throw releaseCheckFailure('GitHub release check page limit reached.', 'invalid_response');
 }
 
 function assetVersion(tag) {

@@ -46,14 +46,18 @@ test('labels older candidates as downgrades and equal versions as current',async
 
 
 test('reports a release API rate limit from the first request without retrying', async()=>{
- const {listPublishedReleases}=await updater();
- let requests=0;
- await assert.rejects(listPublishedReleases(async()=>{
-  requests++;
-  return new Response('',{status:429});
- }),error=>{
-  assert.equal(error.releaseCheckErrorCode,'rate_limited');
-  return true;
- });
- assert.equal(requests,1);
+ const {listPublishedReleases,safeReleaseCheckErrorCode}=await updater();
+ for (const response of [
+  new Response('',{status:429}),
+  new Response('',{status:403,headers:{'x-ratelimit-remaining':'0'}}),
+ ]) {
+  let requests=0;
+  await assert.rejects(listPublishedReleases(async()=>{ requests++; return response; }),error=>{
+   assert.equal(error.releaseCheckErrorCode,'rate_limited');
+   assert.equal(safeReleaseCheckErrorCode(error),'rate_limited');
+   return true;
+  });
+  assert.equal(requests,1);
+ }
+ assert.equal(safeReleaseCheckErrorCode(new Error('private release failure')),'check_failed');
 });

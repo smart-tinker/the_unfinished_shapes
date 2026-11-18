@@ -1189,9 +1189,15 @@ $('settings-form').addEventListener('submit', async event => { event.preventDefa
 const updateStatus = text => { $('updates-status').textContent = text; };
 function showStartupUpdateNotice(result) {
   const button = $('updates-notice');
+  button.dataset.errorCode = '';
   if (result?.status === 'unavailable') {
+    const errorCode = ['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed'].includes(result.errorCode)
+      ? result.errorCode : 'check_failed';
+    button.dataset.errorCode = errorCode;
     button.hidden = false; button.textContent = 'Updates unavailable';
-    button.title = 'The release check failed or timed out. Open Settings to retry.';
+    button.title = errorCode === 'rate_limited'
+      ? 'GitHub rate limit reached. Open Settings to retry later.'
+      : 'The release check failed or timed out. Open Settings to retry.';
     updateStatus(button.title); return;
   }
   const options = result?.status === 'checked' ? result.options : null;

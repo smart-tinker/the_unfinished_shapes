@@ -209,23 +209,11 @@ async function updateOnce(distribution) {
   if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
   await current.page.waitForFunction(() => !document.querySelector('#updates-notice')?.hidden, null, { timeout: 30000 });
   const startupNotice = await current.page.locator('#updates-notice').getAttribute('title');
-  if (!/Prerelease v?\d+\.\d+\.\d+-rc\.?\d+ is available\./.test(startupNotice || '')) {
-    const diagnostic = await current.page.evaluate(async distribution => {
-      try {
-        const result = await window.tus.checkUpdates(distribution);
-        const statuses = ['available', 'none', 'current', 'downgrade', 'unsupported'];
-        return { status: statuses.includes(result?.status) ? result.status : 'unknown', httpStatus: null, errorCode: null };
-      } catch (error) {
-        const message = typeof error?.message === 'string' ? error.message : '';
-        const httpStatus = Number(message.match(/\bHTTP (\d{3})\b/)?.[1]) || null;
-        const errorCode = /rate limit/i.test(message) ? 'rate_limited'
-          : httpStatus ? 'http_error'
-          : /timeout|abort/i.test(message) ? 'timeout'
-          : /invalid/i.test(message) ? 'invalid_response' : 'check_failed';
-        return { status: 'error', httpStatus, errorCode };
-      }
-    }, process.platform === 'win32' ? distribution : 'installer');
-    console.log('Updater startup release diagnostic ' + JSON.stringify(diagnostic));
+  const startupErrorCode = await current.page.locator('#updates-notice').getAttribute('data-error-code');
+  if (startupErrorCode) {
+    const allowedStartupErrorCodes = new Set(['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed']);
+    const errorCode = allowedStartupErrorCodes.has(startupErrorCode) ? startupErrorCode : 'check_failed';
+    console.log('Updater startup release diagnostic ' + JSON.stringify({ status: 'error', errorCode }));
   }
   assert.match(startupNotice || '', /available\./, 'startup checks expose a published update without installing it');
   const startupTag = startupNotice?.match(/Prerelease (v\d+\.\d+\.\d+-rc\.?\d+) is available\./)?.[1];

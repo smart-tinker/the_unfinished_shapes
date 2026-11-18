@@ -10,7 +10,7 @@ import { createWorldServer } from './server.mjs';
 import { DATA_DIRECTORY, loadSettings, saveSettings, agentModelForThread } from './settings.mjs';
 import { findCodex } from './codex-discovery.mjs';
 import { createQuitConfirmation, createQuitStateReader, installQuitGuard, isSmokeAutoConfirmQuit } from './quit-guard.mjs';
-import { listPublishedReleases, releaseRelation, selectReleaseAsset, startupUpdateOptions } from './update-release.mjs';
+import { listPublishedReleases, releaseRelation, selectReleaseAsset, safeReleaseCheckErrorCode } from './update-release.mjs';
 const userData = process.env.TUS_DATA_DIR ? path.resolve(process.env.TUS_DATA_DIR) : path.join(app.getPath('appData'),DATA_DIRECTORY);
 mkdirSync(userData,{recursive:true});
 app.setPath('userData',userData);
@@ -78,7 +78,7 @@ app.whenReady().then(async()=>{
   handle('settings:save', async(s)=>{ const clean={...s,serverUrl:serverUrl(s.serverUrl||localUrl) === localUrl ? '' : serverUrl(s.serverUrl)}; await saveSettings(app.getPath('userData'),clean); });
   handle('updates:startup-check', async () => {
     try { return { status: 'checked', options: startupUpdateOptions(await listPublishedReleases(), app.getVersion()) }; }
-    catch { return { status: 'unavailable' }; }
+    catch (error) { return { status: 'unavailable', errorCode: safeReleaseCheckErrorCode(error) }; }
   });
   handle('updates:check', async distribution => {
     if (updateDownloadController) throw new Error('Wait for the current update download to finish or cancel it.');
