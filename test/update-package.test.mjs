@@ -261,6 +261,20 @@ test('classifies real archive-path rejection and known file-type, size and files
   assert.doesNotMatch(JSON.stringify(safeCodes), /private|runner|path|PRIVATE_TAR_CODE/);
 });
 
+test('classifies only an Invalid package error while opening the expected app.asar for writing', async () => {
+  const { safeArchiveExtractionOperation } = await import('../src/update-package.mjs');
+  assert.equal(typeof safeArchiveExtractionOperation, 'function', 'ASAR write failures have a safe operation classifier');
+  const failures = [
+    [Object.assign(new Error('Invalid package C:/private/app.asar'), { extractOperation: 'app-asar-write' }), 'asar-open-invalid-package'],
+    [Object.assign(new Error('Invalid package C:/private/app.asar'), { extractOperation: 'other' }), 'unknown'],
+    [Object.assign(new Error('private open failure'), { extractOperation: 'app-asar-write' }), 'unknown'],
+    [new Error('Invalid package C:/private/app.asar'), 'unknown'],
+  ];
+  const results = failures.map(([error]) => safeArchiveExtractionOperation(error));
+  assert.deepEqual(results, failures.map(([, expected]) => expected));
+  assert.doesNotMatch(JSON.stringify(results), /Invalid|private|C:|app\.asar/);
+});
+
 test('archive extraction refuses to replace an existing version folder', async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-target-'));
   const target = path.join(parent, 'TheUnfinishedShapes-0.1.0-rc.11');

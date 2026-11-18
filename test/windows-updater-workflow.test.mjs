@@ -21,10 +21,14 @@ test('Windows updater workflow runs after native smoke failure only when both pa
     assert.ok(installerStart > packageStart, 'the installer step follows packaging');
     const packageStep = job.slice(packageStart, installerStart);
     assert.match(packageStep, /npm run package:win/, 'the standard package command remains');
-    assert.match(packageStep, /PACKAGER_ARGV %\*/, 'the actual packager argv is recorded after cmd.exe parsing');
+    assert.match(packageStep, /\$env:DEBUG\s*=\s*'electron-packager'/, 'the standard Packager debug reports its effective ignore regex');
     assert.match(packageStep, /TUS_TAR_PACKAGE stage=before/, 'the installed tar ESM entry is recorded before packaging');
     assert.match(packageStep, /TUS_TAR_PACKAGE stage=after/, 'the bundled tar ESM entry is recorded after packaging');
+    assert.match(packageStep, /resources\/app\.asar/, 'the readback targets the actual packaged ASAR');
+    assert.match(packageStep, /@electron\/asar/, 'the readback uses the installed ASAR reader');
+    assert.match(packageStep, /extractFile/, 'the readback inspects files inside the ASAR');
     assert.match(packageStep, /exports[\s\S]*import\.default/, 'the check follows tar exports[\".\"].import.default');
+    assert.doesNotMatch(packageStep, /PACKAGER_ARGV|electron-packager\.tus-real\.cmd/, 'the ordinary npm package command is not wrapped');
     assert.match(job, /- id: installer\s*\n\s*run: npm run installer:win/);
     assert.doesNotMatch(native, /continue-on-error\s*:\s*true/, 'the native smoke failure remains job-failing');
     const condition = updater.match(/^\s*if:\s*\$\{\{([^}]+)\}\}/m)?.[1] || '';
