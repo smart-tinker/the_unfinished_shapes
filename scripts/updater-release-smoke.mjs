@@ -400,8 +400,12 @@ async function updateOnce(distribution) {
       verifierErrorType: safeVerifierErrorType(diagnostic.verifierErrorType),
       httpStatus: Number.isInteger(diagnostic.httpStatus) && diagnostic.httpStatus >= 400 && diagnostic.httpStatus <= 599 ? diagnostic.httpStatus : null,
     };
+    const mainDiagnostics = safeMainDiagnostics(
+      await current.page.evaluate(() => window.__tusProvenanceDiagnostics || []).catch(() => []),
+      manifestFile, assetName, tag,
+    );
     assert.ok([diagnostic.receivedMB, diagnostic.totalMB].every(value => value === null || value >= 0 && value <= 500), 'timeout progress diagnostic stays bounded');
-    throw new Error(error.message + '; update=' + JSON.stringify(safeDiagnostic));
+    throw new Error(error.message + '; update=' + JSON.stringify(safeDiagnostic) + '; main=' + JSON.stringify(mainDiagnostics));
   }
   const terminalFailure = await current.page.evaluate(() => {
     const status = document.querySelector('#updates-status');
@@ -483,6 +487,9 @@ async function updateOnce(distribution) {
         } else {
           extractDiagnostic.outcome = 'rejected';
           extractDiagnostic.reason = 'renderer-reported-error';
+          extractDiagnostic.failureCode = await current.page.evaluate(
+            () => document.querySelector('#updates-status')?.dataset.updateExtractFailureCode || 'OTHER',
+          );
         }
       } catch (error) {
         if (error?.name !== 'TimeoutError') {

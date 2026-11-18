@@ -125,11 +125,42 @@ const updaterFailureCodes = new Set([
   'PROVENANCE_FETCH_ERROR', 'PROVENANCE_HTTP_ERROR', 'PROVENANCE_RESPONSE_ERROR',
   'MISSING_PROVENANCE', 'NO_MATCHING_PROVENANCE', 'INVALID_ATTESTATION',
   'INVALID_ATTESTATION_PAYLOAD', 'SIGNATURE_REJECTED', 'ATTESTATION_MISMATCH',
-  'DOWNLOAD_FETCH_ERROR', 'DOWNLOAD_HTTP_ERROR',
+  'DOWNLOAD_FETCH_ERROR', 'DOWNLOAD_HTTP_ERROR', 'UPDATE_NOT_AVAILABLE', 'DOWNLOAD_ALREADY_RUNNING',
 ]);
 
 export function safeUpdaterFailureCode(code) {
   return typeof code === 'string' && updaterFailureCodes.has(code) ? code : 'OTHER';
+}
+
+const archiveExtractionFailureMessages = new Map([
+  ['Unsafe update archive path.', 'ARCHIVE_PATH'],
+  ['Update archive contains a path outside its expected package folder.', 'ARCHIVE_PATH'],
+  ['Update archive path escapes its destination.', 'ARCHIVE_PATH'],
+  ['Unsafe update archive link.', 'ARCHIVE_LINK'],
+  ['Update archive link escapes its package folder.', 'ARCHIVE_LINK'],
+  ['Update archive contains an unsupported file type.', 'ARCHIVE_FILE_TYPE'],
+  ['Update archive contains an unsupported link.', 'ARCHIVE_LINK'],
+  ['Update archive exceeds extraction limits.', 'ARCHIVE_SIZE'],
+  ['Update archive contains duplicate paths.', 'ARCHIVE_DUPLICATE_PATH'],
+  ['Invalid verified update extraction request.', 'INVALID_REQUEST'],
+  ['Choose a real destination folder for the update.', 'INVALID_DESTINATION'],
+  ['The update destination already exists. Choose another folder.', 'DESTINATION_EXISTS'],
+  ['This verified release package is not supported on this device.', 'UNSUPPORTED_PACKAGE'],
+  ['Invalid downloaded update file.', 'INVALID_PACKAGE'],
+  ['Downloaded update file failed its SHA-256 integrity check.', 'DIGEST_MISMATCH'],
+]);
+const archiveFileSystemCodes = new Map([
+  ['EACCES', 'FILESYSTEM_PERMISSION'], ['EPERM', 'FILESYSTEM_PERMISSION'],
+  ['ENOSPC', 'FILESYSTEM_SPACE'], ['EROFS', 'FILESYSTEM_READ_ONLY'],
+  ['ENOENT', 'FILESYSTEM_NOT_FOUND'], ['ENOTDIR', 'FILESYSTEM_NOT_FOUND'],
+  ['EEXIST', 'FILESYSTEM_CONFLICT'], ['EBUSY', 'FILESYSTEM_CONFLICT'], ['EISDIR', 'FILESYSTEM_CONFLICT'],
+  ['EMFILE', 'FILESYSTEM_RESOURCE_LIMIT'], ['ENFILE', 'FILESYSTEM_RESOURCE_LIMIT'],
+  ['EIO', 'FILESYSTEM_IO'],
+]);
+
+export function safeArchiveExtractionFailureCode(error) {
+  return archiveFileSystemCodes.get(error?.code) ??
+    archiveExtractionFailureMessages.get(error?.message) ?? 'OTHER';
 }
 
 function updaterFailure(message, failureCode, httpStatus) {

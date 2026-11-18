@@ -113,14 +113,25 @@ app.whenReady().then(async()=>{
     };
   });
   handle('updates:download', async () => {
-    if (!availableUpdate) throw new Error('Check for an update before downloading.');
-    if (updateDownloadController) throw new Error('An update download is already running.');
+    const diagnosticEnabled = process.argv.includes('--tus-smoke-provenance-diagnostic');
+    const reportEarlyFailure = failureCode => {
+      if (diagnosticEnabled) win?.webContents.send('updates:progress', {
+        state: 'failed', phase: 'download', failureCode, verifierCode: 'OTHER', verifierErrorType: 'OTHER', httpStatus: null,
+      });
+    };
+    if (!availableUpdate) {
+      reportEarlyFailure('UPDATE_NOT_AVAILABLE');
+      throw new Error('Check for an update before downloading.');
+    }
+    if (updateDownloadController) {
+      reportEarlyFailure('DOWNLOAD_ALREADY_RUNNING');
+      throw new Error('An update download is already running.');
+    }
     const controller = new AbortController();
     updateDownloadController = controller;
     let failureReported = false;
     try {
       const directory = path.join(app.getPath('downloads'), 'TheUnfinishedShapes-Updates');
-      const diagnosticEnabled = process.argv.includes('--tus-smoke-provenance-diagnostic');
       const reportDiagnostic = async diagnostic => {
         if (!diagnosticEnabled) return;
         try {
@@ -166,11 +177,22 @@ app.whenReady().then(async()=>{
     if (!downloadedUpdate || downloadedUpdate.distribution === 'installer') throw new Error('Download a portable update archive first.');
     const choice = await dialog.showOpenDialog(win, { title: 'Choose a folder for the verified TUS update', properties: ['openDirectory'] });
     if (choice.canceled || !choice.filePaths[0]) return { canceled: true };
-    const { extractVerifiedArchive } = await import('./update-package.mjs');
-    extractedUpdate = await extractVerifiedArchive({
-      filePath: downloadedUpdate.filePath, directory: choice.filePaths[0], tag: downloadedUpdate.release.tag_name,
-      assetName: downloadedUpdate.assetName, sha256: downloadedUpdate.sha256,
-    });
+    const diagnosticEnabled = process.argv.includes('--tus-smoke-provenance-diagnostic');
+    let classifyExtractionFailure;
+    try {
+      const updater = await import('./update-package.mjs');
+      classifyExtractionFailure = updater.safeArchiveExtractionFailureCode;
+      extractedUpdate = await updater.extractVerifiedArchive({
+        filePath: downloadedUpdate.filePath, directory: choice.filePaths[0], tag: downloadedUpdate.release.tag_name,
+        assetName: downloadedUpdate.assetName, sha256: downloadedUpdate.sha256,
+      });
+    } catch (error) {
+      if (diagnosticEnabled) win?.webContents.send('updates:progress', {
+        state: 'extract-failed',
+        failureCode: typeof classifyExtractionFailure === 'function' ? classifyExtractionFailure(error) : 'OTHER',
+      });
+      throw error;
+    }
     win?.webContents.send('updates:progress', { state: 'extracted' });
     return { extracted: true };
   });
