@@ -59,6 +59,10 @@ async function reportJumpTrace(client) {
   console.log('TUS_JUMP_TRACE ' + JSON.stringify(trace));
   return trace;
 }
+const atSolidWallFace = x => Number.isFinite(x) && Number(x.toFixed(2)) >= 14.68 && x <= 14.68 + 1e-7;
+assert.equal(atSolidWallFace(14.6765), true, 'the keyed approach reaches the wall face');
+assert.equal(atSolidWallFace(14.69), false, 'a position beyond the wall face is rejected');
+
 async function waitForState(predicate, description, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   let last;
@@ -221,12 +225,12 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.down('d');
   let reachedWall;
   try {
-    reachedWall = await waitForState(snapshot => Number(snapshot.players.find(player => player.id === 'alice')?.position.x.toFixed(2)) >= 14.68, 'Alice to reach the solid face at normal walking speed');
+    reachedWall = await waitForState(snapshot => atSolidWallFace(snapshot.players.find(player => player.id === 'alice')?.position.x), 'Alice to reach the solid face at normal walking speed');
   } finally {
     await alice.page.keyboard.up('d');
   }
   const blocked = await worldCommand('alice', { type: 'move', position: { x: 30, y: 999, z: 0 } });
-  assert.ok(Number(blocked.position.x.toFixed(2)) >= 14.68 && blocked.position.x < 14.7, 'the server stops Alice at the solid side');
+  assert.ok(atSolidWallFace(blocked.position.x), 'the server keeps Alice on the solid side');
   assert.equal(blocked.position.y, 0, 'client coordinates cannot grant unsupported height');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, blocked.revision);
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('X 14.7'));
