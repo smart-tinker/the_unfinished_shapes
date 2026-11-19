@@ -173,3 +173,12 @@ test('NSIS child-page snapshot requires visible parent and process provenance', 
   assert.deepEqual(events, [safe]);
   assert.equal(JSON.stringify(events).includes('C:/private'), false);
 });
+
+test('Install Options snapshot keeps a bounded radio signature without captions', () => {
+  const safe = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match page-window=present page-parent=match page-process=match page-visible=visible page-class=native-dialog option-page=install-options option-radio-count=two option-radio-style=match current-user-preset=match all-users-preset=match current-user-selected=selected all-users-selected=unselected title=product-match mode=present current-user=selected radios=two edits=none next=match install=missing finish=missing destination=unknown native-page=other uia-page=other directory-edit=missing directory-browse=missing directory-text=missing install-progress=missing uia-top-level=one main-window=present wizard-window=none foreground=installer window-class=native-dialog native-title=other uia-provider=available uia-descendants=many win32-children=many win32-buttons=many win32-static=many session=match desktop=default-interactive visible=visible pid=4321';
+  const unsafe = safe.replace('current-user-preset=match', 'current-user-preset=C:/private/account');
+  const events = safeNsisWizardEvents([safe, unsafe, 'raw page caption C:/private/account'].join(String.fromCharCode(10)));
+
+  assert.deepEqual(events, [safe]);
+  assert.equal(JSON.stringify(events).includes('C:/private/account'), false);
+});
