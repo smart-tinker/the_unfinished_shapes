@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
+import { windowsInstallerHandoffInstallDir } from './windows-updater-scenarios.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 
 import { manualEditing } from './ui-acceptance.mjs';
@@ -45,7 +46,9 @@ installer = path.resolve(installer);
 await access(installer);
 const portableExecutable = process.env.TUS_SMOKE_PORTABLE_EXECUTABLE && path.resolve(process.env.TUS_SMOKE_PORTABLE_EXECUTABLE);
 if (portableExecutable) await access(portableExecutable);
-const installDir = path.join(process.env.LOCALAPPDATA, 'Programs', 'TUS-Installer-Smoke');
+const installDir = path.resolve(process.env.TUS_SMOKE_INSTALL_DIR || (handoffMode
+  ? windowsInstallerHandoffInstallDir(process.env.LOCALAPPDATA)
+  : path.join(process.env.LOCALAPPDATA, 'Programs', 'TUS-Installer-Smoke')));
 if (handoffMode === 'verify-target') await access(installDir);
 else {
   try { await access(installDir); throw new Error('Refusing to replace an existing installation.'); }
@@ -62,6 +65,7 @@ function checkHandoff(name, matches, message) {
   try { assert.equal(matches, true, message); }
   catch (error) { error.tusHandoffCheck = name; throw error; }
 }
+if (handoffMode) assert.equal(installDir.toLowerCase(), path.resolve(windowsInstallerHandoffInstallDir(process.env.LOCALAPPDATA)).toLowerCase(), 'installer handoff uses the pinned product install directory');
 async function launch(executablePath, label, { realQuitPrompt = false } = {}) {
   let handoffCheck = 'startup-health';
   try {

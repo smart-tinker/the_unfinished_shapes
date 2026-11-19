@@ -12,7 +12,7 @@ import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, verify
 import { closeSmokeApp, observeGraphics, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 import { safeMainDiagnostics } from './updater-smoke-diagnostics.mjs';
-import { runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents } from './windows-updater-scenarios.mjs';
+import { runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, windowsInstallerHandoffInstallDir } from './windows-updater-scenarios.mjs';
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
 const updateHttpStatusPattern = /\bHTTP (\d{3})\b/;
@@ -453,6 +453,7 @@ async function runWindowsInstallerMode(mode, profile, { installerPath, expectedV
           GITHUB_SHA: sourceSha ?? process.env.GITHUB_SHA,
           TUS_DATA_DIR: profile.userData,
           TUS_SMOKE_INSTALLER: installerPath,
+          TUS_SMOKE_INSTALL_DIR: profile.installDir,
           TUS_SMOKE_PORTABLE_EXECUTABLE: '',
           TUS_SMOKE_HANDOFF_MODE: mode,
           TUS_SMOKE_HANDOFF_ROOT: profile.root,
@@ -491,7 +492,7 @@ async function prepareWindowsInstallerSource() {
   const installerFiles = (await readdir('dist/installer')).filter(name => name.endsWith('.exe'));
   assert.equal(installerFiles.length, 1, 'exactly one current-CI Setup must be built');
   profile.sourceInstaller = path.resolve('dist/installer', installerFiles[0]);
-  profile.installDir = path.join(profile.localData, 'Programs', 'TUS-Installer-Smoke');
+  profile.installDir = windowsInstallerHandoffInstallDir(profile.localData);
   profile.installedExe = path.join(profile.installDir, 'TheUnfinishedShapes.exe');
   profile.userData = path.join(profile.appData, 'the-unfinished-shapes');
   await runWindowsInstallerMode('prepare-source', profile, {

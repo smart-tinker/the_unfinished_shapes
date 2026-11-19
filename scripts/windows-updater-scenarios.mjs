@@ -1,7 +1,9 @@
+import path from 'node:path';
+
 const safeWizardEvents = new Set([
   'process-found', 'process-ambiguous', 'process-not-found',
   'window-found', 'window-not-found', 'window-mismatch',
-  'welcome-advanced', 'destination-entered', 'destination-verified', 'destination-unavailable', 'destination-mismatch',
+  'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-verified', 'destination-unavailable', 'destination-mismatch',
   'next-unavailable', 'install-started',
   'finish-clicked', 'installer-exited',
   'installer-exited-early', 'installed-executable-missing', 'completed',
@@ -23,11 +25,29 @@ const safeScenarioCategories = new Set([
   'build-label', 'build-title-sha', 'app-version', 'user-data', 'startup-health', 'other',
 ]);
 
+const safeWizardSnapshotPattern = /^TUS_NSIS_WIZARD snapshot stage=(entry|install-mode|directory|installing|finish|unknown) process=path-match window=pid-match title=(product-match|product-missing|unknown) mode=(present|absent|unknown) current-user=(selected|unselected|unknown) radios=(none|one|two|many) edits=(none|one|many) next=(match|missing) install=(match|missing) finish=(match|missing) destination=(match|mismatch|unknown) pid=(\d{1,10})$/;
+
+export function windowsInstallerHandoffInstallDir(localData) {
+  return path.join(localData, 'Programs', 'TheUnfinishedShapes');
+}
+
 export function safeNsisWizardEvents(output) {
   return String(output ?? '').split(/\r?\n/).flatMap(line => {
     const match = line.match(/^TUS_NSIS_WIZARD event=([a-z-]+)(?: pid=(\d+))?$/);
-    if (!match || !safeWizardEvents.has(match[1])) return [];
-    return ['TUS_NSIS_WIZARD event=' + match[1] + (match[2] ? ' pid=' + match[2] : '')];
+    if (match && safeWizardEvents.has(match[1])) {
+      return ['TUS_NSIS_WIZARD event=' + match[1] + (match[2] ? ' pid=' + match[2] : '')];
+    }
+    const snapshot = line.match(safeWizardSnapshotPattern);
+    if (!snapshot) return [];
+    return [
+      'TUS_NSIS_WIZARD snapshot stage=' + snapshot[1] +
+      ' process=path-match window=pid-match title=' + snapshot[2] +
+      ' mode=' + snapshot[3] + ' current-user=' + snapshot[4] +
+      ' radios=' + snapshot[5] + ' edits=' + snapshot[6] +
+      ' next=' + snapshot[7] + ' install=' + snapshot[8] +
+      ' finish=' + snapshot[9] + ' destination=' + snapshot[10] +
+      ' pid=' + snapshot[11],
+    ];
   });
 }
 
