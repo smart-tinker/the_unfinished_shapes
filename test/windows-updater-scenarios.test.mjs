@@ -109,3 +109,19 @@ test('NSIS handoff directory keeps the product filename leaf', async () => {
     path.join('/runner/temp/Local', 'Programs', 'TheUnfinishedShapes'),
   );
 });
+
+
+test('NSIS snapshot distinguishes an empty main HWND from another process-owned wizard page', () => {
+  const emptyMain = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown uia-top-level=one main-window=present wizard-window=none pid=9692';
+  const otherWizard = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown uia-top-level=two main-window=present wizard-window=other pid=9692';
+  const ambiguous = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match title=unknown mode=unknown current-user=unknown radios=many edits=one next=match install=missing finish=missing destination=unknown uia-top-level=many main-window=present wizard-window=ambiguous pid=9692';
+  const events = safeNsisWizardEvents([
+    emptyMain,
+    otherWizard,
+    ambiguous,
+    'TUS_NSIS_WIZARD snapshot stage=entry process=C:/private/path window=pid-match title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown uia-top-level=C:/private/path main-window=present wizard-window=other pid=9692',
+  ].join(String.fromCharCode(10)));
+
+  assert.deepEqual(events, [emptyMain, otherWizard, ambiguous]);
+  assert.doesNotMatch(JSON.stringify(events), /C:\/private\/path/);
+});

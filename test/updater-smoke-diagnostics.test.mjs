@@ -235,3 +235,58 @@ test('TUS extraction snapshot preserves only fixed ZIP write substages and exact
   assert.deepEqual(diagnostics.map(item => item.extractAppAsarEntry), [false, false, false, true, false, false]);
   assert.equal(JSON.stringify(diagnostics).includes('C:/private/path'), false);
 });
+
+
+test('TUS extraction stream snapshots distinguish advancing from stationary writes without raw details', () => {
+  const manifestFile = { sha256: 'a'.repeat(64) };
+  const samples = safeMainDiagnostics([
+    {
+      stage: 'extract-archive', status: 'starting',
+      extractStreamSnapshot: {
+        sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
+        sinkBytesWritten: 233242624, sinkWritableLength: 16384, sourcePath: 'C:/private/path',
+      },
+    },
+    {
+      stage: 'extract-archive', status: 'starting', previousSinkBytesWritten: 233242624,
+      extractStreamSnapshot: {
+        sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
+        sinkBytesWritten: 233259008, sinkWritableLength: 16384,
+      },
+    },
+    {
+      stage: 'extract-archive', status: 'starting', previousSinkBytesWritten: 233259008,
+      extractStreamSnapshot: {
+        sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
+        sinkBytesWritten: 233259008, sinkWritableLength: 16384,
+      },
+    },
+    {
+      stage: 'extract-archive', status: 'starting', previousSinkBytesWritten: 'C:/private/path',
+      extractStreamSnapshot: {
+        sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
+        sinkBytesWritten: 'C:/private/path', sinkWritableLength: -1, sourceName: 'private',
+      },
+    },
+  ], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+
+  assert.deepEqual(samples.map(item => item.streamSnapshot), [
+    {
+      sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
+      sinkBytesWritten: 233242624, sinkWritableLength: 16384, byteProgress: 'baseline',
+    },
+    {
+      sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
+      sinkBytesWritten: 233259008, sinkWritableLength: 16384, byteProgress: 'advanced',
+    },
+    {
+      sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
+      sinkBytesWritten: 233259008, sinkWritableLength: 16384, byteProgress: 'unchanged',
+    },
+    {
+      sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
+      sinkBytesWritten: null, sinkWritableLength: null, byteProgress: 'unknown',
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(samples), /C:\/private\/path|private/);
+});
