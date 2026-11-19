@@ -178,6 +178,7 @@ test('NSIS snapshot maps the production writer fields and rejects private option
   const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
   const template = script.match(/^\s*\[Console\]::Out\.WriteLine\("(TUS_NSIS_WIZARD snapshot [^"]+)"\)$/m)?.[1];
   assert.ok(template, 'snapshot test exercises the production PowerShell writer format');
+  assert.equal(template.includes('option-next=$OptionNext'), true, 'the production writer maps the pinned native Next status');
 
   const values = new Map(Object.entries({
     Stage: 'entry', PageWindow: 'present', PageParent: 'match', PageProcess: 'match',
