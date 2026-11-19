@@ -144,3 +144,18 @@ test('NSIS timeout snapshot classifies the exact HWND without exposing native te
   assert.ok(script.includes('foreground=$Foreground'));
   assert.ok(script.includes('uia-provider=$UiaProvider'));
 });
+
+test('NSIS timeout snapshot identifies pinned MUI page controls without exposing names', async () => {
+  const safe = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown native-page=directory uia-page=other directory-edit=match directory-browse=match directory-text=match install-progress=missing uia-top-level=one main-window=present wizard-window=none foreground=installer window-class=native-dialog native-title=other uia-provider=available uia-descendants=many win32-children=many win32-buttons=many win32-static=many session=match desktop=default-interactive visible=visible pid=4321';
+  const unsafe = safe.replace('directory-edit=match', 'directory-edit=C:/private/path');
+  const events = safeNsisWizardEvents([safe, unsafe, 'raw native text C:/private/path'].join(String.fromCharCode(10)));
+
+  assert.deepEqual(events, [safe]);
+  assert.equal(JSON.stringify(events).includes('C:/private'), false);
+
+  const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  assert.ok(script.includes('[TUSWindowApi]::GetDlgItem($Handle, 1019)'));
+  assert.ok(script.includes('[TUSWindowApi]::GetDlgItem($Handle, 1001)'));
+  assert.ok(script.includes('[TUSWindowApi]::GetDlgItem($Handle, 1006)'));
+  assert.ok(script.includes('[TUSWindowApi]::GetDlgItem($Handle, 1004)'));
+});
