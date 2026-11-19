@@ -159,3 +159,12 @@ test('NSIS timeout snapshot identifies pinned MUI page controls without exposing
   assert.ok(script.includes('[System.Windows.Automation.ControlType]::ProgressBar'));
   assert.ok(script.includes('native-page=$NativePage'));
 });
+
+test('NSIS child-page snapshot requires visible parent and process provenance', () => {
+  const safe = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match page-window=present page-parent=match page-process=match page-visible=visible page-class=native-dialog title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown native-page=directory uia-page=other directory-edit=match directory-browse=match directory-text=match install-progress=missing uia-top-level=one main-window=present wizard-window=none foreground=installer window-class=native-dialog native-title=other uia-provider=available uia-descendants=many win32-children=many win32-buttons=many win32-static=many session=match desktop=default-interactive visible=visible pid=4321';
+  const unsafe = safe.replace('page-process=match', 'page-process=C:/private/process');
+  const events = safeNsisWizardEvents([safe, unsafe, 'raw page HWND C:/private/path'].join(String.fromCharCode(10)));
+
+  assert.deepEqual(events, [safe]);
+  assert.equal(JSON.stringify(events).includes('C:/private'), false);
+});
