@@ -18,9 +18,10 @@ const maxJsonBytes = 2_000_000;
 const maxExtractedBytes = 1_073_741_824;
 const maxArchiveEntries = 20_000;
 
-export function safeZipExtractionStreamSnapshot(source, sink) {
-  const count = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, maxExtractedBytes) : null;
+export function safeZipExtractionStreamSnapshot(source, sink, entrySequence) {
+  const count = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, 0xffffffff) : null;
   return {
+    entrySequence: Number.isSafeInteger(entrySequence) && entrySequence >= 1 && entrySequence <= maxArchiveEntries ? entrySequence : null,
     sourceReadableEnded: source?.readableEnded === true,
     sinkWritableFinished: sink?.writableFinished === true,
     sinkClosed: sink?.closed === true,
@@ -634,7 +635,7 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath) 
       writeStream = isAppAsar && electronFs
         ? electronFs.createWriteStream(output, { flags: 'wx', mode: fileMode })
         : createWriteStream(output, { flags: 'wx', mode: fileMode });
-      extraction.streamSnapshot = () => safeZipExtractionStreamSnapshot(stream, writeStream);
+      extraction.streamSnapshot = () => safeZipExtractionStreamSnapshot(stream, writeStream, count);
       await pipeline(stream, writeStream);
       extraction.substage = 'none';
       extraction.appAsarEntry = false;

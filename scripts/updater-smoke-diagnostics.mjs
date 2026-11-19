@@ -34,6 +34,37 @@ const safeArchiveFailureCodes = new Set([
   'TAR_ENTRY_ERROR', 'TAR_ENTRY_INFO', 'TAR_ENTRY_INVALID', 'TAR_ENTRY_UNSUPPORTED', 'OTHER',
 ]);
 const safeArchiveFailureCode = value => safeArchiveFailureCodes.has(value) ? value : 'OTHER';
+const safeExtractStreamCount = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, 0xffffffff) : null;
+
+function safeExtractStreamSnapshot(value, previousEntrySequence, previousSinkBytesWritten) {
+  if (!value || typeof value !== 'object') return null;
+  const entrySequence = Number.isSafeInteger(value.entrySequence) && value.entrySequence >= 1 && value.entrySequence <= 20_000
+    ? value.entrySequence : null;
+  const sinkBytesWritten = safeExtractStreamCount(value.sinkBytesWritten);
+  let byteProgress = 'unknown';
+  if (entrySequence !== null) {
+    if (previousEntrySequence === undefined) byteProgress = 'baseline';
+    else if (Number.isSafeInteger(previousEntrySequence) && previousEntrySequence >= 1 && previousEntrySequence <= 20_000) {
+      if (previousEntrySequence !== entrySequence) byteProgress = 'baseline';
+      else {
+        const previousBytesWritten = safeExtractStreamCount(previousSinkBytesWritten);
+        if (sinkBytesWritten !== null && previousBytesWritten !== null) {
+          if (sinkBytesWritten > previousBytesWritten) byteProgress = 'advanced';
+          else if (sinkBytesWritten === previousBytesWritten) byteProgress = 'unchanged';
+        }
+      }
+    }
+  }
+  return {
+    entrySequence,
+    sourceReadableEnded: value.sourceReadableEnded === true,
+    sinkWritableFinished: value.sinkWritableFinished === true,
+    sinkClosed: value.sinkClosed === true,
+    sinkBytesWritten,
+    sinkWritableLength: safeExtractStreamCount(value.sinkWritableLength),
+    byteProgress,
+  };
+}
 
 export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
   const safeRootTarget = value => ({
@@ -86,6 +117,7 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
         executableExists: item.fileFlags?.executableExists === true,
         stagedAsarExists: item.fileFlags?.stagedAsarExists === true,
       },
+      streamSnapshot: safeExtractStreamSnapshot(item.extractStreamSnapshot, item.previousEntrySequence, item.previousSinkBytesWritten),
     } : {}),
     trustedRootTarget: safeRootTarget(item?.trustedRootTarget),
   }));

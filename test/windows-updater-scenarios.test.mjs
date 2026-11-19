@@ -91,7 +91,7 @@ test('installer helper failures expose only fixed progress stages', () => {
 
 
 test('NSIS wizard snapshot preserves bounded page facts without UIA names or paths', () => {
-  const safe = 'TUS_NSIS_WIZARD snapshot stage=install-mode process=path-match window=pid-match title=product-match mode=present current-user=selected radios=two edits=none next=match install=missing finish=missing destination=unknown pid=4321';
+  const safe = 'TUS_NSIS_WIZARD snapshot stage=install-mode process=path-match window=pid-match title=product-match mode=present current-user=selected radios=two edits=none next=match install=missing finish=missing destination=unknown uia-top-level=one main-window=present wizard-window=main pid=4321';
   const events = safeNsisWizardEvents([
     safe,
     'TUS_NSIS_WIZARD snapshot stage=directory process=C:/private/user window=raw title=C:/private/user mode=present current-user=selected radios=two edits=one next=match install=missing finish=missing destination=C:/private/dir pid=4321',

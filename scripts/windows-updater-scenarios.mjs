@@ -25,7 +25,7 @@ const safeScenarioCategories = new Set([
   'build-label', 'build-title-sha', 'app-version', 'user-data', 'startup-health', 'other',
 ]);
 
-const safeWizardSnapshotPattern = /^TUS_NSIS_WIZARD snapshot stage=(entry|install-mode|directory|installing|finish|unknown) process=path-match window=pid-match title=(product-match|product-missing|unknown) mode=(present|absent|unknown) current-user=(selected|unselected|unknown) radios=(none|one|two|many) edits=(none|one|many) next=(match|missing) install=(match|missing) finish=(match|missing) destination=(match|mismatch|unknown) pid=(\d{1,10})$/;
+const safeWizardSnapshotPattern = /^TUS_NSIS_WIZARD snapshot stage=(entry|install-mode|directory|installing|finish|unknown) process=path-match window=pid-match title=(product-match|product-missing|unknown) mode=(present|absent|unknown) current-user=(selected|unselected|unknown) radios=(none|one|two|many) edits=(none|one|many) next=(match|missing) install=(match|missing) finish=(match|missing) destination=(match|mismatch|unknown) uia-top-level=(none|one|two|many|unknown) main-window=(present|absent|unknown) wizard-window=(main|other|ambiguous|none|unknown) pid=(\d{1,10})$/;
 
 export function windowsInstallerHandoffInstallDir(localData) {
   return path.join(localData, 'Programs', 'TheUnfinishedShapes');
@@ -46,7 +46,8 @@ export function safeNsisWizardEvents(output) {
       ' radios=' + snapshot[5] + ' edits=' + snapshot[6] +
       ' next=' + snapshot[7] + ' install=' + snapshot[8] +
       ' finish=' + snapshot[9] + ' destination=' + snapshot[10] +
-      ' pid=' + snapshot[11],
+      ' uia-top-level=' + snapshot[11] + ' main-window=' + snapshot[12] + ' wizard-window=' + snapshot[13] +
+      ' pid=' + snapshot[14],
     ];
   });
 }

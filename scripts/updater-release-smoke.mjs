@@ -222,7 +222,7 @@ async function extractFileFlags(extractDir, version) {
   };
 }
 
-async function extractRuntimeBoundary(current, extractDir, targetVersion, manifestFile, assetName, tag) {
+async function extractRuntimeBoundary(current, extractDir, targetVersion, manifestFile, assetName, tag, previousStreamSnapshot = null) {
   assert.equal(typeof targetVersion, 'string', 'published manifest version is required for extraction file snapshot');
   const emptyFileFlags = { targetExists: false, appAsarExists: false, appAsarFile: false, executableExists: false, stagedAsarExists: false };
   const [main, renderer, fileFlags] = await Promise.all([
@@ -259,6 +259,11 @@ async function extractRuntimeBoundary(current, extractDir, targetVersion, manife
     extractPhase: main?.extractPhase,
     extractSubstage: main?.extractSubstage,
     extractAppAsarEntry: main?.extractAppAsarEntry,
+    extractStreamSnapshot: main?.extractStreamSnapshot,
+    ...(previousStreamSnapshot ? {
+      previousEntrySequence: previousStreamSnapshot.entrySequence,
+      previousSinkBytesWritten: previousStreamSnapshot.sinkBytesWritten,
+    } : {}),
     rendererStatusText: renderer?.statusText,
     rendererInvokeStatus: renderer?.invokeStatus,
     failureCode: renderer?.failureCode,
@@ -274,7 +279,7 @@ async function extractRuntimeBoundary(current, extractDir, targetVersion, manife
     extractPhase: safe.extractPhase,
     extractSubstage: safe.extractSubstage,
     extractAppAsarEntry: safe.extractAppAsarEntry,
-    streamSnapshot: main?.extractStreamSnapshot ?? null,
+    streamSnapshot: safe.streamSnapshot,
     rendererStatus: safe.rendererStatus,
     rendererInvokeStatus: safe.rendererInvokeStatus,
     failureCode: safe.failureCode,
@@ -771,6 +776,37 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     if (folderChooserInvoked) {
       let timedOut = false;
       let observationFailed = false;
+      let streamSampling = true;
+      let streamSampleTimer;
+      let streamSamples = 0;
+      let previousStreamSnapshot = null;
+      const scheduleStreamSample = delay => {
+        streamSampleTimer = setTimeout(() => { void captureStreamSample().catch(() => {}); }, delay);
+      };
+      const captureStreamSample = async () => {
+        streamSampleTimer = null;
+        if (!streamSampling || streamSamples >= 5) return;
+        const stream = await withTimeout(current.instance.evaluate(() => {
+          const snapshot = globalThis.__tusUpdaterSmokeBoundary?.extractStreamSnapshot;
+          return typeof snapshot === 'function' ? snapshot() : null;
+        }), 'Updater ZIP stream sample', 5000).catch(() => null);
+        if (!streamSampling) return;
+        const [safe] = safeMainDiagnostics([{
+          stage: 'extract-archive',
+          status: 'starting',
+          ...(previousStreamSnapshot ? {
+            previousEntrySequence: previousStreamSnapshot.entrySequence,
+            previousSinkBytesWritten: previousStreamSnapshot.sinkBytesWritten,
+          } : {}),
+          extractStreamSnapshot: stream,
+        }], manifestFile, assetName, tag);
+        const snapshot = safe?.streamSnapshot ?? null;
+        console.log('TUS_UPDATE_EXTRACT_STREAM ' + JSON.stringify(snapshot));
+        previousStreamSnapshot = snapshot;
+        streamSamples++;
+        if (streamSamples < 5) scheduleStreamSample(20000);
+      };
+      scheduleStreamSample(15000);
       try {
         await current.page.waitForFunction(({ pending, prior, success }) => {
           const status = document.querySelector('#updates-status');
@@ -782,8 +818,11 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
       } catch (error) {
         if (error?.name === 'TimeoutError') timedOut = true;
         else observationFailed = true;
+      } finally {
+        streamSampling = false;
+        clearTimeout(streamSampleTimer);
       }
-      const runtime = await extractRuntimeBoundary(current, extractDir, manifest.version, manifestFile, assetName, tag);
+      const runtime = await extractRuntimeBoundary(current, extractDir, manifest.version, manifestFile, assetName, tag, previousStreamSnapshot);
       extractDiagnostic.runtime = runtime;
       if (timedOut) {
         extractDiagnostic.outcome = 'pending';
