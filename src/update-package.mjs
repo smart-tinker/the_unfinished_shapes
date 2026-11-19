@@ -32,8 +32,7 @@ export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, ent
     compression,
     entryCompressedSize: count(entry?.compressedSize, maxAssetBytes),
     entryUncompressedSize: count(entry?.uncompressedSize),
-    compressedBytesRead: Number.isSafeInteger(compressedSource?.actualByteCount)
-      ? count(compressedSource.actualByteCount, maxAssetBytes) : null,
+    compressedBytesRead: position(compressedSource, maxAssetBytes),
     decodedBytes,
     sourceReadableEnded: source?.readableEnded === true,
     sinkWritableFinished: sink?.writableFinished === true,
@@ -579,7 +578,8 @@ async function openZipReadStream(zip, entry, trackCompressedRead) {
   let compressedReadStream = null;
   reader.createReadStream = function (options) {
     const stream = createReadStream.call(this, options);
-    if (options?.end - options?.start === entry.compressedSize && Number.isSafeInteger(stream?.actualByteCount)) {
+    if (options?.end - options?.start === entry.compressedSize &&
+        Number.isSafeInteger(stream?.start) && Number.isSafeInteger(stream?.pos) && stream.pos >= stream.start) {
       compressedReadStream = stream;
     }
     return stream;
