@@ -237,67 +237,85 @@ test('TUS extraction snapshot preserves only fixed ZIP write substages and exact
 });
 
 
-test('TUS extraction stream snapshots distinguish advancing from stationary writes without raw details', () => {
+test('TUS extraction snapshots localize bounded read, decode and write throughput per ZIP entry', () => {
   const manifestFile = { sha256: 'a'.repeat(64) };
-  const samples = safeMainDiagnostics([
-    {
-      stage: 'extract-archive', status: 'starting',
-      extractStreamSnapshot: {
-        sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-        entrySequence: 17, sinkBytesWritten: 233242624, sinkWritableLength: 16384, sourcePath: 'C:/private/path',
-      },
+  const assetName = 'candidate.zip';
+  const tag = 'v0.1.0-rc11';
+  const first = safeMainDiagnostics([{
+    stage: 'extract-archive',
+    status: 'starting',
+    extractStreamSnapshot: {
+      entrySequence: 17, compression: 'deflate',
+      entryCompressedSize: 1_000_000, entryUncompressedSize: 2_000_000,
+      compressedBytesRead: 100, decodedBytes: 1_000,
+      sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
+      sinkBytesWritten: 900, sinkWritableLength: 100,
+      sourcePath: 'C:/private/archive.zip', entryName: 'private-entry',
     },
-    {
-      stage: 'extract-archive', status: 'starting', previousEntrySequence: 17, previousSinkBytesWritten: 233242624,
-      extractStreamSnapshot: {
-        sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-        entrySequence: 17, sinkBytesWritten: 233259008, sinkWritableLength: 16384,
-      },
-    },
-    {
-      stage: 'extract-archive', status: 'starting', previousEntrySequence: 17, previousSinkBytesWritten: 233259008,
-      extractStreamSnapshot: {
-        sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-        entrySequence: 17, sinkBytesWritten: 233259008, sinkWritableLength: 16384,
-      },
-    },
-    {
-      stage: 'extract-archive', status: 'starting', previousEntrySequence: 'C:/private/path', previousSinkBytesWritten: 'C:/private/path',
-      extractStreamSnapshot: {
-        sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-        entrySequence: 'C:/private/path', sinkBytesWritten: 'C:/private/path', sinkWritableLength: -1, sourceName: 'private',
-      },
-    },
-    {
-      stage: 'extract-archive', status: 'starting', previousEntrySequence: 17, previousSinkBytesWritten: 233259008,
-      extractStreamSnapshot: {
-        sourceReadableEnded: true, sinkWritableFinished: false, sinkClosed: false,
-        entrySequence: 18, sinkBytesWritten: 9000000000, sinkWritableLength: 9000000000,
-      },
-    },
-  ], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+  }], manifestFile, assetName, tag)[0].streamSnapshot;
 
-  assert.deepEqual(samples.map(item => item.streamSnapshot), [
-    {
+  assert.deepEqual(first, {
+    entrySequence: 17, compression: 'deflate',
+    entryCompressedSize: 1_000_000, entryUncompressedSize: 2_000_000,
+    compressedBytesRead: 100, decodedBytes: 1_000,
+    sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
+    sinkBytesWritten: 900, sinkWritableLength: 100, byteProgress: 'baseline',
+    intervalMs: null, compressedReadBytesPerSecond: null,
+    decodedBytesPerSecond: null, writtenBytesPerSecond: null,
+  });
+
+  const second = safeMainDiagnostics([{
+    stage: 'extract-archive',
+    status: 'starting',
+    previousStreamSnapshot: first,
+    streamIntervalMs: 20_000,
+    extractStreamSnapshot: {
+      entrySequence: 17, compression: 'deflate',
+      entryCompressedSize: 1_000_000, entryUncompressedSize: 2_000_000,
+      compressedBytesRead: 500, decodedBytes: 5_000,
       sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-      entrySequence: 17, sinkBytesWritten: 233242624, sinkWritableLength: 16384, byteProgress: 'baseline',
+      sinkBytesWritten: 4_500, sinkWritableLength: 0,
     },
-    {
+  }], manifestFile, assetName, tag)[0].streamSnapshot;
+
+  assert.equal(second.intervalMs, 20_000);
+  assert.equal(second.compressedReadBytesPerSecond, 20);
+  assert.equal(second.decodedBytesPerSecond, 200);
+  assert.equal(second.writtenBytesPerSecond, 180);
+  assert.equal(second.byteProgress, 'advanced');
+
+  const nextEntry = safeMainDiagnostics([{
+    stage: 'extract-archive', status: 'starting',
+    previousStreamSnapshot: second, streamIntervalMs: 20_000,
+    extractStreamSnapshot: {
+      entrySequence: 18, compression: 'stored',
+      entryCompressedSize: 100, entryUncompressedSize: 100,
+      compressedBytesRead: 50, decodedBytes: 50,
       sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-      entrySequence: 17, sinkBytesWritten: 233259008, sinkWritableLength: 16384, byteProgress: 'advanced',
+      sinkBytesWritten: 50, sinkWritableLength: 0,
     },
-    {
-      sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-      entrySequence: 17, sinkBytesWritten: 233259008, sinkWritableLength: 16384, byteProgress: 'unchanged',
+  }], manifestFile, assetName, tag)[0].streamSnapshot;
+  assert.equal(nextEntry.byteProgress, 'baseline');
+  assert.equal(nextEntry.intervalMs, null);
+  assert.equal(nextEntry.compressedReadBytesPerSecond, null);
+
+  const bounded = safeMainDiagnostics([{
+    stage: 'extract-archive', status: 'starting',
+    previousStreamSnapshot: second, streamIntervalMs: 120_001,
+    extractStreamSnapshot: {
+      entrySequence: 17, compression: 'private',
+      entryCompressedSize: Number.MAX_SAFE_INTEGER, entryUncompressedSize: -1,
+      compressedBytesRead: 'C:/private/path', decodedBytes: 'private',
+      sinkBytesWritten: 900_000_000, sinkWritableLength: 0,
+      sourcePath: 'C:/private/archive.zip',
     },
-    {
-      sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-      entrySequence: null, sinkBytesWritten: null, sinkWritableLength: null, byteProgress: 'unknown',
-    },
-    {
-      sourceReadableEnded: true, sinkWritableFinished: false, sinkClosed: false,
-      entrySequence: 18, sinkBytesWritten: 4294967295, sinkWritableLength: 4294967295, byteProgress: 'baseline',
-    },
-  ]);
-  assert.doesNotMatch(JSON.stringify(samples), /C:\/private\/path|private/);
+  }], manifestFile, assetName, tag)[0].streamSnapshot;
+  assert.equal(bounded.compression, 'unknown');
+  assert.equal(bounded.entryCompressedSize, 4_294_967_295);
+  assert.equal(bounded.entryUncompressedSize, null);
+  assert.equal(bounded.compressedBytesRead, null);
+  assert.equal(bounded.decodedBytes, null);
+  assert.equal(bounded.intervalMs, null);
+  assert.equal(JSON.stringify([first, second, nextEntry, bounded]).includes('private'), false);
+  assert.equal(JSON.stringify([first, second, nextEntry, bounded]).includes('C:/private'), false);
 });
