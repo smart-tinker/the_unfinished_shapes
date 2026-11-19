@@ -154,8 +154,8 @@ test('NSIS timeout snapshot identifies pinned MUI page controls without exposing
   assert.equal(JSON.stringify(events).includes('C:/private'), false);
 
   const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
-  assert.ok(script.includes('[TUSWindowApi]::GetDlgItem($Handle, 1019)'));
-  assert.ok(script.includes('[TUSWindowApi]::GetDlgItem($Handle, 1001)'));
-  assert.ok(script.includes('[TUSWindowApi]::GetDlgItem($Handle, 1006)'));
-  assert.ok(script.includes('[TUSWindowApi]::GetDlgItem($Handle, 1004)'));
+  assert.ok(script.includes('[TUSWindowApi]::GetDlgItem($Window, $ControlId)'));
+  for (const controlId of ['1019', '1001', '1006', '1004']) assert.ok(script.includes('-ControlId ' + controlId));
+  assert.ok(script.includes('[System.Windows.Automation.ControlType]::ProgressBar'));
+  assert.ok(script.includes('native-page=$NativePage'));
 });

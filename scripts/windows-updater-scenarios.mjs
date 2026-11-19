@@ -25,7 +25,7 @@ const safeScenarioCategories = new Set([
   'build-label', 'build-title-sha', 'app-version', 'user-data', 'startup-health', 'other',
 ]);
 
-const safeWizardSnapshotPattern = /^TUS_NSIS_WIZARD snapshot stage=(entry|install-mode|directory|installing|finish|unknown) process=path-match window=pid-match title=(product-match|product-missing|unknown) mode=(present|absent|unknown) current-user=(selected|unselected|unknown) radios=(none|one|two|many) edits=(none|one|many) next=(match|missing) install=(match|missing) finish=(match|missing) destination=(match|mismatch|unknown) uia-top-level=(none|one|two|many|unknown) main-window=(present|absent|unknown) wizard-window=(main|other|ambiguous|none|unknown) foreground=(installer|other|none|unknown) window-class=(native-dialog|other|unknown) native-title=(error-like|other|empty|unknown) uia-provider=(empty|available|error|unknown) uia-descendants=(none|one|two|many|unknown) win32-children=(none|one|two|many|unknown) win32-buttons=(none|one|two|many|unknown) win32-static=(none|one|two|many|unknown) session=(match|mismatch|unknown) desktop=(default-interactive|other|unknown) visible=(visible|hidden|unknown) pid=(\d{1,10})$/;
+const safeWizardSnapshotPattern = /^TUS_NSIS_WIZARD snapshot stage=(entry|install-mode|directory|installing|finish|unknown) process=path-match window=pid-match title=(product-match|product-missing|unknown) mode=(present|absent|unknown) current-user=(selected|unselected|unknown) radios=(none|one|two|many) edits=(none|one|many) next=(match|missing) install=(match|missing) finish=(match|missing) destination=(match|mismatch|unknown) native-page=(directory|install-files|other|unknown) uia-page=(install-mode|directory|install-files|finish|other|unknown) directory-edit=(match|missing|wrong-class|unknown) directory-browse=(match|missing|wrong-class|unknown) directory-text=(match|missing|wrong-class|unknown) install-progress=(match|missing|wrong-class|unknown) uia-top-level=(none|one|two|many|unknown) main-window=(present|absent|unknown) wizard-window=(main|other|ambiguous|none|unknown) foreground=(installer|other|none|unknown) window-class=(native-dialog|other|unknown) native-title=(error-like|other|empty|unknown) uia-provider=(empty|available|error|unknown) uia-descendants=(none|one|two|many|unknown) win32-children=(none|one|two|many|unknown) win32-buttons=(none|one|two|many|unknown) win32-static=(none|one|two|many|unknown) session=(match|mismatch|unknown) desktop=(default-interactive|other|unknown) visible=(visible|hidden|unknown) pid=(\d{1,10})$/;
 
 export function windowsInstallerHandoffInstallDir(localData) {
   return path.join(localData, 'Programs', 'TheUnfinishedShapes');
@@ -46,12 +46,15 @@ export function safeNsisWizardEvents(output) {
       ' radios=' + snapshot[5] + ' edits=' + snapshot[6] +
       ' next=' + snapshot[7] + ' install=' + snapshot[8] +
       ' finish=' + snapshot[9] + ' destination=' + snapshot[10] +
-      ' uia-top-level=' + snapshot[11] + ' main-window=' + snapshot[12] + ' wizard-window=' + snapshot[13] +
-      ' foreground=' + snapshot[14] + ' window-class=' + snapshot[15] + ' native-title=' + snapshot[16] +
-      ' uia-provider=' + snapshot[17] + ' uia-descendants=' + snapshot[18] +
-      ' win32-children=' + snapshot[19] + ' win32-buttons=' + snapshot[20] + ' win32-static=' + snapshot[21] +
-      ' session=' + snapshot[22] + ' desktop=' + snapshot[23] + ' visible=' + snapshot[24] +
-      ' pid=' + snapshot[25],
+      ' native-page=' + snapshot[11] + ' uia-page=' + snapshot[12] +
+      ' directory-edit=' + snapshot[13] + ' directory-browse=' + snapshot[14] +
+      ' directory-text=' + snapshot[15] + ' install-progress=' + snapshot[16] +
+      ' uia-top-level=' + snapshot[17] + ' main-window=' + snapshot[18] + ' wizard-window=' + snapshot[19] +
+      ' foreground=' + snapshot[20] + ' window-class=' + snapshot[21] + ' native-title=' + snapshot[22] +
+      ' uia-provider=' + snapshot[23] + ' uia-descendants=' + snapshot[24] +
+      ' win32-children=' + snapshot[25] + ' win32-buttons=' + snapshot[26] + ' win32-static=' + snapshot[27] +
+      ' session=' + snapshot[28] + ' desktop=' + snapshot[29] + ' visible=' + snapshot[30] +
+      ' pid=' + snapshot[31],
     ];
   });
 }
