@@ -19,7 +19,7 @@ const maxExtractedBytes = 1_073_741_824;
 const maxArchiveEntries = 20_000;
 
 export function safeZipExtractionStreamSnapshot(source, sink, entrySequence) {
-  const count = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, 0xffffffff) : null;
+  const count = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, maxExtractedBytes) : null;
   return {
     entrySequence: Number.isSafeInteger(entrySequence) && entrySequence >= 1 && entrySequence <= maxArchiveEntries ? entrySequence : null,
     sourceReadableEnded: source?.readableEnded === true,

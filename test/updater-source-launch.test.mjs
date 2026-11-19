@@ -66,7 +66,8 @@ test('pending ZIP extraction exposes capped stream state without entry data', as
     path: 'C:/private/app.asar',
     entryName: 'private-entry',
   };
-  assert.deepEqual(updatePackage.safeZipExtractionStreamSnapshot(source, sink), {
+  assert.deepEqual(updatePackage.safeZipExtractionStreamSnapshot(source, sink, 17), {
+    entrySequence: 17,
     sourceReadableEnded: false,
     sinkWritableFinished: false,
     sinkClosed: false,
@@ -76,9 +77,9 @@ test('pending ZIP extraction exposes capped stream state without entry data', as
 
   const sourceText = await readFile(new URL('../src/update-package.mjs', import.meta.url), 'utf8');
   const smoke = await readFile(new URL('../scripts/updater-release-smoke.mjs', import.meta.url), 'utf8');
-  assert.ok(sourceText.includes('streamSnapshot = () => safeZipExtractionStreamSnapshot(stream, writeStream)'));
+  assert.ok(sourceText.includes('streamSnapshot = () => safeZipExtractionStreamSnapshot(stream, writeStream, count)'));
   assert.ok(smoke.includes("extractStreamSnapshot: typeof boundary.extractStreamSnapshot === 'function' ? boundary.extractStreamSnapshot() : null"));
-  assert.ok(smoke.includes('streamSnapshot: main?.extractStreamSnapshot ?? null'));
+  assert.ok(smoke.includes('streamSnapshot: safe.streamSnapshot'));
   assert.ok(sourceText.includes('extraction.streamSnapshot = null;'));
   assert.ok(sourceText.includes("if (smokeBoundary) smokeBoundary.extractStreamSnapshot = typeof value === 'function' ? value : null;"));
 });
