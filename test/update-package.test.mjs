@@ -853,6 +853,11 @@ test('ZIP stream snapshots identify the current archive entry without its name',
 
   assert.deepEqual(snapshot, {
     entrySequence: 17,
+    compression: 'unknown',
+    entryCompressedSize: null,
+    entryUncompressedSize: null,
+    compressedBytesRead: null,
+    decodedBytes: null,
     sourceReadableEnded: false,
     sinkWritableFinished: false,
     sinkClosed: false,

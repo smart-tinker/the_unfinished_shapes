@@ -58,7 +58,7 @@ test('pending ZIP extraction exposes per-entry read, decode and write state with
   const updatePackage = await import('../src/update-package.mjs');
   assert.equal(typeof updatePackage.safeZipExtractionStreamSnapshot, 'function');
   const source = { readableEnded: false, actualByteCount: 999, path: 'C:/private/archive.zip' };
-  const compressedSource = { actualByteCount: 200, path: 'C:/private/archive.zip', entryName: 'private-entry' };
+  const compressedSource = { start: 50, pos: 300, path: 'C:/private/archive.zip', entryName: 'private-entry' };
   const entry = { compressionMethod: 8, compressedSize: 111_522_616, uncompressedSize: 249_832_448, fileName: 'private-entry' };
   const sink = {
     writableFinished: false,
@@ -73,7 +73,7 @@ test('pending ZIP extraction exposes per-entry read, decode and write state with
     compression: 'deflate',
     entryCompressedSize: 111_522_616,
     entryUncompressedSize: 249_832_448,
-    compressedBytesRead: 200,
+    compressedBytesRead: 250,
     decodedBytes: 999,
     sourceReadableEnded: false,
     sinkWritableFinished: false,
@@ -86,7 +86,6 @@ test('pending ZIP extraction exposes per-entry read, decode and write state with
   const smoke = await readFile(new URL('../scripts/updater-release-smoke.mjs', import.meta.url), 'utf8');
   assert.ok(sourceText.includes('safeZipExtractionStreamSnapshot(stream, writeStream, count, entry, compressedReadStream)'));
   assert.ok(sourceText.includes("typeof zip.reader?.createReadStream !== 'function'"));
-  assert.ok(sourceText.includes('Number.isSafeInteger(stream?.actualByteCount)'));
   assert.ok(smoke.includes('streamIntervalMs'));
   assert.ok(smoke.includes('previousStreamSnapshot: previousStreamSnapshot.snapshot'));
   assert.ok(sourceText.includes('extraction.streamSnapshot = null;'));
