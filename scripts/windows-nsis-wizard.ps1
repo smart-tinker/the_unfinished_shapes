@@ -15,6 +15,8 @@ public static class TUSWindowApi {
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll", SetLastError = true)] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
   [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint command);
+  [DllImport("user32.dll", SetLastError = true)] public static extern int GetWindowLong(IntPtr hWnd, int index);
+  [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr childAfter, string className, string windowName);
   [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr hDlg, int nIDDlgItem);
@@ -51,6 +53,18 @@ function Get-NativeControlStatus {
     return 'wrong-class'
   } catch { return 'unknown' }
 }
+function Get-NativeRadioSelection {
+  param([IntPtr]$Handle)
+  if (-not $script:nativeWindowApiAvailable -or $Handle -eq [IntPtr]::Zero) { return 'unknown' }
+  try {
+    $value = [IntPtr]::Zero
+    $sent = [TUSWindowApi]::SendMessageTimeout($Handle, 0x00F0, [IntPtr]::Zero, [IntPtr]::Zero, 0x0002, 500, [ref]$value)
+    if ($sent -eq [IntPtr]::Zero) { return 'unknown' }
+    if ($value.ToInt64() -eq 0) { return 'unselected' }
+    if ($value.ToInt64() -eq 1) { return 'selected' }
+  } catch {}
+  return 'unknown'
+}
 function Get-DesktopName {
   param([uint32]$ThreadId)
   if (-not $script:nativeWindowApiAvailable -or $ThreadId -eq 0) { return $null }
@@ -69,6 +83,9 @@ function Get-NsisPageSummary {
     Handle = [IntPtr]::Zero; PageWindow = 'unknown'; PageParent = 'unknown'; PageProcess = 'unknown'
     PageVisible = 'unknown'; PageClass = 'unknown'; NativePage = 'unknown'
     DirectoryEdit = 'unknown'; DirectoryBrowse = 'unknown'; DirectoryText = 'unknown'; InstallProgress = 'unknown'
+    OptionPage = 'unknown'; OptionRadioCount = 'unknown'; OptionRadioStyle = 'unknown'
+    CurrentUserPreset = 'unknown'; AllUsersPreset = 'unknown'
+    CurrentUserSelected = 'unknown'; AllUsersSelected = 'unknown'
   }
   if (-not $script:nativeWindowApiAvailable -or $MainWindowHandle -eq [IntPtr]::Zero) { return [pscustomobject]$result }
   try {
@@ -124,6 +141,76 @@ function Get-NsisPageSummary {
     $result.DirectoryBrowse = Get-NativeControlStatus -Window $pageHandle -ControlId 1001 -ExpectedClass 'Button'
     $result.DirectoryText = Get-NativeControlStatus -Window $pageHandle -ControlId 1006 -ExpectedClass 'Static'
     $result.InstallProgress = Get-NativeControlStatus -Window $pageHandle -ControlId 1004 -ExpectedClass 'msctls_progress32'
+    $controls = @()
+    $optionEnumerationComplete = $false
+    $optionEnumerationFailed = $false
+    $control = [TUSWindowApi]::GetWindow($pageHandle, 5)
+    for ($index = 0; $index -lt 128; $index++) {
+      if ($control -eq [IntPtr]::Zero) { $optionEnumerationComplete = $true; break }
+      $className = [System.Text.StringBuilder]::new(128)
+      if ([TUSWindowApi]::GetClassName($control, $className, $className.Capacity) -le 0) {
+        $optionEnumerationFailed = $true
+        break
+      }
+      if ($className.ToString() -eq 'Button') {
+        $style = [TUSWindowApi]::GetWindowLong($control, -16)
+        $captionLength = [TUSWindowApi]::GetWindowTextLength($control)
+        if ($captionLength -lt 0 -or $captionLength -gt 256) {
+          $optionEnumerationFailed = $true
+          break
+        }
+        $caption = ''
+        if ($captionLength -gt 0) {
+          $captionBuffer = [System.Text.StringBuilder]::new(257)
+          if ([TUSWindowApi]::GetWindowText($control, $captionBuffer, $captionBuffer.Capacity) -le 0) {
+            $optionEnumerationFailed = $true
+            break
+          }
+          $caption = $captionBuffer.ToString()
+        }
+        $controls += [pscustomobject]@{ Handle = $control; Style = $style; Caption = $caption }
+      }
+      $control = [TUSWindowApi]::GetWindow($control, 2)
+    }
+    if ($control -eq [IntPtr]::Zero) { $optionEnumerationComplete = $true }
+    if ($optionEnumerationComplete -and -not $optionEnumerationFailed) {
+      $radioControls = @($controls | Where-Object { ($_.Style -band 0x0f) -eq 9 })
+      $result.OptionRadioCount = Get-SafeControlCount -Count $radioControls.Count
+      if ($radioControls.Count -eq 2) {
+        $result.OptionRadioStyle = 'match'
+        $userSuffix = '(' + [Environment]::UserName + ')'
+        $currentUserRadios = @($radioControls | Where-Object {
+          $_.Caption.EndsWith($userSuffix, [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($currentUserRadios.Count -eq 1) {
+          $otherRadio = @($radioControls | Where-Object { $_.Handle -ne $currentUserRadios[0].Handle })[0]
+          if ($otherRadio.Caption.Length -gt 0 -and
+              -not $otherRadio.Caption.EndsWith($userSuffix, [StringComparison]::OrdinalIgnoreCase)) {
+            $result.CurrentUserPreset = 'match'
+            # The pinned template has only two presets; the other labeled radio is the all-users option.
+            $result.AllUsersPreset = 'match'
+            $result.CurrentUserSelected = Get-NativeRadioSelection -Handle $currentUserRadios[0].Handle
+            $result.AllUsersSelected = Get-NativeRadioSelection -Handle $otherRadio.Handle
+          } else {
+            $result.CurrentUserPreset = 'mismatch'
+            $result.AllUsersPreset = 'mismatch'
+          }
+        } else {
+          $result.CurrentUserPreset = 'mismatch'
+          $result.AllUsersPreset = 'mismatch'
+        }
+      } else {
+        $result.OptionRadioStyle = 'mismatch'
+        $result.CurrentUserPreset = 'mismatch'
+        $result.AllUsersPreset = 'mismatch'
+      }
+      if ($result.OptionRadioCount -eq 'two' -and $result.OptionRadioStyle -eq 'match' -and
+          $result.CurrentUserPreset -eq 'match' -and $result.AllUsersPreset -eq 'match') {
+        $result.OptionPage = 'install-options'
+      } else {
+        $result.OptionPage = 'other'
+      }
+    }
     if ($result.DirectoryText -eq 'match' -and $result.DirectoryEdit -eq 'match' -and $result.DirectoryBrowse -eq 'match') {
       $result.NativePage = 'directory'
     } elseif ($result.DirectoryText -eq 'match' -and $result.InstallProgress -eq 'match' -and
@@ -144,6 +231,9 @@ function Get-Win32WindowSummary {
     PageHandle = [IntPtr]::Zero; PageWindow = 'unknown'; PageParent = 'unknown'; PageProcess = 'unknown'
     PageVisible = 'unknown'; PageClass = 'unknown'
     DirectoryEdit = 'unknown'; DirectoryBrowse = 'unknown'; DirectoryText = 'unknown'; InstallProgress = 'unknown'
+    OptionPage = 'unknown'; OptionRadioCount = 'unknown'; OptionRadioStyle = 'unknown'
+    CurrentUserPreset = 'unknown'; AllUsersPreset = 'unknown'
+    CurrentUserSelected = 'unknown'; AllUsersSelected = 'unknown'
     UiaProvider = 'unknown'; UiaDescendants = 'unknown'; Children = 'unknown'
     Buttons = 'unknown'; Static = 'unknown'; Session = 'unknown'
     Desktop = 'unknown'; Visible = 'unknown'
@@ -161,6 +251,10 @@ function Get-Win32WindowSummary {
     $result.NativePage = $page.NativePage
     $result.DirectoryEdit = $page.DirectoryEdit; $result.DirectoryBrowse = $page.DirectoryBrowse
     $result.DirectoryText = $page.DirectoryText; $result.InstallProgress = $page.InstallProgress
+    $result.OptionPage = $page.OptionPage; $result.OptionRadioCount = $page.OptionRadioCount
+    $result.OptionRadioStyle = $page.OptionRadioStyle
+    $result.CurrentUserPreset = $page.CurrentUserPreset; $result.AllUsersPreset = $page.AllUsersPreset
+    $result.CurrentUserSelected = $page.CurrentUserSelected; $result.AllUsersSelected = $page.AllUsersSelected
 
     $className = [System.Text.StringBuilder]::new(128)
     if ([TUSWindowApi]::GetClassName($Handle, $className, $className.Capacity) -gt 0) {
@@ -221,6 +315,9 @@ function Get-WizardWindowSummary {
     Foreground = 'unknown'; WindowClass = 'unknown'; NativeTitle = 'unknown'; NativePage = 'unknown'
     PageWindow = 'unknown'; PageParent = 'unknown'; PageProcess = 'unknown'; PageVisible = 'unknown'; PageClass = 'unknown'
     DirectoryEdit = 'unknown'; DirectoryBrowse = 'unknown'; DirectoryText = 'unknown'; InstallProgress = 'unknown'
+    OptionPage = 'unknown'; OptionRadioCount = 'unknown'; OptionRadioStyle = 'unknown'
+    CurrentUserPreset = 'unknown'; AllUsersPreset = 'unknown'
+    CurrentUserSelected = 'unknown'; AllUsersSelected = 'unknown'
     UiaProvider = 'unknown'; UiaDescendants = 'unknown'; Win32Children = 'unknown'
     Win32Buttons = 'unknown'; Win32Static = 'unknown'; Session = 'unknown'
     Desktop = 'unknown'; Visible = 'unknown'
@@ -269,6 +366,10 @@ function Get-WizardWindowSummary {
           $summary.DirectoryBrowse = $native.DirectoryBrowse
           $summary.DirectoryText = $native.DirectoryText
           $summary.InstallProgress = $native.InstallProgress
+          $summary.OptionPage = $native.OptionPage; $summary.OptionRadioCount = $native.OptionRadioCount
+          $summary.OptionRadioStyle = $native.OptionRadioStyle
+          $summary.CurrentUserPreset = $native.CurrentUserPreset; $summary.AllUsersPreset = $native.AllUsersPreset
+          $summary.CurrentUserSelected = $native.CurrentUserSelected; $summary.AllUsersSelected = $native.AllUsersSelected
           $summary.Win32Children = $native.Children
           $summary.Win32Buttons = $native.Buttons
           $summary.Win32Static = $native.Static
@@ -342,6 +443,13 @@ function Write-WizardSnapshot {
     [ValidateSet('match', 'mismatch', 'unknown')][string]$PageProcess,
     [ValidateSet('visible', 'hidden', 'unknown')][string]$PageVisible,
     [ValidateSet('native-dialog', 'other', 'unknown')][string]$PageClass,
+    [ValidateSet('install-options', 'other', 'unknown')][string]$OptionPage,
+    [ValidateSet('none', 'one', 'two', 'many', 'unknown')][string]$OptionRadioCount,
+    [ValidateSet('match', 'mismatch', 'unknown')][string]$OptionRadioStyle,
+    [ValidateSet('match', 'mismatch', 'unknown')][string]$CurrentUserPreset,
+    [ValidateSet('match', 'mismatch', 'unknown')][string]$AllUsersPreset,
+    [ValidateSet('selected', 'unselected', 'unknown')][string]$CurrentUserSelected,
+    [ValidateSet('selected', 'unselected', 'unknown')][string]$AllUsersSelected,
     [ValidateSet('install-mode', 'directory', 'install-files', 'finish', 'other', 'unknown')][string]$UiaPage,
     [ValidateSet('match', 'missing', 'wrong-class', 'unknown')][string]$DirectoryEdit,
     [ValidateSet('match', 'missing', 'wrong-class', 'unknown')][string]$DirectoryBrowse,
@@ -363,7 +471,7 @@ function Write-WizardSnapshot {
     [ValidateSet('visible', 'hidden', 'unknown')][string]$Visible,
     [ValidateRange(1, 2147483647)][int]$ProcessId
   )
-  [Console]::Out.WriteLine("TUS_NSIS_WIZARD snapshot stage=$Stage process=path-match window=pid-match page-window=$PageWindow page-parent=$PageParent page-process=$PageProcess page-visible=$PageVisible page-class=$PageClass title=$Title mode=$Mode current-user=$CurrentUser radios=$Radios edits=$Edits next=$Next install=$Install finish=$Finish destination=$Destination native-page=$NativePage uia-page=$UiaPage directory-edit=$DirectoryEdit directory-browse=$DirectoryBrowse directory-text=$DirectoryText install-progress=$InstallProgress uia-top-level=$UiaTopLevel main-window=$MainWindow wizard-window=$WizardWindow foreground=$Foreground window-class=$WindowClass native-title=$NativeTitle uia-provider=$UiaProvider uia-descendants=$UiaDescendants win32-children=$Win32Children win32-buttons=$Win32Buttons win32-static=$Win32Static session=$Session desktop=$Desktop visible=$Visible pid=$ProcessId")
+  [Console]::Out.WriteLine("TUS_NSIS_WIZARD snapshot stage=$Stage process=path-match window=pid-match page-window=$PageWindow page-parent=$PageParent page-process=$PageProcess page-visible=$PageVisible page-class=$PageClass option-page=$OptionPage option-radio-count=$OptionRadioCount option-radio-style=$OptionRadioStyle current-user-preset=$CurrentUserPreset all-users-preset=$AllUsersPreset current-user-selected=$CurrentUserSelected all-users-selected=$AllUsersSelected title=$Title mode=$Mode current-user=$CurrentUser radios=$Radios edits=$Edits next=$Next install=$Install finish=$Finish destination=$Destination native-page=$NativePage uia-page=$UiaPage directory-edit=$DirectoryEdit directory-browse=$DirectoryBrowse directory-text=$DirectoryText install-progress=$InstallProgress uia-top-level=$UiaTopLevel main-window=$MainWindow wizard-window=$WizardWindow foreground=$Foreground window-class=$WindowClass native-title=$NativeTitle uia-provider=$UiaProvider uia-descendants=$UiaDescendants win32-children=$Win32Children win32-buttons=$Win32Buttons win32-static=$Win32Static session=$Session desktop=$Desktop visible=$Visible pid=$ProcessId")
   [Console]::Out.Flush()
 }
 
@@ -452,6 +560,9 @@ $snapshot = [ordered]@{
   Stage = 'entry'; Title = 'unknown'; Mode = 'unknown'; CurrentUser = 'unknown'
   Radios = 'none'; Edits = 'none'; Next = 'missing'; Install = 'missing'
   Finish = 'missing'; Destination = 'unknown'; UiPage = 'unknown'
+  OptionPage = 'unknown'; OptionRadioCount = 'unknown'; OptionRadioStyle = 'unknown'
+  CurrentUserPreset = 'unknown'; AllUsersPreset = 'unknown'
+  CurrentUserSelected = 'unknown'; AllUsersSelected = 'unknown'
 }
 while ([DateTime]::UtcNow -lt $deadline) {
   $process = Get-Process -Id $script:installerProcessId -ErrorAction SilentlyContinue
@@ -536,6 +647,10 @@ while ([DateTime]::UtcNow -lt $deadline) {
   }
   $snapshot = [ordered]@{
     Stage = $stage; Title = $titleStatus; Mode = $modeStatus; CurrentUser = $currentUserStatus; UiPage = $uiaPageStatus
+    OptionPage = $nativeWindow.OptionPage; OptionRadioCount = $nativeWindow.OptionRadioCount
+    OptionRadioStyle = $nativeWindow.OptionRadioStyle
+    CurrentUserPreset = $nativeWindow.CurrentUserPreset; AllUsersPreset = $nativeWindow.AllUsersPreset
+    CurrentUserSelected = $nativeWindow.CurrentUserSelected; AllUsersSelected = $nativeWindow.AllUsersSelected
     Radios = $radioCountStatus
     Edits = $editCountStatus
     Next = $nextStatus; Install = $installStatus; Finish = $finishStatus
@@ -647,7 +762,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
 if (-not $finished) {
   if (-not $windowReported) { Write-WizardEvent -Name 'window-not-found' -ProcessId $script:installerProcessId }
   $windowSummary = Get-WizardWindowSummary -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle
-  Write-WizardSnapshot -Stage $snapshot.Stage -Title $snapshot.Title -Mode $snapshot.Mode -CurrentUser $snapshot.CurrentUser -Radios $snapshot.Radios -Edits $snapshot.Edits -Next $snapshot.Next -Install $snapshot.Install -Finish $snapshot.Finish -Destination $snapshot.Destination -NativePage $windowSummary.NativePage -PageWindow $windowSummary.PageWindow -PageParent $windowSummary.PageParent -PageProcess $windowSummary.PageProcess -PageVisible $windowSummary.PageVisible -PageClass $windowSummary.PageClass -UiaPage $snapshot.UiPage -DirectoryEdit $windowSummary.DirectoryEdit -DirectoryBrowse $windowSummary.DirectoryBrowse -DirectoryText $windowSummary.DirectoryText -InstallProgress $windowSummary.InstallProgress -UiaTopLevel $windowSummary.UiaTopLevel -MainWindow $windowSummary.MainWindow -WizardWindow $windowSummary.WizardWindow -Foreground $windowSummary.Foreground -WindowClass $windowSummary.WindowClass -NativeTitle $windowSummary.NativeTitle -UiaProvider $windowSummary.UiaProvider -UiaDescendants $windowSummary.UiaDescendants -Win32Children $windowSummary.Win32Children -Win32Buttons $windowSummary.Win32Buttons -Win32Static $windowSummary.Win32Static -Session $windowSummary.Session -Desktop $windowSummary.Desktop -Visible $windowSummary.Visible -ProcessId $script:installerProcessId
+  Write-WizardSnapshot -Stage $snapshot.Stage -Title $snapshot.Title -Mode $snapshot.Mode -CurrentUser $snapshot.CurrentUser -Radios $snapshot.Radios -Edits $snapshot.Edits -Next $snapshot.Next -Install $snapshot.Install -Finish $snapshot.Finish -Destination $snapshot.Destination -NativePage $windowSummary.NativePage -PageWindow $windowSummary.PageWindow -PageParent $windowSummary.PageParent -PageProcess $windowSummary.PageProcess -PageVisible $windowSummary.PageVisible -PageClass $windowSummary.PageClass -OptionPage $windowSummary.OptionPage -OptionRadioCount $windowSummary.OptionRadioCount -OptionRadioStyle $windowSummary.OptionRadioStyle -CurrentUserPreset $windowSummary.CurrentUserPreset -AllUsersPreset $windowSummary.AllUsersPreset -CurrentUserSelected $windowSummary.CurrentUserSelected -AllUsersSelected $windowSummary.AllUsersSelected -UiaPage $snapshot.UiPage -DirectoryEdit $windowSummary.DirectoryEdit -DirectoryBrowse $windowSummary.DirectoryBrowse -DirectoryText $windowSummary.DirectoryText -InstallProgress $windowSummary.InstallProgress -UiaTopLevel $windowSummary.UiaTopLevel -MainWindow $windowSummary.MainWindow -WizardWindow $windowSummary.WizardWindow -Foreground $windowSummary.Foreground -WindowClass $windowSummary.WindowClass -NativeTitle $windowSummary.NativeTitle -UiaProvider $windowSummary.UiaProvider -UiaDescendants $windowSummary.UiaDescendants -Win32Children $windowSummary.Win32Children -Win32Buttons $windowSummary.Win32Buttons -Win32Static $windowSummary.Win32Static -Session $windowSummary.Session -Desktop $windowSummary.Desktop -Visible $windowSummary.Visible -ProcessId $script:installerProcessId
   Write-WizardEvent -Name 'timeout' -ProcessId $script:installerProcessId
   Stop-Process -Id $script:installerProcessId -Force -ErrorAction SilentlyContinue
   exit 2
