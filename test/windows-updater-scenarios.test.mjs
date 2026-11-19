@@ -88,3 +88,24 @@ test('installer helper failures expose only fixed progress stages', () => {
   assert.equal(JSON.stringify(events).includes('token'), false);
 });
 
+
+test('NSIS wizard snapshot preserves bounded page facts without UIA names or paths', () => {
+  const safe = 'TUS_NSIS_WIZARD snapshot stage=install-mode process=path-match window=pid-match title=product-match mode=present current-user=selected radios=two edits=none next=match install=missing finish=missing destination=unknown pid=4321';
+  const events = safeNsisWizardEvents([
+    safe,
+    'TUS_NSIS_WIZARD snapshot stage=directory process=C:/private/user window=raw title=C:/private/user mode=present current-user=selected radios=two edits=one next=match install=missing finish=missing destination=C:/private/dir pid=4321',
+    'raw UIA output C:/private/user',
+  ].join('\\n'));
+
+  assert.deepEqual(events, [safe]);
+  assert.equal(JSON.stringify(events).includes('C:/private'), false);
+});
+
+test('NSIS handoff directory keeps the product filename leaf', async () => {
+  const helpers = await import('../scripts/windows-updater-scenarios.mjs');
+  assert.equal(typeof helpers.windowsInstallerHandoffInstallDir, 'function');
+  assert.equal(
+    helpers.windowsInstallerHandoffInstallDir('/runner/temp/Local'),
+    path.join('/runner/temp/Local', 'Programs', 'TheUnfinishedShapes'),
+  );
+});
