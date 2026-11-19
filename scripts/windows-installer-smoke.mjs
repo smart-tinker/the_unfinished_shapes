@@ -27,8 +27,7 @@ assert.ok(['', 'prepare-source', 'verify-target'].includes(handoffMode), 'instal
 const handoffRoot = process.env.TUS_SMOKE_HANDOFF_ROOT ? path.resolve(process.env.TUS_SMOKE_HANDOFF_ROOT) : null;
 if (handoffMode) assert.ok(handoffRoot, 'handoff uses the updater smoke temporary root');
 const work = handoffRoot ? path.join(handoffRoot, 'fixture') : await mkdtemp(path.join(os.tmpdir(), 'tus-installer-'));
-if (handoffMode === 'prepare-source') await mkdir(work, { recursive: true });
-const dataDir = path.join(process.env.APPDATA, 'the-unfinished-shapes');
+const dataDir = path.resolve(process.env.TUS_DATA_DIR || path.join(process.env.APPDATA, 'the-unfinished-shapes'));
 if (handoffMode === 'verify-target') {
   await access(work);
   await access(dataDir);
@@ -56,25 +55,54 @@ const settingsFixture = {
   workspacePath: path.join(work, 'player-workspace'), codexPath: path.join(work, 'codex.exe'),
   serverUrl: '', threadId: 'saved-game-thread-fixture', agentControlThreadId: 'saved-game-thread-fixture', agentModelId: 'qwen3-local-cpu', agentEffort: 'medium', token: 'test-value-that-must-not-be-saved'
 };
-await mkdir(settingsFixture.workspacePath, { recursive: true });
+if (!handoffMode) await mkdir(settingsFixture.workspacePath, { recursive: true });
 let instance, graphics, gpu;
+function checkHandoff(name, matches, message) {
+  if (handoffMode) console.log('TUS_INSTALLER_HANDOFF check=' + name + ':' + (matches ? 'match' : 'mismatch'));
+  try { assert.equal(matches, true, message); }
+  catch (error) { error.tusHandoffCheck = name; throw error; }
+}
 async function launch(executablePath, label, { realQuitPrompt = false } = {}) {
-  gpu = await createGpuDiagnostics(label);
-  // Use an explicit software renderer on the GPU-less runner, as in Linux CI.
-  instance = await electron.launch({ executablePath, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', ...(realQuitPrompt ? [] : ['--tus-smoke-confirm-quit']), ...gpu.args], env: { ...process.env, TUS_DATA_DIR: '' }, timeout: 45000 });
-  await gpu.attach(instance);
-  const page = await instance.firstWindow();
-  graphics = await observeGraphics(page, { label });
-  await page.waitForFunction(() => document.querySelector('#build-version')?.getAttribute('title') !== 'Loading build metadata');
-  assert.equal(await page.locator('#build-version').innerText(), expectedBuildLabel, 'installed UI version and short source SHA match the candidate');
-  assert.equal(await page.locator('#build-version').getAttribute('title'), expectedBuildTitle, 'installed build identifies exact source or marks it unknown');
-  assert.equal(await instance.evaluate(({ app }) => app.getVersion()), packageVersion, 'installed process reports the expected application version');
-  graphics.phase('world connection');
-  const actualDataDir = await instance.evaluate(({ app }) => app.getPath('userData'));
-  assert.equal(path.resolve(actualDataDir).toLowerCase(), path.resolve(dataDir).toLowerCase(), 'stable default user-data path');
-  await page.waitForFunction(() => document.querySelector('#connection')?.textContent.includes('World connected'), null, { timeout: 30000 });
-  await graphics.assertHealthy();
-  return page;
+  let handoffCheck = 'startup-health';
+  try {
+    gpu = await createGpuDiagnostics(label);
+    // Use an explicit software renderer on the GPU-less runner, as in Linux CI.
+    instance = await electron.launch({ executablePath, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', ...(realQuitPrompt ? [] : ['--tus-smoke-confirm-quit']), ...gpu.args], env: { ...process.env, TUS_DATA_DIR: handoffMode ? dataDir : '' }, timeout: 45000 });
+    await gpu.attach(instance);
+    const page = await instance.firstWindow();
+    graphics = await observeGraphics(page, { label });
+    await page.waitForFunction(() => document.querySelector('#build-version')?.getAttribute('title') !== 'Loading build metadata');
+
+    handoffCheck = 'build-label';
+    const buildLabel = await page.locator('#build-version').innerText();
+    checkHandoff('build-label', buildLabel === expectedBuildLabel, 'installed UI version and short source SHA match the candidate');
+
+    handoffCheck = 'build-title-sha';
+    const buildTitle = await page.locator('#build-version').getAttribute('title');
+    checkHandoff('build-title-sha', buildTitle === expectedBuildTitle, 'installed build identifies exact source or marks it unknown');
+
+    handoffCheck = 'app-version';
+    const appVersion = await instance.evaluate(({ app }) => app.getVersion());
+    checkHandoff('app-version', appVersion === packageVersion, 'installed process reports the expected application version');
+
+    handoffCheck = 'user-data';
+    const actualDataDir = await instance.evaluate(({ app }) => app.getPath('userData'));
+    checkHandoff('user-data', path.resolve(actualDataDir).toLowerCase() === path.resolve(dataDir).toLowerCase(), 'isolated profile user-data path matches');
+
+    handoffCheck = 'startup-health';
+    graphics.phase('world connection');
+    await page.waitForFunction(() => document.querySelector('#connection')?.textContent.includes('World connected'), null, { timeout: 30000 });
+    await graphics.assertHealthy();
+    checkHandoff('startup-health', true, 'installed application reaches healthy startup');
+    return page;
+  } catch (error) {
+    if (handoffMode && !error.tusHandoffCheck) {
+      const check = ['build-label', 'build-title-sha', 'app-version', 'user-data', 'startup-health'].includes(handoffCheck) ? handoffCheck : 'other';
+      console.log('TUS_INSTALLER_HANDOFF check=' + check + ':failed');
+      error.tusHandoffCheck = check;
+    }
+    throw error;
+  }
 }
 async function close(phase) {
   const closing = instance, observed = graphics, diagnostic = gpu;
@@ -109,6 +137,8 @@ async function prepareSource() {
   console.log('TUS_INSTALLER_HANDOFF stage=source-setup-complete');
   const page = await launch(installedExe, 'installed updater source');
   console.log('TUS_INSTALLER_HANDOFF stage=source-identity-verified');
+  await mkdir(work, { recursive: true });
+  await mkdir(settingsFixture.workspacePath, { recursive: true });
   await page.evaluate(async fixture => {
     await window.tus.saveSettings(fixture);
     const s = await window.tus.loadSettings();

@@ -235,6 +235,7 @@ async function extractRuntimeBoundary(current, extractDir, targetVersion, manife
         extractPhase: boundary.extractPhase,
         extractSubstage: boundary.extractSubstage,
         extractAppAsarEntry: boundary.extractAppAsarEntry,
+        extractStreamSnapshot: typeof boundary.extractStreamSnapshot === 'function' ? boundary.extractStreamSnapshot() : null,
       } : null;
     }), 'Updater extraction main snapshot', 5000).catch(() => null),
     withTimeout(current.page.evaluate(() => {
@@ -273,6 +274,7 @@ async function extractRuntimeBoundary(current, extractDir, targetVersion, manife
     extractPhase: safe.extractPhase,
     extractSubstage: safe.extractSubstage,
     extractAppAsarEntry: safe.extractAppAsarEntry,
+    streamSnapshot: main?.extractStreamSnapshot ?? null,
     rendererStatus: safe.rendererStatus,
     rendererInvokeStatus: safe.rendererInvokeStatus,
     failureCode: safe.failureCode,
@@ -449,7 +451,7 @@ async function runWindowsInstallerMode(mode, profile, { installerPath, expectedV
           APPDATA: profile.appData,
           LOCALAPPDATA: profile.localData,
           GITHUB_SHA: sourceSha ?? process.env.GITHUB_SHA,
-          TUS_DATA_DIR: '',
+          TUS_DATA_DIR: profile.userData,
           TUS_SMOKE_INSTALLER: installerPath,
           TUS_SMOKE_PORTABLE_EXECUTABLE: '',
           TUS_SMOKE_HANDOFF_MODE: mode,
@@ -459,13 +461,16 @@ async function runWindowsInstallerMode(mode, profile, { installerPath, expectedV
     } catch (error) {
       const events = safeInstallerHandoffEvents([error.stdout, error.stderr].filter(Boolean).join('\n'));
       for (const event of events) console.log(event);
-      const lastStage = events.at(-1)?.split(' stage=')[1];
-      const stage = mode === 'verify-target' ? 'target-verify'
-        : lastStage === 'source-setup-started' ? 'source-setup'
-        : lastStage === 'source-setup-complete' ? 'source-identity'
-        : lastStage === 'source-identity-verified' || lastStage === 'source-fixture-verified' ? 'source-prepare' : 'source-setup';
+      const failedCheck = events.find(line => line.startsWith('TUS_INSTALLER_HANDOFF check=') && /:(mismatch|failed)$/.test(line));
+      const check = failedCheck?.match(/^TUS_INSTALLER_HANDOFF check=([a-z-]+):(?:mismatch|failed)$/)?.[1];
+      const lastStage = events.filter(line => line.startsWith('TUS_INSTALLER_HANDOFF stage=')).at(-1)?.split(' stage=')[1];
+      const stage = check ? (mode === 'verify-target' ? 'target-verify' : 'source-identity')
+        : mode === 'verify-target' ? 'target-verify'
+          : lastStage === 'source-setup-started' ? 'source-setup'
+            : lastStage === 'source-setup-complete' ? 'source-identity'
+              : lastStage === 'source-identity-verified' || lastStage === 'source-fixture-verified' ? 'source-prepare' : 'source-setup';
       const failure = new Error('Windows installer smoke failed.');
-      failure.tusScenarioDiagnostic = { stage, category: windowsScenarioFailureCategory(error) };
+      failure.tusScenarioDiagnostic = { stage, category: check || windowsScenarioFailureCategory(error) };
       throw failure;
     }
     console.log(result.stdout);
@@ -560,7 +565,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     setDiagnostic('source-setup');
     handoffProfile = await prepareWindowsInstallerSource();
   }
-  const dataDir = handoffProfile ? '' : path.join(workDir, 'data');
+  const dataDir = handoffProfile ? handoffProfile.userData : path.join(workDir, 'data');
   const downloadsDir = path.join(workDir, 'downloads');
   const extractDir = path.join(workDir, 'extracted');
   await Promise.all([

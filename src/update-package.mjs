@@ -17,6 +17,17 @@ const maxAssetBytes = 500_000_000;
 const maxJsonBytes = 2_000_000;
 const maxExtractedBytes = 1_073_741_824;
 const maxArchiveEntries = 20_000;
+
+export function safeZipExtractionStreamSnapshot(source, sink) {
+  const count = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, maxExtractedBytes) : null;
+  return {
+    sourceReadableEnded: source?.readableEnded === true,
+    sinkWritableFinished: sink?.writableFinished === true,
+    sinkClosed: sink?.closed === true,
+    sinkBytesWritten: count(sink?.bytesWritten),
+    sinkWritableLength: count(sink?.writableLength),
+  };
+}
 const sigstoreVerifierCodes = new Set([
   'NOT_IMPLEMENTED_ERROR', 'TLOG_ERROR', 'TLOG_INCLUSION_PROOF_ERROR', 'TLOG_INCLUSION_PROMISE_ERROR',
   'TLOG_MISSING_INCLUSION_ERROR', 'TLOG_BODY_ERROR', 'CERTIFICATE_ERROR', 'PUBLIC_KEY_ERROR',
@@ -616,12 +627,14 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath) 
     extraction.substage = 'none';
     extraction.appAsarEntry = false;
     const fileMode = ((entry.externalFileAttributes >>> 16) & 0o777) || 0o600;
+    let writeStream;
     try {
       extraction.substage = 'pipeline';
       extraction.appAsarEntry = isAppAsar;
-      const writeStream = isAppAsar && electronFs
+      writeStream = isAppAsar && electronFs
         ? electronFs.createWriteStream(output, { flags: 'wx', mode: fileMode })
         : createWriteStream(output, { flags: 'wx', mode: fileMode });
+      extraction.streamSnapshot = () => safeZipExtractionStreamSnapshot(stream, writeStream);
       await pipeline(stream, writeStream);
       extraction.substage = 'none';
       extraction.appAsarEntry = false;
@@ -631,6 +644,8 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath) 
         try { error.extractOperation = operation; } catch {}
       }
       throw error;
+    } finally {
+      extraction.streamSnapshot = null;
     }
     extraction.value = 'entry';
   }
@@ -658,6 +673,9 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
     },
     set appAsarEntry(value) {
       if (smokeBoundary) smokeBoundary.extractAppAsarEntry = value === true;
+    },
+    set streamSnapshot(value) {
+      if (smokeBoundary) smokeBoundary.extractStreamSnapshot = typeof value === 'function' ? value : null;
     },
   };
   let target, appAsarPath, targetCreated = false;
