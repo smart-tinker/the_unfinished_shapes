@@ -8,7 +8,7 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } fro
 import os from 'node:os';
 import path from 'node:path';
 import { create as createTar } from 'tar';
-import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeUpdaterFailureCode, safeVerifierErrorType, safeVerifierSetupStage, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeUpdaterFailureCode, safeVerifierErrorType, safeVerifierSetupStage, safeZipExtractionStreamSnapshot, verifyReleaseAttestation } from '../src/update-package.mjs';
 
 const tag = 'v0.1.0-rc11';
 const asset = {
@@ -836,4 +836,29 @@ test('removes a materialized update target with Electron original-fs after a lat
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
+});
+
+
+test('ZIP stream snapshots identify the current archive entry without its name', () => {
+  const snapshot = safeZipExtractionStreamSnapshot(
+    { readableEnded: false, fileName: 'private-entry-name' },
+    { writableFinished: false, closed: false, bytesWritten: 233242624, writableLength: 16384, path: 'C:/private/path' },
+    17,
+  );
+  const unsafe = safeZipExtractionStreamSnapshot(
+    { readableEnded: false },
+    { writableFinished: false, closed: false, bytesWritten: 8, writableLength: 0 },
+    'C:/private/path',
+  );
+
+  assert.deepEqual(snapshot, {
+    entrySequence: 17,
+    sourceReadableEnded: false,
+    sinkWritableFinished: false,
+    sinkClosed: false,
+    sinkBytesWritten: 233242624,
+    sinkWritableLength: 16384,
+  });
+  assert.equal(unsafe.entrySequence, null);
+  assert.doesNotMatch(JSON.stringify([snapshot, unsafe]), /private-entry-name|C:\/private\/path/);
 });

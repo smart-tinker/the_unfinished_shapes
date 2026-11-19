@@ -244,28 +244,35 @@ test('TUS extraction stream snapshots distinguish advancing from stationary writ
       stage: 'extract-archive', status: 'starting',
       extractStreamSnapshot: {
         sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-        sinkBytesWritten: 233242624, sinkWritableLength: 16384, sourcePath: 'C:/private/path',
+        entrySequence: 17, sinkBytesWritten: 233242624, sinkWritableLength: 16384, sourcePath: 'C:/private/path',
       },
     },
     {
-      stage: 'extract-archive', status: 'starting', previousSinkBytesWritten: 233242624,
+      stage: 'extract-archive', status: 'starting', previousEntrySequence: 17, previousSinkBytesWritten: 233242624,
       extractStreamSnapshot: {
         sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-        sinkBytesWritten: 233259008, sinkWritableLength: 16384,
+        entrySequence: 17, sinkBytesWritten: 233259008, sinkWritableLength: 16384,
       },
     },
     {
-      stage: 'extract-archive', status: 'starting', previousSinkBytesWritten: 233259008,
+      stage: 'extract-archive', status: 'starting', previousEntrySequence: 17, previousSinkBytesWritten: 233259008,
       extractStreamSnapshot: {
         sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-        sinkBytesWritten: 233259008, sinkWritableLength: 16384,
+        entrySequence: 17, sinkBytesWritten: 233259008, sinkWritableLength: 16384,
       },
     },
     {
-      stage: 'extract-archive', status: 'starting', previousSinkBytesWritten: 'C:/private/path',
+      stage: 'extract-archive', status: 'starting', previousEntrySequence: 'C:/private/path', previousSinkBytesWritten: 'C:/private/path',
       extractStreamSnapshot: {
         sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-        sinkBytesWritten: 'C:/private/path', sinkWritableLength: -1, sourceName: 'private',
+        entrySequence: 'C:/private/path', sinkBytesWritten: 'C:/private/path', sinkWritableLength: -1, sourceName: 'private',
+      },
+    },
+    {
+      stage: 'extract-archive', status: 'starting', previousEntrySequence: 17, previousSinkBytesWritten: 233259008,
+      extractStreamSnapshot: {
+        sourceReadableEnded: true, sinkWritableFinished: false, sinkClosed: false,
+        entrySequence: 18, sinkBytesWritten: 9000000000, sinkWritableLength: 9000000000,
       },
     },
   ], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
@@ -273,19 +280,23 @@ test('TUS extraction stream snapshots distinguish advancing from stationary writ
   assert.deepEqual(samples.map(item => item.streamSnapshot), [
     {
       sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-      sinkBytesWritten: 233242624, sinkWritableLength: 16384, byteProgress: 'baseline',
+      entrySequence: 17, sinkBytesWritten: 233242624, sinkWritableLength: 16384, byteProgress: 'baseline',
     },
     {
       sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-      sinkBytesWritten: 233259008, sinkWritableLength: 16384, byteProgress: 'advanced',
+      entrySequence: 17, sinkBytesWritten: 233259008, sinkWritableLength: 16384, byteProgress: 'advanced',
     },
     {
       sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-      sinkBytesWritten: 233259008, sinkWritableLength: 16384, byteProgress: 'unchanged',
+      entrySequence: 17, sinkBytesWritten: 233259008, sinkWritableLength: 16384, byteProgress: 'unchanged',
     },
     {
       sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-      sinkBytesWritten: null, sinkWritableLength: null, byteProgress: 'unknown',
+      entrySequence: null, sinkBytesWritten: null, sinkWritableLength: null, byteProgress: 'unknown',
+    },
+    {
+      sourceReadableEnded: true, sinkWritableFinished: false, sinkClosed: false,
+      entrySequence: 18, sinkBytesWritten: 4294967295, sinkWritableLength: 4294967295, byteProgress: 'baseline',
     },
   ]);
   assert.doesNotMatch(JSON.stringify(samples), /C:\/private\/path|private/);
