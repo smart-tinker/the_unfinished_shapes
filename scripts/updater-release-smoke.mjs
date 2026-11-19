@@ -261,8 +261,8 @@ async function extractRuntimeBoundary(current, extractDir, targetVersion, manife
     extractAppAsarEntry: main?.extractAppAsarEntry,
     extractStreamSnapshot: main?.extractStreamSnapshot,
     ...(previousStreamSnapshot ? {
-      previousEntrySequence: previousStreamSnapshot.entrySequence,
-      previousSinkBytesWritten: previousStreamSnapshot.sinkBytesWritten,
+      previousStreamSnapshot: previousStreamSnapshot.snapshot,
+      streamIntervalMs: Math.round(performance.now() - previousStreamSnapshot.sampledAtMs),
     } : {}),
     rendererStatusText: renderer?.statusText,
     rendererInvokeStatus: renderer?.invokeStatus,
@@ -791,18 +791,19 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
           return typeof snapshot === 'function' ? snapshot() : null;
         }), 'Updater ZIP stream sample', 5000).catch(() => null);
         if (!streamSampling) return;
+        const sampledAtMs = performance.now();
         const [safe] = safeMainDiagnostics([{
           stage: 'extract-archive',
           status: 'starting',
           ...(previousStreamSnapshot ? {
-            previousEntrySequence: previousStreamSnapshot.entrySequence,
-            previousSinkBytesWritten: previousStreamSnapshot.sinkBytesWritten,
+            previousStreamSnapshot: previousStreamSnapshot.snapshot,
+            streamIntervalMs: Math.round(sampledAtMs - previousStreamSnapshot.sampledAtMs),
           } : {}),
           extractStreamSnapshot: stream,
         }], manifestFile, assetName, tag);
         const snapshot = safe?.streamSnapshot ?? null;
         console.log('TUS_UPDATE_EXTRACT_STREAM ' + JSON.stringify(snapshot));
-        previousStreamSnapshot = snapshot;
+        previousStreamSnapshot = { snapshot, sampledAtMs };
         streamSamples++;
         if (streamSamples < 5) scheduleStreamSample(20000);
       };

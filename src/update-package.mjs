@@ -18,10 +18,23 @@ const maxJsonBytes = 2_000_000;
 const maxExtractedBytes = 1_073_741_824;
 const maxArchiveEntries = 20_000;
 
-export function safeZipExtractionStreamSnapshot(source, sink, entrySequence) {
-  const count = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, maxExtractedBytes) : null;
+export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, entry, compressedSource) {
+  const count = (value, limit = maxExtractedBytes) =>
+    Number.isSafeInteger(value) && value >= 0 ? Math.min(value, limit) : null;
+  const position = (value, limit) => Number.isSafeInteger(value?.start) && Number.isSafeInteger(value?.pos) && value.pos >= value.start
+    ? count(value.pos - value.start, limit) : null;
+  const compression = entry?.compressionMethod === 0 ? 'stored' : entry?.compressionMethod === 8 ? 'deflate' : 'unknown';
+  const decodedBytes = Number.isSafeInteger(source?.actualByteCount)
+    ? count(source.actualByteCount)
+    : compression === 'stored' ? position(source, maxExtractedBytes) : null;
   return {
     entrySequence: Number.isSafeInteger(entrySequence) && entrySequence >= 1 && entrySequence <= maxArchiveEntries ? entrySequence : null,
+    compression,
+    entryCompressedSize: count(entry?.compressedSize, maxAssetBytes),
+    entryUncompressedSize: count(entry?.uncompressedSize),
+    compressedBytesRead: Number.isSafeInteger(compressedSource?.actualByteCount)
+      ? count(compressedSource.actualByteCount, maxAssetBytes) : null,
+    decodedBytes,
     sourceReadableEnded: source?.readableEnded === true,
     sinkWritableFinished: sink?.writableFinished === true,
     sinkClosed: sink?.closed === true,
@@ -556,6 +569,29 @@ function platformArchive(platform, assetName, tag) {
   return value;
 }
 
+async function openZipReadStream(zip, entry, trackCompressedRead) {
+  if (!trackCompressedRead || typeof zip.reader?.createReadStream !== 'function') {
+    return { stream: await zip.openReadStreamPromise(entry), compressedReadStream: null };
+  }
+  const reader = zip.reader;
+  const descriptor = Object.getOwnPropertyDescriptor(reader, 'createReadStream');
+  const createReadStream = reader.createReadStream;
+  let compressedReadStream = null;
+  reader.createReadStream = function (options) {
+    const stream = createReadStream.call(this, options);
+    if (options?.end - options?.start === entry.compressedSize && Number.isSafeInteger(stream?.actualByteCount)) {
+      compressedReadStream = stream;
+    }
+    return stream;
+  };
+  try {
+    return { stream: await zip.openReadStreamPromise(entry), compressedReadStream };
+  } finally {
+    if (descriptor) Object.defineProperty(reader, 'createReadStream', descriptor);
+    else delete reader.createReadStream;
+  }
+}
+
 async function extractZip(filePath, destination, spec, extraction, appAsarPath) {
   const appAsarRelative = path.relative(destination, appAsarPath).split(path.sep).join('/');
   extraction.value = 'zip-open';
@@ -624,7 +660,7 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath) 
     extraction.value = 'write';
     extraction.substage = 'read-stream-open';
     extraction.appAsarEntry = isAppAsar;
-    const stream = await zip.openReadStreamPromise(entry);
+    const { stream, compressedReadStream } = await openZipReadStream(zip, entry, extraction.trackDiagnostics);
     extraction.substage = 'none';
     extraction.appAsarEntry = false;
     const fileMode = ((entry.externalFileAttributes >>> 16) & 0o777) || 0o600;
@@ -635,7 +671,7 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath) 
       writeStream = isAppAsar && electronFs
         ? electronFs.createWriteStream(output, { flags: 'wx', mode: fileMode })
         : createWriteStream(output, { flags: 'wx', mode: fileMode });
-      extraction.streamSnapshot = () => safeZipExtractionStreamSnapshot(stream, writeStream, count);
+      extraction.streamSnapshot = () => safeZipExtractionStreamSnapshot(stream, writeStream, count, entry, compressedReadStream);
       await pipeline(stream, writeStream);
       extraction.substage = 'none';
       extraction.appAsarEntry = false;
@@ -657,6 +693,7 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
   const smokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic') ? globalThis.__tusUpdaterSmokeBoundary : null;
   const extraction = {
     get value() { return phase; },
+    get trackDiagnostics() { return smokeBoundary !== null; },
     set value(value) {
       phase = value;
       if (smokeBoundary) {

@@ -6,6 +6,29 @@ param(
 $ErrorActionPreference = 'Stop'
 $script:installerProcessId = 0
 $script:mainWindowHandle = [IntPtr]::Zero
+$script:nativeWindowApiAvailable = $false
+$nativeWindowApi = @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class TUSWindowApi {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", SetLastError = true)] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint command);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder name, int maxCount);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextLength(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+  [DllImport("user32.dll")] public static extern IntPtr GetThreadDesktop(uint threadId);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern bool GetUserObjectInformation(IntPtr handle, int index, StringBuilder info, int length, out int needed);
+}
+'@
+try {
+  Add-Type -TypeDefinition $nativeWindowApi -ErrorAction Stop | Out-Null
+  $script:nativeWindowApiAvailable = $true
+} catch {}
 function Get-SafeControlCount {
   param([int]$Count)
   if ($Count -le 0) { return 'none' }
@@ -13,9 +36,93 @@ function Get-SafeControlCount {
   if ($Count -eq 2) { return 'two' }
   return 'many'
 }
+function Get-DesktopName {
+  param([uint32]$ThreadId)
+  if (-not $script:nativeWindowApiAvailable -or $ThreadId -eq 0) { return $null }
+  try {
+    $desktop = [TUSWindowApi]::GetThreadDesktop($ThreadId)
+    if ($desktop -eq [IntPtr]::Zero) { return $null }
+    $buffer = [System.Text.StringBuilder]::new(128)
+    $needed = 0
+    if (-not [TUSWindowApi]::GetUserObjectInformation($desktop, 2, $buffer, $buffer.Capacity * 2, [ref]$needed)) { return $null }
+    return $buffer.ToString()
+  } catch { return $null }
+}
+function Get-Win32WindowSummary {
+  param([int]$ProcessId, [IntPtr]$Handle)
+  $result = [ordered]@{
+    Foreground = 'unknown'; WindowClass = 'unknown'; NativeTitle = 'unknown'
+    UiaProvider = 'unknown'; UiaDescendants = 'unknown'; Children = 'unknown'
+    Buttons = 'unknown'; Static = 'unknown'; Session = 'unknown'
+    Desktop = 'unknown'; Visible = 'unknown'
+  }
+  if (-not $script:nativeWindowApiAvailable -or $Handle -eq [IntPtr]::Zero) { return [pscustomobject]$result }
+  try {
+    $windowProcessId = [uint32]0
+    $windowThreadId = [TUSWindowApi]::GetWindowThreadProcessId($Handle, [ref]$windowProcessId)
+    if ($windowThreadId -eq 0 -or $windowProcessId -ne $ProcessId) { return [pscustomobject]$result }
+
+    $className = [System.Text.StringBuilder]::new(128)
+    if ([TUSWindowApi]::GetClassName($Handle, $className, $className.Capacity) -gt 0) {
+      $result.WindowClass = if ($className.ToString() -eq '#32770') { 'native-dialog' } else { 'other' }
+    }
+    $titleLength = [TUSWindowApi]::GetWindowTextLength($Handle)
+    if ($titleLength -eq 0) { $result.NativeTitle = 'empty' }
+    elseif ($titleLength -gt 256) { $result.NativeTitle = 'unknown' }
+    else {
+      $title = [System.Text.StringBuilder]::new(257)
+      if ([TUSWindowApi]::GetWindowText($Handle, $title, $title.Capacity) -gt 0) {
+        $result.NativeTitle = if ($title.ToString() -match '(?i)\b(error|failed|unable|cannot|could not)\b') { 'error-like' } else { 'other' }
+      }
+    }
+
+    $foreground = [TUSWindowApi]::GetForegroundWindow()
+    if ($foreground -eq [IntPtr]::Zero) { $result.Foreground = 'none' }
+    else {
+      $foregroundProcessId = [uint32]0
+      [void][TUSWindowApi]::GetWindowThreadProcessId($foreground, [ref]$foregroundProcessId)
+      if ($foregroundProcessId -eq 0) { $result.Foreground = 'unknown' }
+      elseif ($foregroundProcessId -eq $ProcessId) { $result.Foreground = 'installer' }
+      else { $result.Foreground = 'other' }
+    }
+    $result.Visible = if ([TUSWindowApi]::IsWindowVisible($Handle)) { 'visible' } else { 'hidden' }
+
+    $total = 0; $buttons = 0; $static = 0
+    $child = [TUSWindowApi]::GetWindow($Handle, 5)
+    while ($child -ne [IntPtr]::Zero -and $total -lt 128) {
+      $total++
+      $childClass = [System.Text.StringBuilder]::new(128)
+      if ([TUSWindowApi]::GetClassName($child, $childClass, $childClass.Capacity) -gt 0) {
+        if ($childClass.ToString() -eq 'Button') { $buttons++ }
+        elseif ($childClass.ToString() -eq 'Static') { $static++ }
+      }
+      $child = [TUSWindowApi]::GetWindow($child, 2)
+    }
+    $result.Children = Get-SafeControlCount -Count $total
+    $result.Buttons = Get-SafeControlCount -Count $buttons
+    $result.Static = Get-SafeControlCount -Count $static
+
+    $targetSession = (Get-Process -Id $ProcessId -ErrorAction Stop).SessionId
+    $currentSession = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+    $result.Session = if ($targetSession -eq $currentSession) { 'match' } else { 'mismatch' }
+    $windowDesktop = Get-DesktopName -ThreadId $windowThreadId
+    $currentDesktop = Get-DesktopName -ThreadId ([TUSWindowApi]::GetCurrentThreadId())
+    if ($null -ne $windowDesktop -and $null -ne $currentDesktop) {
+      $result.Desktop = if ($windowDesktop -eq 'Default' -and $currentDesktop -eq 'Default') { 'default-interactive' } else { 'other' }
+    }
+  } catch {}
+  return [pscustomobject]$result
+}
+
 function Get-WizardWindowSummary {
   param([int]$ProcessId, [IntPtr]$MainWindowHandle)
-  $summary = [ordered]@{ UiaTopLevel = 'unknown'; MainWindow = 'unknown'; WizardWindow = 'unknown' }
+  $summary = [ordered]@{
+    UiaTopLevel = 'unknown'; MainWindow = 'unknown'; WizardWindow = 'unknown'
+    Foreground = 'unknown'; WindowClass = 'unknown'; NativeTitle = 'unknown'
+    UiaProvider = 'unknown'; UiaDescendants = 'unknown'; Win32Children = 'unknown'
+    Win32Buttons = 'unknown'; Win32Static = 'unknown'; Session = 'unknown'
+    Desktop = 'unknown'; Visible = 'unknown'
+  }
   try {
     $owner = [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
@@ -43,7 +150,30 @@ function Get-WizardWindowSummary {
         if ($candidate.Current.ProcessId -ne $ProcessId) { continue }
         $handle = [IntPtr]$candidate.Current.NativeWindowHandle
         if ($handle -eq [IntPtr]::Zero) { continue }
-        if ($MainWindowHandle -ne [IntPtr]::Zero -and $handle -eq $MainWindowHandle) { $mainWindowFound = $true }
+        if ($MainWindowHandle -ne [IntPtr]::Zero -and $handle -eq $MainWindowHandle) {
+          $mainWindowFound = $true
+          $native = Get-Win32WindowSummary -ProcessId $ProcessId -Handle $MainWindowHandle
+          $summary.Foreground = $native.Foreground
+          $summary.WindowClass = $native.WindowClass
+          $summary.NativeTitle = $native.NativeTitle
+          $summary.Win32Children = $native.Children
+          $summary.Win32Buttons = $native.Buttons
+          $summary.Win32Static = $native.Static
+          $summary.Session = $native.Session
+          $summary.Desktop = $native.Desktop
+          $summary.Visible = $native.Visible
+          try {
+            $children = $candidate.FindAll(
+              [System.Windows.Automation.TreeScope]::Descendants,
+              [System.Windows.Automation.Condition]::TrueCondition)
+            $summary.UiaDescendants = Get-SafeControlCount -Count $children.Count
+            $summary.UiaProvider = if ($children.Count -eq 0) { 'empty' } else { 'available' }
+          } catch {
+            $summary.UiaProvider = 'error'
+            $summary.UiaDescendants = 'unknown'
+            $inspectionFailed = $true
+          }
+        }
         if ($candidate.Current.IsOffscreen) { continue }
         $buttons = @($candidate.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition))
         $edits = @($candidate.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editCondition))
@@ -94,9 +224,20 @@ function Write-WizardSnapshot {
     [ValidateSet('none', 'one', 'two', 'many', 'unknown')][string]$UiaTopLevel,
     [ValidateSet('present', 'absent', 'unknown')][string]$MainWindow,
     [ValidateSet('main', 'other', 'ambiguous', 'none', 'unknown')][string]$WizardWindow,
+    [ValidateSet('installer', 'other', 'none', 'unknown')][string]$Foreground,
+    [ValidateSet('native-dialog', 'other', 'unknown')][string]$WindowClass,
+    [ValidateSet('error-like', 'other', 'empty', 'unknown')][string]$NativeTitle,
+    [ValidateSet('empty', 'available', 'error', 'unknown')][string]$UiaProvider,
+    [ValidateSet('none', 'one', 'two', 'many', 'unknown')][string]$UiaDescendants,
+    [ValidateSet('none', 'one', 'two', 'many', 'unknown')][string]$Win32Children,
+    [ValidateSet('none', 'one', 'two', 'many', 'unknown')][string]$Win32Buttons,
+    [ValidateSet('none', 'one', 'two', 'many', 'unknown')][string]$Win32Static,
+    [ValidateSet('match', 'mismatch', 'unknown')][string]$Session,
+    [ValidateSet('default-interactive', 'other', 'unknown')][string]$Desktop,
+    [ValidateSet('visible', 'hidden', 'unknown')][string]$Visible,
     [ValidateRange(1, 2147483647)][int]$ProcessId
   )
-  [Console]::Out.WriteLine("TUS_NSIS_WIZARD snapshot stage=$Stage process=path-match window=pid-match title=$Title mode=$Mode current-user=$CurrentUser radios=$Radios edits=$Edits next=$Next install=$Install finish=$Finish destination=$Destination uia-top-level=$UiaTopLevel main-window=$MainWindow wizard-window=$WizardWindow pid=$ProcessId")
+  [Console]::Out.WriteLine("TUS_NSIS_WIZARD snapshot stage=$Stage process=path-match window=pid-match title=$Title mode=$Mode current-user=$CurrentUser radios=$Radios edits=$Edits next=$Next install=$Install finish=$Finish destination=$Destination uia-top-level=$UiaTopLevel main-window=$MainWindow wizard-window=$WizardWindow foreground=$Foreground window-class=$WindowClass native-title=$NativeTitle uia-provider=$UiaProvider uia-descendants=$UiaDescendants win32-children=$Win32Children win32-buttons=$Win32Buttons win32-static=$Win32Static session=$Session desktop=$Desktop visible=$Visible pid=$ProcessId")
   [Console]::Out.Flush()
 }
 
@@ -358,7 +499,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
 if (-not $finished) {
   if (-not $windowReported) { Write-WizardEvent -Name 'window-not-found' -ProcessId $script:installerProcessId }
   $windowSummary = Get-WizardWindowSummary -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle
-  Write-WizardSnapshot -Stage $snapshot.Stage -Title $snapshot.Title -Mode $snapshot.Mode -CurrentUser $snapshot.CurrentUser -Radios $snapshot.Radios -Edits $snapshot.Edits -Next $snapshot.Next -Install $snapshot.Install -Finish $snapshot.Finish -Destination $snapshot.Destination -UiaTopLevel $windowSummary.UiaTopLevel -MainWindow $windowSummary.MainWindow -WizardWindow $windowSummary.WizardWindow -ProcessId $script:installerProcessId
+  Write-WizardSnapshot -Stage $snapshot.Stage -Title $snapshot.Title -Mode $snapshot.Mode -CurrentUser $snapshot.CurrentUser -Radios $snapshot.Radios -Edits $snapshot.Edits -Next $snapshot.Next -Install $snapshot.Install -Finish $snapshot.Finish -Destination $snapshot.Destination -UiaTopLevel $windowSummary.UiaTopLevel -MainWindow $windowSummary.MainWindow -WizardWindow $windowSummary.WizardWindow -Foreground $windowSummary.Foreground -WindowClass $windowSummary.WindowClass -NativeTitle $windowSummary.NativeTitle -UiaProvider $windowSummary.UiaProvider -UiaDescendants $windowSummary.UiaDescendants -Win32Children $windowSummary.Win32Children -Win32Buttons $windowSummary.Win32Buttons -Win32Static $windowSummary.Win32Static -Session $windowSummary.Session -Desktop $windowSummary.Desktop -Visible $windowSummary.Visible -ProcessId $script:installerProcessId
   Write-WizardEvent -Name 'timeout' -ProcessId $script:installerProcessId
   Stop-Process -Id $script:installerProcessId -Force -ErrorAction SilentlyContinue
   exit 2

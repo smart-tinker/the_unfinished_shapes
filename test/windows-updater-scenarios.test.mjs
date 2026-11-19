@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents } from '../scripts/windows-updater-scenarios.mjs';
 
 test('Windows installer acceptance still runs when portable acceptance fails', async () => {
@@ -91,7 +92,7 @@ test('installer helper failures expose only fixed progress stages', () => {
 
 
 test('NSIS wizard snapshot preserves bounded page facts without UIA names or paths', () => {
-  const safe = 'TUS_NSIS_WIZARD snapshot stage=install-mode process=path-match window=pid-match title=product-match mode=present current-user=selected radios=two edits=none next=match install=missing finish=missing destination=unknown uia-top-level=one main-window=present wizard-window=main foreground=installer window-class=native-dialog native-title=error-like modal-popup=native-dialog uia-provider=empty uia-descendants=none win32-children=two win32-buttons=one win32-static=one session=match desktop=default-interactive visible=visible pid=4321';
+  const safe = 'TUS_NSIS_WIZARD snapshot stage=install-mode process=path-match window=pid-match title=product-match mode=present current-user=selected radios=two edits=none next=match install=missing finish=missing destination=unknown uia-top-level=one main-window=present wizard-window=main foreground=installer window-class=native-dialog native-title=error-like uia-provider=empty uia-descendants=none win32-children=two win32-buttons=one win32-static=one session=match desktop=default-interactive visible=visible pid=4321';
   const events = safeNsisWizardEvents([
     safe,
     'TUS_NSIS_WIZARD snapshot stage=directory process=C:/private/user window=raw title=C:/private/user mode=present current-user=selected radios=two edits=one next=match install=missing finish=missing destination=C:/private/dir pid=4321',
@@ -112,9 +113,9 @@ test('NSIS handoff directory keeps the product filename leaf', async () => {
 
 
 test('NSIS snapshot distinguishes an empty main HWND from another process-owned wizard page', () => {
-  const emptyMain = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown uia-top-level=one main-window=present wizard-window=none foreground=installer window-class=native-dialog native-title=error-like modal-popup=native-dialog uia-provider=empty uia-descendants=none win32-children=two win32-buttons=one win32-static=one session=match desktop=default-interactive visible=visible pid=9692';
-  const otherWizard = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown uia-top-level=two main-window=present wizard-window=other foreground=installer window-class=native-dialog native-title=error-like modal-popup=native-dialog uia-provider=empty uia-descendants=none win32-children=two win32-buttons=one win32-static=one session=match desktop=default-interactive visible=visible pid=9692';
-  const ambiguous = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match title=unknown mode=unknown current-user=unknown radios=many edits=one next=match install=missing finish=missing destination=unknown uia-top-level=many main-window=present wizard-window=ambiguous foreground=installer window-class=native-dialog native-title=error-like modal-popup=native-dialog uia-provider=empty uia-descendants=none win32-children=two win32-buttons=one win32-static=one session=match desktop=default-interactive visible=visible pid=9692';
+  const emptyMain = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown uia-top-level=one main-window=present wizard-window=none foreground=installer window-class=native-dialog native-title=error-like uia-provider=empty uia-descendants=none win32-children=two win32-buttons=one win32-static=one session=match desktop=default-interactive visible=visible pid=9692';
+  const otherWizard = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown uia-top-level=two main-window=present wizard-window=other foreground=installer window-class=native-dialog native-title=error-like uia-provider=empty uia-descendants=none win32-children=two win32-buttons=one win32-static=one session=match desktop=default-interactive visible=visible pid=9692';
+  const ambiguous = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match title=unknown mode=unknown current-user=unknown radios=many edits=one next=match install=missing finish=missing destination=unknown uia-top-level=many main-window=present wizard-window=ambiguous foreground=installer window-class=native-dialog native-title=error-like uia-provider=empty uia-descendants=none win32-children=two win32-buttons=one win32-static=one session=match desktop=default-interactive visible=visible pid=9692';
   const events = safeNsisWizardEvents([
     emptyMain,
     otherWizard,
@@ -127,7 +128,7 @@ test('NSIS snapshot distinguishes an empty main HWND from another process-owned 
 });
 
 test('NSIS timeout snapshot classifies the exact HWND without exposing native text or names', async () => {
-  const safe = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown uia-top-level=one main-window=present wizard-window=none foreground=installer window-class=native-dialog native-title=error-like modal-popup=native-dialog uia-provider=empty uia-descendants=none win32-children=two win32-buttons=one win32-static=one session=match desktop=default-interactive visible=visible pid=4321';
+  const safe = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown uia-top-level=one main-window=present wizard-window=none foreground=installer window-class=native-dialog native-title=error-like uia-provider=empty uia-descendants=none win32-children=two win32-buttons=one win32-static=one session=match desktop=default-interactive visible=visible pid=4321';
   const unsafe = safe.replace('window-class=native-dialog', 'window-class=C:/private/window')
     .replace('native-title=error-like', 'native-title=C:/private/title')
     .replace('desktop=default-interactive', 'desktop=Default/user');

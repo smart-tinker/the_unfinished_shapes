@@ -36,33 +36,52 @@ const safeArchiveFailureCodes = new Set([
 const safeArchiveFailureCode = value => safeArchiveFailureCodes.has(value) ? value : 'OTHER';
 const safeExtractStreamCount = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, 0xffffffff) : null;
 
-function safeExtractStreamSnapshot(value, previousEntrySequence, previousSinkBytesWritten) {
+function safeExtractStreamSnapshot(value, previous, elapsedMs) {
   if (!value || typeof value !== 'object') return null;
   const entrySequence = Number.isSafeInteger(value.entrySequence) && value.entrySequence >= 1 && value.entrySequence <= 20_000
     ? value.entrySequence : null;
+  const compression = ['stored', 'deflate'].includes(value.compression) ? value.compression : 'unknown';
+  const entryCompressedSize = safeExtractStreamCount(value.entryCompressedSize);
+  const entryUncompressedSize = safeExtractStreamCount(value.entryUncompressedSize);
+  const compressedBytesRead = safeExtractStreamCount(value.compressedBytesRead);
+  const decodedBytes = safeExtractStreamCount(value.decodedBytes);
   const sinkBytesWritten = safeExtractStreamCount(value.sinkBytesWritten);
+  const sameEntry = entrySequence !== null && entrySequence === previous?.entrySequence;
+  const intervalMs = sameEntry && Number.isSafeInteger(elapsedMs) && elapsedMs >= 1 && elapsedMs <= 60_000
+    ? elapsedMs : null;
+  const rate = (current, before) => {
+    if (intervalMs === null || current === null || !Number.isSafeInteger(before) || current < before) return null;
+    return Math.min(0xffffffff, Math.round((current - before) * 1000 / intervalMs));
+  };
   let byteProgress = 'unknown';
   if (entrySequence !== null) {
-    if (previousEntrySequence === undefined) byteProgress = 'baseline';
-    else if (Number.isSafeInteger(previousEntrySequence) && previousEntrySequence >= 1 && previousEntrySequence <= 20_000) {
-      if (previousEntrySequence !== entrySequence) byteProgress = 'baseline';
-      else {
-        const previousBytesWritten = safeExtractStreamCount(previousSinkBytesWritten);
-        if (sinkBytesWritten !== null && previousBytesWritten !== null) {
-          if (sinkBytesWritten > previousBytesWritten) byteProgress = 'advanced';
-          else if (sinkBytesWritten === previousBytesWritten) byteProgress = 'unchanged';
-        }
+    if (!Number.isSafeInteger(previous?.entrySequence)) byteProgress = 'baseline';
+    else if (!sameEntry) byteProgress = 'baseline';
+    else {
+      const previousBytesWritten = safeExtractStreamCount(previous.sinkBytesWritten);
+      if (sinkBytesWritten !== null && previousBytesWritten !== null) {
+        if (sinkBytesWritten > previousBytesWritten) byteProgress = 'advanced';
+        else if (sinkBytesWritten === previousBytesWritten) byteProgress = 'unchanged';
       }
     }
   }
   return {
     entrySequence,
+    compression,
+    entryCompressedSize,
+    entryUncompressedSize,
+    compressedBytesRead,
+    decodedBytes,
     sourceReadableEnded: value.sourceReadableEnded === true,
     sinkWritableFinished: value.sinkWritableFinished === true,
     sinkClosed: value.sinkClosed === true,
     sinkBytesWritten,
     sinkWritableLength: safeExtractStreamCount(value.sinkWritableLength),
     byteProgress,
+    intervalMs,
+    compressedReadBytesPerSecond: rate(compressedBytesRead, previous?.compressedBytesRead),
+    decodedBytesPerSecond: rate(decodedBytes, previous?.decodedBytes),
+    writtenBytesPerSecond: rate(sinkBytesWritten, previous?.sinkBytesWritten),
   };
 }
 
@@ -117,7 +136,7 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
         executableExists: item.fileFlags?.executableExists === true,
         stagedAsarExists: item.fileFlags?.stagedAsarExists === true,
       },
-      streamSnapshot: safeExtractStreamSnapshot(item.extractStreamSnapshot, item.previousEntrySequence, item.previousSinkBytesWritten),
+      streamSnapshot: safeExtractStreamSnapshot(item.extractStreamSnapshot, item.previousStreamSnapshot, item.streamIntervalMs),
     } : {}),
     trustedRootTarget: safeRootTarget(item?.trustedRootTarget),
   }));

@@ -245,8 +245,8 @@ test('TUS extraction snapshots localize bounded read, decode and write throughpu
     stage: 'extract-archive',
     status: 'starting',
     extractStreamSnapshot: {
-      entrySequence: 17, compression: 'deflate',
-      entryCompressedSize: 1_000_000, entryUncompressedSize: 2_000_000,
+      entrySequence: 12, compression: 'deflate',
+      entryCompressedSize: 111_522_616, entryUncompressedSize: 249_832_448,
       compressedBytesRead: 100, decodedBytes: 1_000,
       sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
       sinkBytesWritten: 900, sinkWritableLength: 100,
@@ -255,8 +255,8 @@ test('TUS extraction snapshots localize bounded read, decode and write throughpu
   }], manifestFile, assetName, tag)[0].streamSnapshot;
 
   assert.deepEqual(first, {
-    entrySequence: 17, compression: 'deflate',
-    entryCompressedSize: 1_000_000, entryUncompressedSize: 2_000_000,
+    entrySequence: 12, compression: 'deflate',
+    entryCompressedSize: 111_522_616, entryUncompressedSize: 249_832_448,
     compressedBytesRead: 100, decodedBytes: 1_000,
     sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
     sinkBytesWritten: 900, sinkWritableLength: 100, byteProgress: 'baseline',
@@ -270,8 +270,8 @@ test('TUS extraction snapshots localize bounded read, decode and write throughpu
     previousStreamSnapshot: first,
     streamIntervalMs: 20_000,
     extractStreamSnapshot: {
-      entrySequence: 17, compression: 'deflate',
-      entryCompressedSize: 1_000_000, entryUncompressedSize: 2_000_000,
+      entrySequence: 12, compression: 'deflate',
+      entryCompressedSize: 111_522_616, entryUncompressedSize: 249_832_448,
       compressedBytesRead: 500, decodedBytes: 5_000,
       sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
       sinkBytesWritten: 4_500, sinkWritableLength: 0,
@@ -288,7 +288,7 @@ test('TUS extraction snapshots localize bounded read, decode and write throughpu
     stage: 'extract-archive', status: 'starting',
     previousStreamSnapshot: second, streamIntervalMs: 20_000,
     extractStreamSnapshot: {
-      entrySequence: 18, compression: 'stored',
+      entrySequence: 13, compression: 'stored',
       entryCompressedSize: 100, entryUncompressedSize: 100,
       compressedBytesRead: 50, decodedBytes: 50,
       sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
@@ -303,7 +303,7 @@ test('TUS extraction snapshots localize bounded read, decode and write throughpu
     stage: 'extract-archive', status: 'starting',
     previousStreamSnapshot: second, streamIntervalMs: 120_001,
     extractStreamSnapshot: {
-      entrySequence: 17, compression: 'private',
+      entrySequence: 12, compression: 'private',
       entryCompressedSize: Number.MAX_SAFE_INTEGER, entryUncompressedSize: -1,
       compressedBytesRead: 'C:/private/path', decodedBytes: 'private',
       sinkBytesWritten: 900_000_000, sinkWritableLength: 0,
