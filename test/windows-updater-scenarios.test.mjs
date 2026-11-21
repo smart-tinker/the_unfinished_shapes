@@ -295,3 +295,37 @@ test('NSIS directory target uses native Edit 1019 and exact readback before inst
   assert.equal(directory.includes('$valuePattern.SetValue'), false,
     'destination entry does not depend on the unavailable UIA ValuePattern');
 });
+
+test('NSIS destination mismatch diagnostics keep only fixed path relations', async () => {
+  const safeLines = [
+    'TUS_NSIS_WIZARD event=destination-readback-product-leaf-appended pid=4321',
+    'TUS_NSIS_WIZARD event=destination-readback-same-parent pid=4321',
+    'TUS_NSIS_WIZARD event=destination-readback-same-leaf pid=4321',
+    'TUS_NSIS_WIZARD event=destination-readback-other pid=4321',
+  ];
+  const events = safeNsisWizardEvents([
+    ...safeLines,
+    'TUS_NSIS_WIZARD event=destination-readback-same-parent C:/private/path pid=4321',
+    'raw destination C:/private/path',
+  ].join(String.fromCharCode(10)));
+  assert.deepEqual(events, safeLines);
+  assert.equal(JSON.stringify(events).includes('C:/private/path'), false);
+
+  const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const writerStart = script.indexOf('function Write-WizardEvent');
+  const trapStart = script.indexOf('trap {', writerStart);
+  assert.ok(writerStart >= 0 && trapStart > writerStart);
+  const writer = script.slice(writerStart, trapStart);
+  for (const name of [
+    'destination-readback-product-leaf-appended',
+    'destination-readback-same-parent',
+    'destination-readback-same-leaf',
+    'destination-readback-other',
+  ]) assert.ok(writer.includes("'" + name + "'"), 'writer permits only fixed readback event: ' + name);
+
+  const directoryStart = script.indexOf("if ($stage -eq 'directory') {");
+  const installStart = script.indexOf("if ($stage -eq 'installing') {", directoryStart);
+  const directory = script.slice(directoryStart, installStart);
+  assert.ok(directory.includes('switch ($nativeEdit.MismatchClass)'));
+  assert.ok(directory.includes("Write-WizardEvent -Name $readbackEvent"));
+});
