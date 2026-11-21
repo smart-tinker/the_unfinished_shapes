@@ -403,3 +403,17 @@ test('NSIS destination producer keeps before-read and post-readback classificati
   assert.ok(directory.includes("Write-WizardEvent -Name $beforeReadEvent"));
   assert.ok(directory.includes("Write-WizardEvent -Name $readbackEvent"));
 });
+
+
+test('NSIS destination readback preserves only safe root relation events', () => {
+  const sameRoot = 'TUS_NSIS_WIZARD event=destination-readback-same-root pid=4321';
+  const differentRoot = 'TUS_NSIS_WIZARD event=destination-readback-different-root pid=4321';
+  const events = safeNsisWizardEvents([
+    sameRoot,
+    differentRoot,
+    'TUS_NSIS_WIZARD event=destination-readback-same-root pid=4321 C:/private/path',
+    'raw destination C:/private/path',
+  ].join(String.fromCharCode(10)));
+  assert.deepEqual(events, [sameRoot, differentRoot]);
+  assert.equal(JSON.stringify(events).includes('C:/private'), false);
+});
