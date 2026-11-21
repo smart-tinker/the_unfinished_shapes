@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
+import { execFile, spawn } from 'node:child_process';
 import { waitForExit } from '../scripts/graphics-smoke.mjs';
 import { test } from 'node:test';
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory } from '../scripts/windows-updater-scenarios.mjs';
 
 test('Windows installer acceptance still runs when portable acceptance fails', async () => {
@@ -681,4 +686,50 @@ test('NSIS UIA fallback outcome is emitted through the safe wizard event allowli
   const validateSet = source.slice(writerStart, writerEnd).match(/\[ValidateSet\(([\s\S]*?)\)\]/)?.[1] ?? '';
   assert.ok(validateSet.includes("'destination-set-uia-fallback'"));
   assert.ok(source.includes("Write-WizardEvent -Name 'destination-set-uia-fallback'"));
+});
+
+
+test('Windows relaunch failure cleanup stops only the exact verified Setup path', { skip: process.platform !== 'win32' }, async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'tus-setup-cleanup-'));
+  const exactPath = path.join(root, 'TheUnfinishedShapes-0.1.0-rc.11-Setup-x64.exe');
+  const otherPath = path.join(root, 'other.exe');
+  const systemCommand = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
+  await Promise.all([copyFile(systemCommand, exactPath), copyFile(systemCommand, otherPath)]);
+
+  const start = executablePath => spawn(executablePath, ['/c', 'ping -t 127.0.0.1 >NUL'], { windowsHide: true, stdio: 'ignore' });
+  let exact, other;
+  const stop = async child => {
+    if (!child?.pid || child.exitCode !== null) return;
+    await execFileAsync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { timeout: 5000, windowsHide: true }).catch(() => {});
+    await waitForExit(child, 5000).catch(() => {});
+  };
+  t.after(async () => {
+    await stop(exact);
+    await stop(other);
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
+  });
+
+  exact = start(exactPath);
+  other = start(otherPath);
+  await Promise.all([once(exact, 'spawn'), once(other, 'spawn')]);
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal(exact.exitCode, null, 'the exact-path process fixture remains active');
+  assert.equal(other.exitCode, null, 'the unrelated-path process fixture remains active');
+
+  let result;
+  try {
+    result = await execFileAsync('powershell.exe', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', 'scripts/windows-nsis-wizard.ps1',
+      '-InstallerPath', exactPath,
+      '-ExpectedInstallDir', path.join(root, 'install'),
+      '-CleanupOnly',
+    ], { timeout: 10000, maxBuffer: 65536, windowsHide: true });
+  } catch {
+    throw new Error('exact-path installer cleanup did not complete');
+  }
+
+  assert.match(result.stdout, /^TUS_NSIS_WIZARD event=cleanup-stopped pid=\\d+$/m);
+  await waitForExit(exact, 5000);
+  assert.equal(other.exitCode, null, 'cleanup leaves a different executable path untouched');
 });
