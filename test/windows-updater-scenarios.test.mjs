@@ -258,10 +258,16 @@ test('NSIS snapshot maps the production writer fields and rejects private option
 
 test('NSIS directory target uses native Edit 1019 and exact readback before install', async () => {
   const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const readerStart = script.indexOf('function Get-NativeDirectoryEditText');
   const setterStart = script.indexOf('function Set-NativeDirectoryEdit');
   const setterEnd = script.indexOf('function Get-NativeRadioSelection', setterStart);
-  assert.ok(setterStart >= 0 && setterEnd > setterStart, 'the native directory edit writer exists');
+  assert.ok(readerStart >= 0 && setterStart > readerStart && setterEnd > setterStart, 'the native directory edit writer and reader exist');
+  const reader = script.slice(readerStart, setterStart);
   const setter = script.slice(setterStart, setterEnd);
+  assert.ok(reader.includes('SendMessageTimeout($Control, 0x000D') && reader.includes('0x0002, 500'),
+    'WM_GETTEXT is bounded inside the native readback helper');
+  assert.ok(setter.includes('Get-NativeDirectoryEditText -Control $control'),
+    'the setter verifies the exact control through the native reader');
   for (const check of [
     'GetDlgItem($PageHandle, 1019)',
     'GetWindowThreadProcessId($control',
@@ -270,7 +276,6 @@ test('NSIS directory target uses native Edit 1019 and exact readback before inst
     'IsWindowVisible($control)',
     'IsWindowEnabled($control)',
     'SendMessageTimeout($control, 0x000C',
-    'SendMessageTimeout($Control, 0x000D',
     '[System.IO.Path]::GetFullPath($value)',
   ]) assert.ok(setter.includes(check), 'native Edit setter keeps the verified control and exact readback: ' + check);
 
