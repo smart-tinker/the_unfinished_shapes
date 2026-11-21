@@ -662,11 +662,11 @@ test('NSIS directory UIA fallback is bound to the same writable native Edit and 
   assert.ok(fallbackStart >= 0 && fallbackEnd > fallbackStart && setterEnd > setterStart);
   for (const guard of [
     '[System.Windows.Automation.AutomationElement]::FromHandle($Control)',
-    '[IntPtr]$uiEdit.Current.NativeWindowHandle -ne $Control',
-    '$uiEdit.Current.ProcessId -ne $ProcessId',
-    '$uiEdit.Current.IsOffscreen',
-    '-not $uiEdit.Current.IsEnabled',
-    '$uiEdit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit',
+    '[IntPtr]$uiCurrent.NativeWindowHandle -ne $Control',
+    '$uiCurrent.ProcessId -ne $ProcessId',
+    '$uiCurrent.IsOffscreen',
+    '-not $uiCurrent.IsEnabled',
+    '$uiCurrent.ControlType -ne [System.Windows.Automation.ControlType]::Edit',
     '[TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $Control',
     '$valuePattern.Current.IsReadOnly',
   ]) assert.ok(fallback.includes(guard), 'UIA fallback guard exists: ' + guard);
@@ -706,11 +706,11 @@ test('NSIS UIA element diagnostics preserve only the exact fixed guard outcome',
   assert.ok(start >= 0 && end > start);
   const fallback = script.slice(start, end);
   const guards = [
-    ["$uiEdit.Current.ProcessId -ne $ProcessId", "return 'owner-mismatch'"],
-    ["[IntPtr]$uiEdit.Current.NativeWindowHandle -ne $Control", "return 'handle-mismatch'"],
-    ["$uiEdit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit", "return 'type-mismatch'"],
-    ['$uiEdit.Current.IsOffscreen', "return 'offscreen'"],
-    ['-not $uiEdit.Current.IsEnabled', "return 'disabled'"],
+    ["$uiCurrent.ProcessId -ne $ProcessId", "return 'owner-mismatch'"],
+    ["[IntPtr]$uiCurrent.NativeWindowHandle -ne $Control", "return 'handle-mismatch'"],
+    ["$uiCurrent.ControlType -ne [System.Windows.Automation.ControlType]::Edit", "return 'type-mismatch'"],
+    ['$uiCurrent.IsOffscreen', "return 'offscreen'"],
+    ['-not $uiCurrent.IsEnabled', "return 'disabled'"],
   ];
   const setValue = fallback.indexOf('$valuePattern.SetValue($ExpectedValue)');
   assert.ok(setValue >= 0);
@@ -723,7 +723,7 @@ test('NSIS UIA element diagnostics preserve only the exact fixed guard outcome',
 });
 
 test('NSIS UIA fallback outcomes use safe, producer-mapped enums', async () => {
-  const statuses = ['element-unavailable', 'element-mismatch', 'control-mismatch', 'read-only', 'set-error', 'postset-mismatch', 'unknown'];
+  const statuses = ['element-unavailable', 'owner-mismatch', 'handle-mismatch', 'type-mismatch', 'offscreen', 'disabled', 'control-mismatch', 'read-only', 'set-error', 'postset-mismatch', 'unknown'];
   const events = ['TUS_NSIS_WIZARD event=destination-set-uia-fallback pid=4321', ...statuses.map(status => 'TUS_NSIS_WIZARD event=destination-uia-' + status + ' pid=4321')];
   assert.deepEqual(
     safeNsisWizardEvents([...events, ...events.map(line => line + ' value=C:/private/path')].join(String.fromCharCode(10))),
