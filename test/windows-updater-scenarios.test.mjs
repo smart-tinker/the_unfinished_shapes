@@ -431,22 +431,64 @@ test('NSIS destination readback relation events are accepted by the PowerShell w
 });
 
 
-test('NSIS destination setter preserves only bounded pre-write failure stages', async () => {
+test('NSIS destination diagnostics match reachable producer mappings', async () => {
   const source = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
-  const start = source.indexOf('function Write-WizardEvent {');
-  const end = source.indexOf('\ntrap {', start);
-  assert.ok(start >= 0 && end > start, 'the event writer and its following trap exist');
-  const validateSet = source.slice(start, end).match(/\[ValidateSet\(([\s\S]*?)\)\]/)?.[1] ?? '';
-  const stages = ['precondition-unavailable', 'provenance-unavailable', 'control-unavailable', 'prepare-unavailable', 'message-failed', 'exception', 'unknown'];
-  const lines = stages.map(stage => 'TUS_NSIS_WIZARD event=destination-set-' + stage + ' pid=4321');
-  const events = safeNsisWizardEvents([
-    ...lines,
-    'TUS_NSIS_WIZARD event=destination-set-control-unavailable pid=4321 C:/private/path',
-    'raw destination C:/private/path',
-  ].join(String.fromCharCode(10)));
-  assert.deepEqual(events, lines);
-  assert.equal(JSON.stringify(events).includes('C:/private'), false);
-  for (const line of lines) {
+  const writerStart = source.indexOf('function Write-WizardEvent {');
+  const writerEnd = source.indexOf('\ntrap {', writerStart);
+  const setterStart = source.indexOf('function Set-NativeDirectoryEdit {');
+  const setterEnd = source.indexOf('\nfunction Get-NativeRadioSelection', setterStart);
+  const mappingStart = source.indexOf('$setFailureEvent = switch ($nativeEdit.SetFailureStage)');
+  const mappingEnd = source.indexOf('\n      Write-WizardEvent -Name $setFailureEvent', mappingStart);
+  assert.ok(writerStart >= 0 && writerEnd > writerStart);
+  assert.ok(setterStart >= 0 && setterEnd > setterStart);
+  assert.ok(mappingStart >= 0 && mappingEnd > mappingStart);
+
+  const validateSet = source.slice(writerStart, writerEnd).match(/\[ValidateSet\(([\s\S]*?)\)\]/)?.[1] ?? '';
+  const setter = source.slice(setterStart, setterEnd);
+  const mappingSource = source.slice(mappingStart, mappingEnd);
+  const stages = new Map([
+    ['precondition', 'destination-set-precondition-unavailable'],
+    ['provenance', 'destination-set-provenance-unavailable'],
+    ['control', 'destination-set-control-unavailable'],
+    ['message', 'destination-set-message-failed'],
+    ['exception', 'destination-set-exception'],
+  ]);
+  const producerStages = [...new Set([...setter.matchAll(/SetFailureStage\s*=\s*'([a-z-]+)'/g)]
+    .map(([, stage]) => stage).filter(stage => stage !== 'none'))].sort();
+  const producerMapping = Object.fromEntries([...mappingSource.matchAll(/'([a-z-]+)' \{ '([a-z-]+)' \}/g)]
+    .map(([, stage, event]) => [stage, event]));
+  const editsBranchStart = source.indexOf('} elseif ($edits.Count -gt 1) {');
+  const editsBranchEnd = source.indexOf('\n    } else {', editsBranchStart);
+  const editsBranch = source.slice(editsBranchStart, editsBranchEnd);
+  const editEvent = editsBranch.match(/Write-WizardEvent\s+-Name\s+'([a-z-]+)'/)?.[1] ?? null;
+  const lines = [...stages.values()].map(event => 'TUS_NSIS_WIZARD event=' + event + ' pid=4321');
+  const fallback = 'TUS_NSIS_WIZARD event=destination-set-unknown pid=4321';
+  const ambiguous = 'TUS_NSIS_WIZARD event=destination-edits-ambiguous pid=4321';
+  const prepare = 'TUS_NSIS_WIZARD event=destination-set-prepare-unavailable pid=4321';
+
+  const actual = {
+    producerStages,
+    producerMapping,
+    ambiguousEditEvent: editEvent,
+    writerAllowsAmbiguousEdit: validateSet.includes("'destination-edits-ambiguous'"),
+    prepareAllowed: validateSet.includes("'destination-set-prepare-unavailable'"),
+    prepareSanitized: safeNsisWizardEvents(prepare).length > 0,
+    sanitized: safeNsisWizardEvents([
+      ...lines, fallback, ambiguous, ambiguous + ' C:/private/path', 'raw destination C:/private/path',
+    ].join(String.fromCharCode(10))),
+  };
+  const expected = {
+    producerStages: [...stages.keys()].sort(),
+    producerMapping: Object.fromEntries([...stages, ['default', 'destination-set-unknown']]),
+    ambiguousEditEvent: 'destination-edits-ambiguous',
+    writerAllowsAmbiguousEdit: true,
+    prepareAllowed: false,
+    prepareSanitized: false,
+    sanitized: [...lines, fallback, ambiguous],
+  };
+  assert.deepEqual(actual, expected);
+  assert.equal(JSON.stringify(actual.sanitized).includes('C:/private'), false);
+  for (const line of [...lines, fallback, ambiguous]) {
     const event = line.match(/event=([a-z-]+)/)[1];
     assert.ok(validateSet.includes("'" + event + "'"), event + ' is accepted by the writer');
   }
