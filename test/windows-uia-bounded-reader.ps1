@@ -12,6 +12,8 @@ function Write-UiaPhaseMarker {
 $testChildScript = @'
 [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-child-start')
 [Console]::Out.Flush()
+[Console]::Out.WriteLine('TUS_UIA_CHILD: phase-fromhandle-start')
+[Console]::Out.Flush()
 [Console]::Out.WriteLine('UNAPPROVED_PROMPT_TEST_PAYLOAD')
 [Console]::Out.Flush()
 [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-unapproved-test-output')

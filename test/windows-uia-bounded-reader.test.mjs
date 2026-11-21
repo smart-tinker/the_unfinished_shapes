@@ -164,8 +164,10 @@ test('bounded UIA child preserves only a complete safe phase after kill and reap
 
   assert.ok(elapsed < 8000, 'the timeout, kill, reap and output drain remain bounded');
   assert.equal(processFailed, false, 'the PowerShell test process exits successfully');
-  assert.match(safeOutput, /^TUS_UIA_TEST: result=timeout-phase-child-start$/m,
+  assert.match(safeOutput, /^TUS_UIA_TEST: result=timeout-phase-fromhandle-start$/m,
     'the complete allowlisted phase is retained after the timed-out child is reaped');
+  assert.doesNotMatch(safeOutput, /^TUS_UIA_TIMING: fromhandle-ms=/m,
+    'an unfinished FromHandle call has no measured duration');
   assert.match(safeOutput, /^TUS_UIA_DIAG: diagnostic-enabled$/m,
     'test override enables safe diagnostic markers');
   assert.match(safeOutput, /^TUS_UIA_DIAG: bounded-wait-returned$/m,
