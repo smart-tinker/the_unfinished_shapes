@@ -323,6 +323,14 @@ test('NSIS destination mismatch diagnostics keep only fixed path relations', asy
     'destination-readback-other',
   ]) assert.ok(writer.includes("'" + name + "'"), 'writer permits only fixed readback event: ' + name);
 
+  const setterStart = script.indexOf('function Set-NativeDirectoryEdit');
+  const setterEnd = script.indexOf('function Get-NativeRadioSelection', setterStart);
+  const setter = script.slice(setterStart, setterEnd);
+  for (const category of ['product-leaf-appended', 'same-parent', 'same-leaf', 'other']) {
+    assert.ok(setter.includes("$result.MismatchClass = '" + category + "'"),
+      'the actual native readback producer maps to a fixed category: ' + category);
+  }
+
   const directoryStart = script.indexOf("if ($stage -eq 'directory') {");
   const installStart = script.indexOf("if ($stage -eq 'installing') {", directoryStart);
   const directory = script.slice(directoryStart, installStart);

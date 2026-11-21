@@ -73,7 +73,7 @@ function Get-NativeDirectoryEditText {
 
 function Set-NativeDirectoryEdit {
   param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [string]$ExpectedValue)
-  $result = [ordered]@{ SetStatus = 'unavailable'; Readback = 'unknown' }
+  $result = [ordered]@{ SetStatus = 'unavailable'; Readback = 'unknown'; MismatchClass = 'unknown' }
   if (-not $script:nativeWindowApiAvailable -or $MainWindowHandle -eq [IntPtr]::Zero -or
       $PageHandle -eq [IntPtr]::Zero -or [string]::IsNullOrWhiteSpace($ExpectedValue) -or
       $ExpectedValue.Length -ge 32768) { return [pscustomobject]$result }
@@ -121,6 +121,15 @@ function Set-NativeDirectoryEdit {
       $result.Readback = 'match'
     } else {
       $result.Readback = 'mismatch'
+      $result.MismatchClass = 'other'
+      $expectedChild = Join-Path $normalizedExpected ([System.IO.Path]::GetFileName($normalizedExpected))
+      if ([String]::Equals($normalizedValue, $expectedChild, [StringComparison]::OrdinalIgnoreCase)) {
+        $result.MismatchClass = 'product-leaf-appended'
+      } elseif ([String]::Equals([System.IO.Path]::GetDirectoryName($normalizedValue), [System.IO.Path]::GetDirectoryName($normalizedExpected), [StringComparison]::OrdinalIgnoreCase)) {
+        $result.MismatchClass = 'same-parent'
+      } elseif ([String]::Equals([System.IO.Path]::GetFileName($normalizedValue), [System.IO.Path]::GetFileName($normalizedExpected), [StringComparison]::OrdinalIgnoreCase)) {
+        $result.MismatchClass = 'same-leaf'
+      }
     }
   } catch {}
   return [pscustomobject]$result
@@ -600,6 +609,7 @@ function Write-WizardEvent {
       'process-found', 'process-ambiguous', 'process-not-found',
       'window-found', 'window-not-found', 'window-mismatch',
       'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-verified', 'destination-unavailable', 'destination-mismatch',
+      'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-other',
       'next-unavailable', 'install-started', 'finish-clicked', 'installer-exited',
       'installer-exited-early', 'installed-executable-missing', 'completed',
       'timeout', 'uia-unavailable', 'automation-failed'
@@ -876,6 +886,13 @@ while ([DateTime]::UtcNow -lt $deadline) {
     }
     if ($nativeEdit.Readback -ne 'match') {
       $destinationStatus = 'mismatch'
+      $readbackEvent = switch ($nativeEdit.MismatchClass) {
+        'product-leaf-appended' { 'destination-readback-product-leaf-appended' }
+        'same-parent' { 'destination-readback-same-parent' }
+        'same-leaf' { 'destination-readback-same-leaf' }
+        default { 'destination-readback-other' }
+      }
+      Write-WizardEvent -Name $readbackEvent -ProcessId $script:installerProcessId
       Write-WizardEvent -Name 'destination-mismatch' -ProcessId $script:installerProcessId
       exit 2
     }
