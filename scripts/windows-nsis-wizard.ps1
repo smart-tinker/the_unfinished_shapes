@@ -134,66 +134,73 @@ function Set-NativeDirectoryEditWithUIA {
   try {
     $uiEdit = [System.Windows.Automation.AutomationElement]::FromHandle($Control)
   } catch {
-    return $false
+    return 'element-unavailable'
   }
-  if ($null -eq $uiEdit) { return $false }
-  if ($uiEdit.Current.ProcessId -ne $ProcessId -or
-      [IntPtr]$uiEdit.Current.NativeWindowHandle -ne $Control -or
-      $uiEdit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit -or
-      $uiEdit.Current.IsOffscreen -or -not $uiEdit.Current.IsEnabled) { return $false }
+  if ($null -eq $uiEdit) { return 'element-unavailable' }
+  try {
+    if ($uiEdit.Current.ProcessId -ne $ProcessId -or
+        [IntPtr]$uiEdit.Current.NativeWindowHandle -ne $Control -or
+        $uiEdit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit -or
+        $uiEdit.Current.IsOffscreen -or -not $uiEdit.Current.IsEnabled) { return 'element-mismatch' }
 
-  $mainProcessId = [uint32]0
-  $mainThreadId = [TUSWindowApi]::GetWindowThreadProcessId($MainWindowHandle, [ref]$mainProcessId)
-  $pageProcessId = [uint32]0
-  $pageThreadId = [TUSWindowApi]::GetWindowThreadProcessId($PageHandle, [ref]$pageProcessId)
-  $controlProcessId = [uint32]0
-  $controlThreadId = [TUSWindowApi]::GetWindowThreadProcessId($Control, [ref]$controlProcessId)
-  $pageClass = [System.Text.StringBuilder]::new(128)
-  $controlClass = [System.Text.StringBuilder]::new(128)
-  if ($mainThreadId -eq 0 -or $mainProcessId -ne $ProcessId -or
-      $pageThreadId -eq 0 -or $pageProcessId -ne $ProcessId -or
-      [TUSWindowApi]::GetParent($PageHandle) -ne $MainWindowHandle -or
-      -not [TUSWindowApi]::IsWindowVisible($PageHandle) -or
-      [TUSWindowApi]::GetClassName($PageHandle, $pageClass, $pageClass.Capacity) -le 0 -or
-      $pageClass.ToString() -ne '#32770' -or
-      $controlThreadId -eq 0 -or $controlProcessId -ne $ProcessId -or
-      [TUSWindowApi]::GetParent($Control) -ne $PageHandle -or
-      [TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $Control -or
-      [TUSWindowApi]::GetClassName($Control, $controlClass, $controlClass.Capacity) -le 0 -or
-      $controlClass.ToString() -ne 'Edit' -or
-      -not [TUSWindowApi]::IsWindowVisible($Control) -or
-      -not [TUSWindowApi]::IsWindowEnabled($Control)) { return $false }
+    $mainProcessId = [uint32]0
+    $mainThreadId = [TUSWindowApi]::GetWindowThreadProcessId($MainWindowHandle, [ref]$mainProcessId)
+    $pageProcessId = [uint32]0
+    $pageThreadId = [TUSWindowApi]::GetWindowThreadProcessId($PageHandle, [ref]$pageProcessId)
+    $controlProcessId = [uint32]0
+    $controlThreadId = [TUSWindowApi]::GetWindowThreadProcessId($Control, [ref]$controlProcessId)
+    $pageClass = [System.Text.StringBuilder]::new(128)
+    $controlClass = [System.Text.StringBuilder]::new(128)
+    if ($mainThreadId -eq 0 -or $mainProcessId -ne $ProcessId -or
+        $pageThreadId -eq 0 -or $pageProcessId -ne $ProcessId -or
+        [TUSWindowApi]::GetParent($PageHandle) -ne $MainWindowHandle -or
+        -not [TUSWindowApi]::IsWindowVisible($PageHandle) -or
+        [TUSWindowApi]::GetClassName($PageHandle, $pageClass, $pageClass.Capacity) -le 0 -or
+        $pageClass.ToString() -ne '#32770' -or
+        $controlThreadId -eq 0 -or $controlProcessId -ne $ProcessId -or
+        [TUSWindowApi]::GetParent($Control) -ne $PageHandle -or
+        [TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $Control -or
+        [TUSWindowApi]::GetClassName($Control, $controlClass, $controlClass.Capacity) -le 0 -or
+        $controlClass.ToString() -ne 'Edit' -or
+        -not [TUSWindowApi]::IsWindowVisible($Control) -or
+        -not [TUSWindowApi]::IsWindowEnabled($Control)) { return 'control-mismatch' }
 
-  $valuePattern = $uiEdit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-  if ($valuePattern.Current.IsReadOnly) { return $false }
-  $valuePattern.SetValue($ExpectedValue)
+    $valuePattern = $uiEdit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    if ($valuePattern.Current.IsReadOnly) { return 'read-only' }
+    try {
+      $valuePattern.SetValue($ExpectedValue)
+    } catch {
+      return 'set-error'
+    }
 
-  $mainProcessId = [uint32]0
-  $mainThreadId = [TUSWindowApi]::GetWindowThreadProcessId($MainWindowHandle, [ref]$mainProcessId)
-  $pageProcessId = [uint32]0
-  $pageThreadId = [TUSWindowApi]::GetWindowThreadProcessId($PageHandle, [ref]$pageProcessId)
-  $controlProcessId = [uint32]0
-  $controlThreadId = [TUSWindowApi]::GetWindowThreadProcessId($Control, [ref]$controlProcessId)
-  $pageClass = [System.Text.StringBuilder]::new(128)
-  $controlClass = [System.Text.StringBuilder]::new(128)
-  return ($mainThreadId -ne 0 -and $mainProcessId -eq $ProcessId -and
-      $pageThreadId -ne 0 -and $pageProcessId -eq $ProcessId -and
-      [TUSWindowApi]::GetParent($PageHandle) -eq $MainWindowHandle -and
-      [TUSWindowApi]::IsWindowVisible($PageHandle) -and
-      [TUSWindowApi]::GetClassName($PageHandle, $pageClass, $pageClass.Capacity) -gt 0 -and
-      $pageClass.ToString() -eq '#32770' -and
-      $controlThreadId -ne 0 -and $controlProcessId -eq $ProcessId -and
-      [TUSWindowApi]::GetParent($Control) -eq $PageHandle -and
-      [TUSWindowApi]::GetDlgItem($PageHandle, 1019) -eq $Control -and
-      [TUSWindowApi]::GetClassName($Control, $controlClass, $controlClass.Capacity) -gt 0 -and
-      $controlClass.ToString() -eq 'Edit' -and
-      [TUSWindowApi]::IsWindowVisible($Control) -and
-      [TUSWindowApi]::IsWindowEnabled($Control))
+    $mainProcessId = [uint32]0
+    $mainThreadId = [TUSWindowApi]::GetWindowThreadProcessId($MainWindowHandle, [ref]$mainProcessId)
+    $pageProcessId = [uint32]0
+    $pageThreadId = [TUSWindowApi]::GetWindowThreadProcessId($PageHandle, [ref]$pageProcessId)
+    $controlProcessId = [uint32]0
+    $controlThreadId = [TUSWindowApi]::GetWindowThreadProcessId($Control, [ref]$controlProcessId)
+    $pageClass = [System.Text.StringBuilder]::new(128)
+    $controlClass = [System.Text.StringBuilder]::new(128)
+    if ($mainThreadId -eq 0 -or $mainProcessId -ne $ProcessId -or
+        $pageThreadId -eq 0 -or $pageProcessId -ne $ProcessId -or
+        [TUSWindowApi]::GetParent($PageHandle) -ne $MainWindowHandle -or
+        -not [TUSWindowApi]::IsWindowVisible($PageHandle) -or
+        [TUSWindowApi]::GetClassName($PageHandle, $pageClass, $pageClass.Capacity) -le 0 -or
+        $pageClass.ToString() -ne '#32770' -or
+        $controlThreadId -eq 0 -or $controlProcessId -ne $ProcessId -or
+        [TUSWindowApi]::GetParent($Control) -ne $PageHandle -or
+        [TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $Control -or
+        [TUSWindowApi]::GetClassName($Control, $controlClass, $controlClass.Capacity) -le 0 -or
+        $controlClass.ToString() -ne 'Edit' -or
+        -not [TUSWindowApi]::IsWindowVisible($Control) -or
+        -not [TUSWindowApi]::IsWindowEnabled($Control)) { return 'postset-mismatch' }
+    return 'applied'
+  } catch { return 'unknown' }
 }
 
 function Set-NativeDirectoryEdit {
   param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [string]$ExpectedValue)
-  $result = [ordered]@{ SetStatus = 'unavailable'; SetFailureStage = 'precondition'; SetMethod = 'none'; BeforeReadClass = 'unavailable'; PostSetControlStatus = 'unknown'; Readback = 'unknown'; MismatchClass = 'unknown' }
+  $result = [ordered]@{ SetStatus = 'unavailable'; SetFailureStage = 'precondition'; SetMethod = 'none'; UiaFallbackStatus = 'not-attempted'; BeforeReadClass = 'unavailable'; PostSetControlStatus = 'unknown'; Readback = 'unknown'; MismatchClass = 'unknown' }
   if (-not $script:nativeWindowApiAvailable -or $MainWindowHandle -eq [IntPtr]::Zero -or
       $PageHandle -eq [IntPtr]::Zero -or [string]::IsNullOrWhiteSpace($ExpectedValue) -or
       $ExpectedValue.Length -ge 32768) { return [pscustomobject]$result }
@@ -255,9 +262,8 @@ function Set-NativeDirectoryEdit {
       [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
     }
     if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) {
-      if (-not (Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue)) {
-        return [pscustomobject]$result
-      }
+      $result.UiaFallbackStatus = Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue
+      if ($result.UiaFallbackStatus -ne 'applied') { return [pscustomobject]$result }
       $result.SetMethod = 'uia'
     } else {
       $result.SetMethod = 'message'
@@ -286,7 +292,8 @@ function Set-NativeDirectoryEdit {
     $normalizedValue = [System.IO.Path]::GetFullPath($value).TrimEnd($trimCharacters)
     $readbackMatches = [String]::Equals($normalizedValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)
     if ($result.SetMethod -eq 'message' -and -not $readbackMatches) {
-      if (Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue) {
+      $result.UiaFallbackStatus = Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue
+      if ($result.UiaFallbackStatus -eq 'applied') {
         $result.SetMethod = 'uia'
         $value = Get-NativeDirectoryEditText -Control $control
         if ($null -eq $value) { return [pscustomobject]$result }
@@ -797,6 +804,7 @@ function Write-WizardEvent {
       'window-found', 'window-not-found', 'window-mismatch',
       'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-postset-edit-match', 'destination-postset-edit-mismatch', 'destination-postset-edit-unknown', 'destination-verified', 'destination-unavailable', 'destination-mismatch', 'destination-edits-ambiguous',
   'destination-set-precondition-unavailable', 'destination-set-provenance-unavailable', 'destination-set-control-unavailable', 'destination-set-message-failed', 'destination-set-uia-fallback', 'destination-set-exception', 'destination-set-unknown',
+      'destination-uia-element-unavailable', 'destination-uia-element-mismatch', 'destination-uia-control-mismatch', 'destination-uia-read-only', 'destination-uia-set-error', 'destination-uia-postset-mismatch', 'destination-uia-unknown',
       'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-same-root', 'destination-readback-different-root', 'destination-readback-other', 'destination-readback-unchanged', 'destination-before-read-unavailable', 'destination-before-read-empty', 'destination-before-read-invalid',
       'next-unavailable', 'install-started', 'finish-clicked', 'installer-exited',
       'installer-exited-early', 'installed-executable-missing', 'completed',
@@ -1055,6 +1063,17 @@ while ([DateTime]::UtcNow -lt $deadline) {
       continue
     }
     $nativeEdit = Set-NativeDirectoryEdit -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle -PageHandle $nativeWindow.PageHandle -ExpectedValue $expectedInstallDir
+      $uiaFallbackEvent = switch ($nativeEdit.UiaFallbackStatus) {
+        'element-unavailable' { 'destination-uia-element-unavailable' }
+        'element-mismatch' { 'destination-uia-element-mismatch' }
+        'control-mismatch' { 'destination-uia-control-mismatch' }
+        'read-only' { 'destination-uia-read-only' }
+        'set-error' { 'destination-uia-set-error' }
+        'postset-mismatch' { 'destination-uia-postset-mismatch' }
+        'unknown' { 'destination-uia-unknown' }
+        default { $null }
+      }
+      if ($uiaFallbackEvent) { Write-WizardEvent -Name $uiaFallbackEvent -ProcessId $script:installerProcessId }
     if ($nativeEdit.SetStatus -ne 'sent') {
       $setFailureEvent = switch ($nativeEdit.SetFailureStage) {
         'precondition' { 'destination-set-precondition-unavailable' }
