@@ -141,7 +141,6 @@ function Set-NativeDirectoryEditWithUIA {
     $uiCurrent = $uiEdit.Current
     if ($uiCurrent.ProcessId -ne $ProcessId) { return 'owner-mismatch' }
     if ([IntPtr]$uiCurrent.NativeWindowHandle -ne $Control) { return 'handle-mismatch' }
-    if ($uiCurrent.ControlType -ne [System.Windows.Automation.ControlType]::Edit) { return 'type-mismatch' }
     if ($uiCurrent.IsOffscreen) { return 'offscreen' }
     if (-not $uiCurrent.IsEnabled) { return 'disabled' }
 
@@ -806,7 +805,7 @@ function Write-WizardEvent {
       'window-found', 'window-not-found', 'window-mismatch',
       'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-postset-edit-match', 'destination-postset-edit-mismatch', 'destination-postset-edit-unknown', 'destination-verified', 'destination-unavailable', 'destination-mismatch', 'destination-edits-ambiguous',
   'destination-set-precondition-unavailable', 'destination-set-provenance-unavailable', 'destination-set-control-unavailable', 'destination-set-message-failed', 'destination-set-uia-fallback', 'destination-set-exception', 'destination-set-unknown',
-      'destination-uia-element-unavailable', 'destination-uia-owner-mismatch', 'destination-uia-handle-mismatch', 'destination-uia-type-mismatch', 'destination-uia-offscreen', 'destination-uia-disabled', 'destination-uia-control-mismatch', 'destination-uia-read-only', 'destination-uia-set-error', 'destination-uia-postset-mismatch', 'destination-uia-unknown',
+      'destination-uia-element-unavailable', 'destination-uia-owner-mismatch', 'destination-uia-handle-mismatch', 'destination-uia-offscreen', 'destination-uia-disabled', 'destination-uia-control-mismatch', 'destination-uia-read-only', 'destination-uia-set-error', 'destination-uia-postset-mismatch', 'destination-uia-unknown',
       'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-same-root', 'destination-readback-different-root', 'destination-readback-other', 'destination-readback-unchanged', 'destination-before-read-unavailable', 'destination-before-read-empty', 'destination-before-read-invalid',
       'next-unavailable', 'install-started', 'finish-clicked', 'installer-exited',
       'installer-exited-early', 'installed-executable-missing', 'completed',
@@ -1069,7 +1068,6 @@ while ([DateTime]::UtcNow -lt $deadline) {
         'element-unavailable' { 'destination-uia-element-unavailable' }
         'owner-mismatch' { 'destination-uia-owner-mismatch' }
         'handle-mismatch' { 'destination-uia-handle-mismatch' }
-        'type-mismatch' { 'destination-uia-type-mismatch' }
         'offscreen' { 'destination-uia-offscreen' }
         'disabled' { 'destination-uia-disabled' }
         'control-mismatch' { 'destination-uia-control-mismatch' }
