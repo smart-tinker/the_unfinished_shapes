@@ -389,7 +389,7 @@ test('NSIS destination producer keeps before-read and post-readback classificati
   const setterStart = script.indexOf('function Set-NativeDirectoryEdit');
   const setterEnd = script.indexOf('function Get-NativeRadioSelection', setterStart);
   const setter = script.slice(setterStart, setterEnd);
-  assert.ok(setter.includes("BeforeReadClass = 'unavailable'"));
+  assert.ok(setter.includes("$beforeReadClass = 'unavailable'"));
   assert.ok(setter.includes('$result.BeforeReadClass = $beforeReadClass'));
   assert.equal(setter.includes("$result.MismatchClass = 'before-read-invalid'"), false);
 
