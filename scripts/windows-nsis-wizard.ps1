@@ -72,8 +72,8 @@ function Get-NativeDirectoryEditText {
 }
 
 function Set-NativeDirectoryEdit {
-  param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [string]$ExpectedValue)
-  $result = [ordered]@{ SetStatus = 'unavailable'; SetFailureStage = 'precondition'; BeforeReadClass = 'unavailable'; PostSetControlStatus = 'unknown'; Readback = 'unknown'; MismatchClass = 'unknown' }
+  param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [string]$ExpectedValue, [object[]]$AutomationEdits = @())
+  $result = [ordered]@{ SetStatus = 'unavailable'; SetFailureStage = 'precondition'; SetMethod = 'none'; BeforeReadClass = 'unavailable'; PostSetControlStatus = 'unknown'; Readback = 'unknown'; MismatchClass = 'unknown' }
   if (-not $script:nativeWindowApiAvailable -or $MainWindowHandle -eq [IntPtr]::Zero -or
       $PageHandle -eq [IntPtr]::Zero -or [string]::IsNullOrWhiteSpace($ExpectedValue) -or
       $ExpectedValue.Length -ge 32768) { return [pscustomobject]$result }
@@ -127,15 +127,56 @@ function Set-NativeDirectoryEdit {
     $result.BeforeReadClass = $beforeReadClass
     $expectedPointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($ExpectedValue)
     $result.SetFailureStage = 'message'
+    $setSent = [IntPtr]::Zero
+    $setResult = [IntPtr]::Zero
     try {
-      $setResult = [IntPtr]::Zero
       $setSent = [TUSWindowApi]::SendMessageTimeout($control, 0x000C, [IntPtr]::Zero, $expectedPointer, 0x0002, 500, [ref]$setResult)
-      if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) { return [pscustomobject]$result }
-      $result.SetStatus = 'sent'
-      $result.SetFailureStage = 'none'
     } finally {
       [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
     }
+    if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) {
+      $result.SetFailureStage = 'control'
+      $uiEdits = @($AutomationEdits | Where-Object {
+        try { [IntPtr]$_.Current.NativeWindowHandle -eq $control } catch { $false }
+      })
+      if ($uiEdits.Count -ne 1) { return [pscustomobject]$result }
+      $uiEdit = $uiEdits[0]
+      if ($uiEdit.Current.ProcessId -ne $ProcessId -or
+          [IntPtr]$uiEdit.Current.NativeWindowHandle -ne $control -or
+          $uiEdit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit -or
+          $uiEdit.Current.IsOffscreen -or -not $uiEdit.Current.IsEnabled) { return [pscustomobject]$result }
+
+      $fallbackMainProcessId = [uint32]0
+      $fallbackMainThreadId = [TUSWindowApi]::GetWindowThreadProcessId($MainWindowHandle, [ref]$fallbackMainProcessId)
+      $fallbackPageProcessId = [uint32]0
+      $fallbackPageThreadId = [TUSWindowApi]::GetWindowThreadProcessId($PageHandle, [ref]$fallbackPageProcessId)
+      $fallbackControlProcessId = [uint32]0
+      $fallbackControlThreadId = [TUSWindowApi]::GetWindowThreadProcessId($control, [ref]$fallbackControlProcessId)
+      $fallbackPageClass = [System.Text.StringBuilder]::new(128)
+      $fallbackControlClass = [System.Text.StringBuilder]::new(128)
+      if ($fallbackMainThreadId -eq 0 -or $fallbackMainProcessId -ne $ProcessId -or
+          $fallbackPageThreadId -eq 0 -or $fallbackPageProcessId -ne $ProcessId -or
+          [TUSWindowApi]::GetParent($PageHandle) -ne $MainWindowHandle -or
+          -not [TUSWindowApi]::IsWindowVisible($PageHandle) -or
+          [TUSWindowApi]::GetClassName($PageHandle, $fallbackPageClass, $fallbackPageClass.Capacity) -le 0 -or
+          $fallbackPageClass.ToString() -ne '#32770' -or
+          $fallbackControlThreadId -eq 0 -or $fallbackControlProcessId -ne $ProcessId -or
+          [TUSWindowApi]::GetParent($control) -ne $PageHandle -or
+          [TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $control -or
+          [TUSWindowApi]::GetClassName($control, $fallbackControlClass, $fallbackControlClass.Capacity) -le 0 -or
+          $fallbackControlClass.ToString() -ne 'Edit' -or
+          -not [TUSWindowApi]::IsWindowVisible($control) -or
+          -not [TUSWindowApi]::IsWindowEnabled($control)) { return [pscustomobject]$result }
+
+      $valuePattern = $uiEdit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+      if ($valuePattern.Current.IsReadOnly) { return [pscustomobject]$result }
+      $valuePattern.SetValue($ExpectedValue)
+      $result.SetMethod = 'uia'
+    } else {
+      $result.SetMethod = 'message'
+    }
+    $result.SetStatus = 'sent'
+    $result.SetFailureStage = 'none'
     try {
       $postSetProcessId = [uint32]0
       $postSetThreadId = [TUSWindowApi]::GetWindowThreadProcessId($control, [ref]$postSetProcessId)
@@ -658,7 +699,7 @@ function Write-WizardEvent {
       'process-found', 'process-ambiguous', 'process-not-found',
       'window-found', 'window-not-found', 'window-mismatch',
       'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-postset-edit-match', 'destination-postset-edit-mismatch', 'destination-postset-edit-unknown', 'destination-verified', 'destination-unavailable', 'destination-mismatch', 'destination-edits-ambiguous',
-  'destination-set-precondition-unavailable', 'destination-set-provenance-unavailable', 'destination-set-control-unavailable', 'destination-set-message-failed', 'destination-set-exception', 'destination-set-unknown',
+  'destination-set-precondition-unavailable', 'destination-set-provenance-unavailable', 'destination-set-control-unavailable', 'destination-set-message-failed', 'destination-set-uia-fallback', 'destination-set-exception', 'destination-set-unknown',
       'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-same-root', 'destination-readback-different-root', 'destination-readback-other', 'destination-readback-unchanged', 'destination-before-read-unavailable', 'destination-before-read-empty', 'destination-before-read-invalid',
       'next-unavailable', 'install-started', 'finish-clicked', 'installer-exited',
       'installer-exited-early', 'installed-executable-missing', 'completed',
@@ -925,7 +966,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
       Start-Sleep -Milliseconds 100
       continue
     }
-    $nativeEdit = Set-NativeDirectoryEdit -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle -PageHandle $nativeWindow.PageHandle -ExpectedValue $expectedInstallDir
+    $nativeEdit = Set-NativeDirectoryEdit -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle -PageHandle $nativeWindow.PageHandle -ExpectedValue $expectedInstallDir -AutomationEdits $edits
     if ($nativeEdit.SetStatus -ne 'sent') {
       $setFailureEvent = switch ($nativeEdit.SetFailureStage) {
         'precondition' { 'destination-set-precondition-unavailable' }
@@ -939,6 +980,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
       Write-WizardEvent -Name 'destination-unavailable' -ProcessId $script:installerProcessId
       exit 2
     }
+    if ($nativeEdit.SetMethod -eq 'uia') { Write-WizardEvent -Name 'destination-set-uia-fallback' -ProcessId $script:installerProcessId }
     Write-WizardEvent -Name 'destination-entered' -ProcessId $script:installerProcessId
     $postSetEvent = switch ($nativeEdit.PostSetControlStatus) {
       'match' { 'destination-postset-edit-match' }

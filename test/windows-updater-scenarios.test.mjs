@@ -655,6 +655,9 @@ test('NSIS directory UIA fallback is bound to the same writable native Edit and 
     '[IntPtr]$_.Current.NativeWindowHandle -eq $control',
     '$uiEdit.Current.ProcessId -ne $ProcessId',
     '$uiEdit.Current.IsOffscreen',
+    '-not $uiEdit.Current.IsEnabled',
+    '$uiEdit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit',
+    '[TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $control',
     '$valuePattern.Current.IsReadOnly',
   ]) assert.ok(setter.includes(guard), 'UIA fallback guard exists: ' + guard);
 
@@ -669,7 +672,13 @@ test('NSIS directory UIA fallback is bound to the same writable native Edit and 
   assert.ok(directory.includes("$nativeEdit.SetMethod -eq 'uia'"));
 });
 
-test('NSIS UIA fallback outcome is emitted through the safe wizard event allowlist', () => {
+test('NSIS UIA fallback outcome is emitted through the safe wizard event allowlist', async () => {
   const event = 'TUS_NSIS_WIZARD event=destination-set-uia-fallback pid=4321';
-  assert.deepEqual(safeNsisWizardEvents(event), [event]);
+  assert.deepEqual(safeNsisWizardEvents([event, event + ' value=C:/private/path'].join(String.fromCharCode(10))), [event]);
+  const source = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const writerStart = source.indexOf('function Write-WizardEvent {');
+  const writerEnd = source.indexOf(String.fromCharCode(10) + 'trap {', writerStart);
+  const validateSet = source.slice(writerStart, writerEnd).match(/\[ValidateSet\(([\s\S]*?)\)\]/)?.[1] ?? '';
+  assert.ok(validateSet.includes("'destination-set-uia-fallback'"));
+  assert.ok(source.includes("Write-WizardEvent -Name 'destination-set-uia-fallback'"));
 });

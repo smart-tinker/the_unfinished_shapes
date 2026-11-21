@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { constants, createReadStream, createWriteStream } from 'node:fs';
 import { access, lstat, mkdir, rm, symlink, realpath, rename } from 'node:fs/promises';
 import path from 'node:path';
+import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { extract as extractTar } from 'tar';
 import yauzl from 'yauzl';
@@ -17,6 +18,39 @@ const maxAssetBytes = 500_000_000;
 const maxJsonBytes = 2_000_000;
 const maxExtractedBytes = 1_073_741_824;
 const maxArchiveEntries = 20_000;
+
+const zipWriteBatchBytes = 256 * 1024;
+
+export function createZipWriteBatcher() {
+  let pending = Buffer.allocUnsafe(zipWriteBatchBytes);
+  let pendingBytes = 0;
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      try {
+        const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        let offset = 0;
+        while (offset < input.length) {
+          const length = Math.min(zipWriteBatchBytes - pendingBytes, input.length - offset);
+          input.copy(pending, pendingBytes, offset, offset + length);
+          pendingBytes += length;
+          offset += length;
+          if (pendingBytes === zipWriteBatchBytes) {
+            this.push(pending);
+            pending = Buffer.allocUnsafe(zipWriteBatchBytes);
+            pendingBytes = 0;
+          }
+        }
+        callback();
+      } catch (error) {
+        callback(error);
+      }
+    },
+    flush(callback) {
+      if (pendingBytes) this.push(pending.subarray(0, pendingBytes));
+      callback();
+    },
+  });
+}
 
 export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, entry, compressedSource) {
   const count = (value, limit = maxExtractedBytes) =>
@@ -592,7 +626,7 @@ async function openZipReadStream(zip, entry, trackCompressedRead) {
   }
 }
 
-async function extractZip(filePath, destination, spec, extraction, appAsarPath) {
+async function extractZip(filePath, destination, spec, extraction, appAsarPath, platform) {
   const appAsarRelative = path.relative(destination, appAsarPath).split(path.sep).join('/');
   extraction.value = 'zip-open';
   const zip = await yauzl.openPromise(filePath, { strictFileNames: true, validateEntrySizes: true });
@@ -672,7 +706,9 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath) 
         ? electronFs.createWriteStream(output, { flags: 'wx', mode: fileMode })
         : createWriteStream(output, { flags: 'wx', mode: fileMode });
       extraction.streamSnapshot = () => safeZipExtractionStreamSnapshot(stream, writeStream, count, entry, compressedReadStream);
-      await pipeline(stream, writeStream);
+      await pipeline(...(platform === 'win32' && !isAppAsar
+        ? [stream, createZipWriteBatcher(), writeStream]
+        : [stream, writeStream]));
       extraction.substage = 'none';
       extraction.appAsarEntry = false;
     } catch (error) {
@@ -736,7 +772,7 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
     extraction.value = 'preflight';
     await mkdir(target, { recursive: false, mode: 0o700 });
     targetCreated = true;
-    if (spec.zip) await extractZip(filePath, target, spec, extraction, appAsarPath);
+    if (spec.zip) await extractZip(filePath, target, spec, extraction, appAsarPath, platform);
     else {
       let count = 0, extractedBytes = 0;
       const appAsarRelative = path.relative(target, appAsarPath).split(path.sep).join('/');
