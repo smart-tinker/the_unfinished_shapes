@@ -459,7 +459,7 @@ test('NSIS destination diagnostics map reachable producer failure paths', async 
     return start >= 0 && setter.slice(start, next < 0 ? setter.length : next).includes('return [pscustomobject]$result');
   }).sort();
   const producerMapping = Object.fromEntries([...mappingSource.matchAll(/(?:'([a-z-]+)'|default)\s*\{\s*'([a-z-]+)'\s*\}/g)]
-    .map(([, stage, event]) => [stage ?? 'default', event]).filter(([stage]) => stage === 'default' || stages.has(stage)));
+    .map(([, stage, event]) => [stage ?? 'default', event]));
   const editsBranchStart = source.indexOf('} elseif ($edits.Count -gt 1) {');
   const editsBranchEnd = source.indexOf('\n    } else {', editsBranchStart);
   const editsBranch = source.slice(editsBranchStart, editsBranchEnd);
@@ -468,9 +468,12 @@ test('NSIS destination diagnostics map reachable producer failure paths', async 
   const lines = [...stages.values()].map(event => 'TUS_NSIS_WIZARD event=' + event + ' pid=4321');
   const fallback = 'TUS_NSIS_WIZARD event=destination-set-unknown pid=4321';
   const ambiguous = 'TUS_NSIS_WIZARD event=destination-edits-ambiguous pid=4321';
+  const prepare = 'TUS_NSIS_WIZARD event=destination-set-prepare-unavailable pid=4321';
   const actual = {
     reachableStages,
     producerMapping,
+    prepareAllowed: validateSet.includes("'destination-set-prepare-unavailable'"),
+    prepareSanitized: safeNsisWizardEvents(prepare).length > 0,
     editEvents,
     writerAllowsAmbiguousEdit: validateSet.includes("'destination-edits-ambiguous'"),
     exitCode,
@@ -481,6 +484,8 @@ test('NSIS destination diagnostics map reachable producer failure paths', async 
   const expected = {
     reachableStages: [...stages.keys()].sort(),
     producerMapping: Object.fromEntries([...stages, ['default', 'destination-set-unknown']]),
+    prepareAllowed: false,
+    prepareSanitized: false,
     editEvents: ['destination-edits-ambiguous', 'destination-unavailable'],
     writerAllowsAmbiguousEdit: true,
     exitCode: '2',
