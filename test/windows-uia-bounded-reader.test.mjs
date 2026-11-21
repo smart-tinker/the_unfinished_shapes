@@ -46,6 +46,7 @@ const safeControlMarkers = new Set([
 
 const safeDiagnosticMarkers = new Set([
   'TUS_UIA_TEST: result=timeout-phase-child-start',
+  'TUS_UIA_TEST: result=timeout-phase-fromhandle-start',
   'TUS_UIA: ui-child-killing',
   'TUS_UIA: ui-child-kill-waiting',
   'TUS_UIA: ui-child-exit-checking',
