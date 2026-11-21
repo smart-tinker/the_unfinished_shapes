@@ -11,7 +11,7 @@ import { compareReleaseVersions } from '../src/update-release.mjs';
 import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, verifyReleaseAttestation } from '../src/update-package.mjs';
 import { closeSmokeApp, observeGraphics, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
-import { safeMainDiagnostics } from './updater-smoke-diagnostics.mjs';
+import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
 import { runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, windowsInstallerHandoffInstallDir } from './windows-updater-scenarios.mjs';
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
@@ -780,12 +780,17 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
       let streamSampleTimer;
       let streamSamples = 0;
       let previousStreamSnapshot = null;
-      const scheduleStreamSample = delay => {
-        streamSampleTimer = setTimeout(() => { void captureStreamSample().catch(() => {}); }, delay);
+      const streamSamplingStartedAtMs = performance.now();
+      const scheduleStreamSample = () => {
+        const offsetMs = updaterZipStreamSampleOffsetsMs[streamSamples];
+        if (!streamSampling || offsetMs === undefined) return;
+        const targetAtMs = streamSamplingStartedAtMs + offsetMs;
+        streamSampleTimer = setTimeout(() => { void captureStreamSample().catch(() => {}); },
+          Math.max(0, targetAtMs - performance.now()));
       };
       const captureStreamSample = async () => {
         streamSampleTimer = null;
-        if (!streamSampling || streamSamples >= 5) return;
+        if (!streamSampling || streamSamples >= updaterZipStreamSampleOffsetsMs.length) return;
         const stream = await withTimeout(current.instance.evaluate(() => {
           const snapshot = globalThis.__tusUpdaterSmokeBoundary?.extractStreamSnapshot;
           return typeof snapshot === 'function' ? snapshot() : null;
@@ -805,9 +810,9 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
         console.log('TUS_UPDATE_EXTRACT_STREAM ' + JSON.stringify(snapshot));
         previousStreamSnapshot = { snapshot, sampledAtMs };
         streamSamples++;
-        if (streamSamples < 5) scheduleStreamSample(20000);
+        scheduleStreamSample();
       };
-      scheduleStreamSample(15000);
+      scheduleStreamSample();
       try {
         await current.page.waitForFunction(({ pending, prior, success }) => {
           const status = document.querySelector('#updates-status');

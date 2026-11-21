@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { safeMainDiagnostics } from '../scripts/updater-smoke-diagnostics.mjs';
+import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from '../scripts/updater-smoke-diagnostics.mjs';
 
 test('TUS main diagnostic preserves only safe verifier setup stages at the log boundary', () => {
   const assetName = 'candidate.zip';
@@ -318,4 +318,12 @@ test('TUS extraction snapshots localize bounded read, decode and write throughpu
   assert.equal(bounded.intervalMs, null);
   assert.equal(JSON.stringify([first, second, nextEntry, bounded]).includes('private'), false);
   assert.equal(JSON.stringify([first, second, nextEntry, bounded]).includes('C:/private'), false);
+});
+
+
+test('TUS ZIP stream sampler takes one late sample before the unchanged extraction deadline', () => {
+  assert.ok(updaterZipStreamSampleOffsetsMs.at(-1) < 120_000);
+  assert.deepEqual(updaterZipStreamSampleOffsetsMs, [
+    15_000, 35_000, 55_000, 75_000, 95_000, 110_000,
+  ]);
 });
