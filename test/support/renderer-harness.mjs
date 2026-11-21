@@ -7,6 +7,29 @@ import assert from 'node:assert/strict';
 const source = readFileSync(new URL('../../src/renderer.mjs', import.meta.url), 'utf8');
 export function rendererHarness() {
   const elements = new Map();
+  const jumpTrace = { spaceKeydown: false, jumpRequested: null, firstMoveJump: null, firstMoveSkip: null, firstMoveResult: null, jumpPostResponse: null };
+  const windowListeners = new Map();
+  const window = {
+    addEventListener(name, listener) {
+      if (!windowListeners.has(name)) windowListeners.set(name, []);
+      windowListeners.get(name).push(listener);
+    },
+    __TUS_SMOKE_JUMP_TRACE(event, value) {
+      if (event === 'jumpRequested' && typeof value === 'boolean') jumpTrace.jumpRequested = value;
+      if (event === 'move.jump' && jumpTrace.spaceKeydown && jumpTrace.firstMoveJump === null && typeof value === 'boolean') jumpTrace.firstMoveJump = value;
+      if (event === 'move.skip' && jumpTrace.spaceKeydown && jumpTrace.firstMoveSkip === null && typeof value === 'string') jumpTrace.firstMoveSkip = value;
+      if (event === 'move.result' && jumpTrace.spaceKeydown && jumpTrace.firstMoveResult === null && typeof value === 'string') jumpTrace.firstMoveResult = value;
+      if (event === 'move.jump-response' && jumpTrace.spaceKeydown && jumpTrace.jumpPostResponse === null && value?.postAttempted === true) {
+        const position = value.serverPosition;
+        jumpTrace.jumpPostResponse = {
+          postAttempted: true, responseReceived: value.responseReceived === true, outcome: value.outcome,
+          serverPosition: position && { x: position.x, y: position.y, z: position.z },
+          serverVelocityY: value.serverVelocityY, serverRevision: value.serverRevision,
+          clientApplied: value.clientApplied,
+        };
+      }
+    },
+  };
   let sequence = 0;
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
@@ -25,7 +48,8 @@ export function rendererHarness() {
     boxSelectMode: false, boxCandidate: null, movePreview: null, dragCandidate: null,
     worldLightingPreview: null, lampLights: new Map(), previewLampLights: new Map(), updateWorldLighting: () => {}, updateLightingControls: () => {},
     agentBuildPreview: null, clearAgentBuildPreview: () => {}, updateAgentBuildPreviewControls: () => {}, poll: async () => {},
-    document: { createElement: () => element(`generated-${++sequence}`) }, $: element,
+    window,
+    document: { createElement: () => element(`generated-${++sequence}`), activeElement: null, querySelector: () => null }, $: element,
   });
   function run(code) { return vm.runInContext(code, context); }
   function load(start, end) {
@@ -33,7 +57,11 @@ export function rendererHarness() {
     assert.ok(from >= 0 && to > from, `Renderer test boundaries missing: ${start} … ${end}`);
     run(source.slice(from, to));
   }
+  function dispatchWindowEvent(name, event) {
+    if (name === 'keydown' && event.code === 'Space') jumpTrace.spaceKeydown = true;
+    for (const listener of windowListeners.get(name) ?? []) listener(event);
+  }
   function text() { return [...elements.values()].map(node => node.textContent).join('\n'); }
   load('function refreshAgentStatus()', 'function populateAgentEfforts(');
-  return { context, element, run, load, text, has: start => source.includes(start) };
+  return { context, element, run, load, text, has: start => source.includes(start), dispatchWindowEvent, jumpTrace: () => ({ ...jumpTrace }) };
 }

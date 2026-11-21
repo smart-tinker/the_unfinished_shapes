@@ -6,28 +6,212 @@ import { fileURLToPath } from 'node:url';
 const run = promisify(execFile);
 const automationScript = fileURLToPath(new URL('./windows-quit-prompt.ps1', import.meta.url));
 
-async function ui(action, pid, menuKey) {
+const safeUiMarkers = new Set([
+  'script-start', 'window-api-ready', 'expected-foreground-prompt-unavailable',
+  'expected-body-recognized', 'quit-dialog-not-found', 'modified-body-button-returned',
+  'modified-body-unverified', 'modified-body-rejected',
+  'ui-child-starting', 'ui-child-started', 'ui-payload-preparing', 'ui-payload-ready',
+  'ui-payload-writing', 'ui-payload-written', 'ui-child-waiting', 'ui-child-finished',
+  'ui-child-killing', 'ui-child-kill-waiting', 'ui-child-exit-checking', 'ui-child-output-draining',
+  'ui-child-finally-exit-checking', 'ui-child-finally-killing', 'ui-child-finally-waiting', 'ui-child-disposing',
+]);
+const safeUiPromptStatuses = new Set([
+  'foreground-window-unavailable', 'foreground-title-mismatch', 'invalid-window',
+  'title-mismatch', 'button-count-mismatch', 'expected-buttons-missing',
+  'requested-button-missing', 'expected-message-mismatch', 'expected-message-unavailable',
+  'expected-body-mismatch', 'expected-body-timeout', 'expected-body-unavailable',
+]);
+const safeUiTimeoutPhase = /^prompt-reader-timeout-phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-[01]-(?:start|done)|current-name-[01](?:-[0-7])?-(?:start|done)|next-sibling-[01]-[0-7]-(?:start|done))$/;
+const safeUiActions = new Set([
+  'keep-open', 'quit-anyway', 'assert-body-mismatch-rejected',
+  'assert-exact-body-recognized', 'dismiss-test-prompt', 'file-menu-open', 'file-menu-exit',
+]);
+const safeUiTimingPattern = /^TUS_UIA_TIMING: (?:(?:window-api-init|reader-setup|process-start|fromhandle|payload-encode|payload-write|reader-wait|child-kill|child-reap|output-drain|child-finally-kill|child-finally-reap|taskkill|graphics-health|graphics-errors)-ms=\d{1,6}|app-close-ms=\d{1,8}|ui-(?:keep-open|quit-anyway|assert-body-mismatch-rejected|assert-exact-body-recognized|dismiss-test-prompt|file-menu-open|file-menu-exit)-ms=\d{1,6})$/;
+
+export function safeUiTimingLine(line) {
+  return typeof line === 'string' && safeUiTimingPattern.test(line) ? line : null;
+}
+
+export function safeUiFailureOutcome(tokens = [], processFailure = 'probe-failed') {
+  let marker;
+  for (let index = Array.isArray(tokens) ? tokens.length - 1 : -1; index >= 0; index--) {
+    const token = tokens[index];
+    if (typeof token !== 'string') continue;
+    if (token === 'prompt-reader-timeout-no-phase' || safeUiTimeoutPhase.test(token)) return token;
+    const status = token.startsWith('prompt-') ? token.slice('prompt-'.length)
+      : token.startsWith('expected-body-') ? token.slice('expected-body-'.length) : '';
+    if ((safeUiMarkers.has(token) || safeUiPromptStatuses.has(status)) && !marker) marker = token;
+  }
+  if (marker === 'script-start' || marker === 'window-api-ready') return marker + '-no-status';
+  const failure = typeof processFailure === 'string' ? processFailure : '';
+  return marker || (/^(?:exit-[A-Za-z0-9_-]{1,32}|timeout-[A-Za-z0-9-]{1,32})$/.test(failure) ? failure : 'probe-failed');
+}
+
+async function ui(action, pid, menuKey, apartment = 'MTA') {
+  const startedAt = Date.now();
   const args = [
     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', automationScript,
-    '-Action', action, '-ProcessId', String(pid),
+    '-Action', action, '-ProcessId', String(pid), '-Apartment', apartment,
   ];
   if (action === 'file-menu-exit') args.push('-MenuKey', menuKey);
   const { error, stdout, stderr } = await new Promise(resolve => {
     execFile('powershell.exe', args, { timeout: 30000, windowsHide: true }, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
   });
+  if (safeUiActions.has(action)) console.log('TUS_UIA_TIMING: ui-' + action + '-ms=' + (Date.now() - startedAt));
   if (error) {
     const output = [stdout, stderr].map(value => String(value ?? '')).join('\n');
-    const markers = output.split(/\r?\n/).map(line => line.trim()).filter(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line));
-    const marker = markers.slice(-3).join(' after ');
-    const stderrLine = String(stderr ?? '').split(/\r?\n/).map(line => line.trim()).find(line => line && !/^(?:At\s|CategoryInfo|FullyQualifiedErrorId|[+~])/.test(line));
+    const outputLines = output.split(/\r?\n/).map(line => line.trim());
+    const markers = outputLines.filter(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line));
+    const timingLines = outputLines.map(safeUiTimingLine).filter(Boolean);
+    if (timingLines.length) console.log([...new Set(timingLines)].join('\n'));
     const processFailure = error.killed
       ? 'timeout-' + String(error.signal ?? 'unknown').toLowerCase().replace(/[^a-z0-9-]/g, '')
       : 'exit-' + (String(error.code ?? 'unknown').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'unknown');
-    const detail = marker || stderrLine?.replace(/[A-Z]:\\[^\s'"]+/gi, '<path>').replace(/https?:\/\/\S+/gi, '<url>').slice(0, 160) || processFailure;
-    throw new Error('Windows native quit UI action failed: ' + action + (detail ? ' (' + (detail.startsWith('TUS_UIA:') ? detail.slice(8) : detail) + ')' : ''));
+    const detail = safeUiFailureOutcome(markers.slice(-3).map(line => line.slice(9).toLowerCase()), processFailure);
+    throw new Error('Windows native quit UI action failed: ' + action + ' (' + detail + ')');
   }
   if (stdout.trim()) console.log(stdout.trim());
   return stdout.trim();
+}
+
+
+async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField) {
+  assert.ok(['message', 'detail'].includes(modifiedField), 'only one prompt body field is changed at a time');
+  await app.evaluate(({ dialog }, field) => {
+    const state = { original: dialog.showMessageBox.bind(dialog), resolved: false, title: null, message: null, detail: null, buttons: null, response: null };
+    globalThis.__tusPromptTest = state;
+    dialog.showMessageBox = async (window, options) => {
+      const modifiedOptions = {
+        ...options,
+        [field]: field === 'message' ? 'Modified activity message.' : 'Modified activity detail.',
+      };
+      state.title = modifiedOptions.title;
+      state.message = modifiedOptions.message;
+      state.detail = modifiedOptions.detail;
+      state.buttons = [...modifiedOptions.buttons];
+      const result = await state.original(window, modifiedOptions);
+      state.response = result.response;
+      state.resolved = true;
+      return result;
+    };
+  }, modifiedField);
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (!window) throw new Error('The packaged TUS window is unavailable.');
+    window.close();
+  });
+
+  const apartmentOrder = modifiedField === 'detail' ? ['STA', 'MTA'] : ['MTA', 'STA'];
+  const apartmentOutcomes = new Map();
+  for (const apartment of apartmentOrder) {
+    let outcome = 'unavailable';
+    try {
+      const result = await ui('assert-body-mismatch-rejected', pid, undefined, apartment);
+      outcome = /^TUS_UIA: modified-body-rejected$/m.test(result) ? 'mismatch'
+        : /^TUS_UIA: modified-body-button-returned$/m.test(result) ? 'unexpected-match' : 'unexpected-result';
+    } catch (error) {
+      const safeOutcome = /exit-[a-z0-9_-]+|timeout-[a-z0-9-]+|(?:script-start|window-api-ready)-no-status|ui-(?:child-(?:starting|started|waiting|finished|killing|kill-waiting|exit-checking|output-draining|finally-exit-checking|finally-killing|finally-waiting|disposing)|payload-(?:preparing|ready|writing|written))|prompt-reader-timeout-[a-z0-9-]+|expected-foreground-prompt-unavailable|quit-dialog-not-found|automation-error-[a-z0-9]+-at-[a-z0-9-]+|modified-body-(?:button-returned|unverified|rejected)|expected-body-(?:mismatch|unavailable|timeout)|prompt-(?:foreground-window-unavailable|foreground-title-mismatch|expected-body-(?:mismatch|unavailable|timeout)|(?:invalid-window|title-mismatch|button-count-mismatch|expected-buttons-missing|requested-button-missing|expected-message-mismatch|expected-message-unavailable|matched))/gi;
+      const outcomeTokens = [...String(error?.message || '').matchAll(safeOutcome)];
+      const safeFailure = outcomeTokens.length ? outcomeTokens[outcomeTokens.length - 1][0].toLowerCase() : 'probe-failed';
+      const timeout = safeFailure.match(/^prompt-reader-timeout-phase-([a-z0-9-]+)$/);
+      outcome = timeout ? 'timeout-' + timeout[1] : safeFailure === 'modified-body-button-returned'
+        ? 'unexpected-match' : 'unavailable';
+    }
+    apartmentOutcomes.set(apartment, outcome);
+    console.log('TUS_UIA_COMPARE: ' + apartment.toLowerCase() + '=' + outcome);
+  }
+  const matcherRejected = apartmentOutcomes.get('MTA') === 'mismatch';
+  const matcherOutcome = apartmentOutcomes.get('MTA') || 'unavailable';
+  console.log('TUS_UIA_TEST: detail-probe-' + matcherOutcome);
+
+  let keepOpenRejected = false;
+  if (matcherRejected) {
+    try {
+      await ui('keep-open', pid);
+    } catch (error) {
+      keepOpenRejected = /expected-body-mismatch/.test(error?.message || '');
+    }
+  }
+  const beforeDismissal = await app.evaluate(() => {
+    const state = globalThis.__tusPromptTest;
+    return {
+      resolved: state?.resolved,
+      responseWasSafe: state?.response === 0,
+      titleMatches: state?.title === 'Codex activity may continue',
+      messageMutated: state?.message === 'Modified activity message.',
+      detailMutated: state?.detail === 'Modified activity detail.',
+      buttonsMatch: JSON.stringify(state?.buttons) === JSON.stringify(['Keep the game open', 'Quit anyway']),
+    };
+  });
+  if (!beforeDismissal.resolved) await ui('dismiss-test-prompt', pid);
+  const dismissal = await app.evaluate(async () => {
+    const state = globalThis.__tusPromptTest;
+    const deadline = Date.now() + 5000;
+    while (!state.resolved && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return { resolved: state.resolved, responseWasSafe: state.response === 0 };
+  });
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = globalThis.__tusPromptTest.original;
+    delete globalThis.__tusPromptTest;
+  });
+  assert.equal(matcherRejected, true, 'the native matcher rejects the modified field as a definite body mismatch; safe outcome: ' + matcherOutcome);
+  assert.equal(keepOpenRejected, true, 'keep-open refuses a changed body without clicking the button');
+  assert.deepEqual(beforeDismissal, {
+    resolved: false,
+    responseWasSafe: false,
+    titleMatches: true,
+    messageMutated: modifiedField === 'message',
+    detailMutated: modifiedField === 'detail',
+    buttonsMatch: true,
+  }, 'the modified native prompt remains open while keep-open is checked');
+  assert.deepEqual(dismissal, { resolved: true, responseWasSafe: true }, 'test cleanup cancels the prompt with its safe default');
+  assert.equal(process.exitCode, null, 'rejecting a modified prompt leaves TUS running');
+}
+
+
+async function assertKnownStatusDetailIsRecognized(app, pid, process) {
+  await app.evaluate(({ dialog }) => {
+    const state = { original: dialog.showMessageBox.bind(dialog), resolved: false };
+    globalThis.__tusKnownPromptTest = state;
+    dialog.showMessageBox = async (window, options) => {
+      const result = await state.original(window, {
+        ...options,
+        title: 'Codex activity may continue',
+        message: 'Codex may still be working in this conversation.',
+        detail: 'Native Goal status: active. Quitting TUS closes its Codex connection but does not confirm that a Goal or turn stopped. Keep the game open to pause or clear the Goal, or quit anyway.',
+        buttons: ['Keep the game open', 'Quit anyway'],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      state.resolved = true;
+      return result;
+    };
+  });
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (!window) throw new Error('The packaged TUS window is unavailable.');
+    window.close();
+  });
+  const result = await ui('assert-exact-body-recognized', pid);
+  assert.match(result, /^TUS_UIA: expected-body-recognized$/m,
+    'a known prompt with the native Goal status prefix is recognized');
+  assert.equal(process.exitCode, null, 'recognizing the known prompt does not click either button');
+  await ui('dismiss-test-prompt', pid);
+  const dismissed = await app.evaluate(async () => {
+    const state = globalThis.__tusKnownPromptTest;
+    const deadline = Date.now() + 5000;
+    while (!state.resolved && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return state.resolved;
+  });
+  assert.equal(dismissed, true, 'test cleanup cancels the known prompt');
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = globalThis.__tusKnownPromptTest.original;
+    delete globalThis.__tusKnownPromptTest;
+  });
 }
 
 export async function quitPromptAcceptance(app, page, graphics) {
@@ -50,7 +234,12 @@ export async function quitPromptAcceptance(app, page, graphics) {
     process.once('error', reject);
   });
   try {
+    await assertModifiedPromptIsNotClicked(app, pid, process, 'detail');
+    await assertModifiedPromptIsNotClicked(app, pid, process, 'message');
+    await assertKnownStatusDetailIsRecognized(app, pid, process);
     await app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; if (!window) throw new Error('The packaged TUS window is unavailable.'); window.close(); });
+    const exactPromptEvidence = await ui('assert-exact-body-recognized', pid);
+    assert.match(exactPromptEvidence, /^TUS_UIA: expected-body-recognized$/m, 'the exact production message and detail are recognized before clicking');
     const closePrompt = await ui('keep-open', pid);
     assert.match(closePrompt, /^TUS_UIA: exact-foreground-prompt-matched$/m, 'window-close prompt is the exact TUS dialog');
     assert.equal(process.exitCode, null, 'Keep the game open leaves the packaged process running');
@@ -99,7 +288,15 @@ export async function quitPromptAcceptance(app, page, graphics) {
     assert.equal(exitCode, 0, 'Quit anyway exits the packaged client cleanly');
   } catch (error) {
     if (process.exitCode === null) {
-      try { await run('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeout: 10000, windowsHide: true }); } catch {}
+      const startedAt = Date.now();
+      console.log('TUS_WINDOWS_CLOSE: taskkill-started');
+      let outcome = 'failed';
+      try {
+        await run('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeout: 10000, windowsHide: true });
+        outcome = 'completed';
+      } catch {}
+      console.log('TUS_UIA_TIMING: taskkill-ms=' + (Date.now() - startedAt));
+      console.log('TUS_WINDOWS_CLOSE: taskkill-' + outcome);
     }
     throw error;
   } finally {

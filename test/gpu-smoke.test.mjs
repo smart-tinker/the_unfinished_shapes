@@ -158,6 +158,33 @@ test('final temp removal failure fails smoke and preserves an existing primary e
 });
 
 
+test('hung temp removal is bounded and preserves the primary smoke failure', async t => {
+  const logs = [], gpu = await createGpuDiagnostics('hung cleanup', text => logs.push(text));
+  const file = filename(gpu), directory = path.dirname(file), original = Error('original smoke failure');
+  await writeFile(file, 'private diagnostic fixture');
+  const mocked = t.mock.method(fs, 'rm', async target => {
+    assert.equal(target, directory);
+    return new Promise(() => {});
+  });
+  let deadline;
+  try {
+    await assert.rejects(Promise.race([
+      withSmokeCleanup(() => { throw original; }, () => gpu.finish()),
+      new Promise((_, reject) => { deadline = setTimeout(() => reject(Error('hung cleanup regression test timed out')), 6500); }),
+    ]), error => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.cause, original);
+      assert.equal(error.errors[0], original);
+      assert.match(error.errors[1].message, /GPU log cleanup timed out/);
+      return true;
+    });
+  } finally {
+    clearTimeout(deadline);
+    mocked.mock.restore();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('modern Chromium source:line and legacy source(line) yield equivalent private-safe evidence', () => {
   const modern = '[123:456:1108/211234.123456:ERROR:gpu_process_host.cc:123] GPU process exited exit_code=7 token=private https://private';
   const legacy = modern.replace('gpu_process_host.cc:123]', 'gpu_process_host.cc(123)]');

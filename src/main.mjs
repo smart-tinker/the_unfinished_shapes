@@ -3,22 +3,37 @@ import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { CodexBridge } from './codex.mjs';
 import { createGameToolSession, captureSceneSnapshot } from './game-tools.mjs';
 import { createWorldServer } from './server.mjs';
 import { DATA_DIRECTORY, loadSettings, saveSettings, agentModelForThread } from './settings.mjs';
 import { findCodex } from './codex-discovery.mjs';
 import { createQuitConfirmation, createQuitStateReader, installQuitGuard, isSmokeAutoConfirmQuit } from './quit-guard.mjs';
-import { listPublishedReleases, releaseRelation, selectReleaseAsset, startupUpdateOptions } from './update-release.mjs';
+import { listPublishedReleases, releaseRelation, selectReleaseAsset, startupUpdateOptions, safeReleaseCheckErrorCode, safeUpdaterModuleFailureName } from './update-release.mjs';
 const userData = process.env.TUS_DATA_DIR ? path.resolve(process.env.TUS_DATA_DIR) : path.join(app.getPath('appData'),DATA_DIRECTORY);
 mkdirSync(userData,{recursive:true});
 app.setPath('userData',userData);
 const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld, gameToolSession, fullscreenRestoreBounds;
 let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, extractedUpdate = null, updateDownloadController = null;
+const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic')
+  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null }
+  : null;
+if (updaterSmokeBoundary) globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
 if (!app.requestSingleInstanceLock()) app.quit();
 const settings = () => loadSettings(app.getPath('userData'));
+async function sigstoreTrustedRootTargetInfo() {
+  const home = app.getPath('home');
+  const appData = process.platform === 'darwin'
+    ? path.join(home, 'Library', 'Application Support', 'sigstore-js')
+    : process.platform === 'win32'
+      ? path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'sigstore-js', 'Data')
+      : path.join(process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'sigstore-js');
+  const target = path.join(appData, encodeURIComponent('tuf-repo-cdn.sigstore.dev'), 'targets', 'trusted_root.json');
+  try { return { available: true, sha256: createHash('sha256').update(await readFile(target)).digest('hex') }; }
+  catch { return { available: false, sha256: null }; }
+}
 async function readBuildIdentity() {
   const version = app.getVersion();
   if (!app.isPackaged) return { version, sourceSha: null };
@@ -78,7 +93,7 @@ app.whenReady().then(async()=>{
   handle('settings:save', async(s)=>{ const clean={...s,serverUrl:serverUrl(s.serverUrl||localUrl) === localUrl ? '' : serverUrl(s.serverUrl)}; await saveSettings(app.getPath('userData'),clean); });
   handle('updates:startup-check', async () => {
     try { return { status: 'checked', options: startupUpdateOptions(await listPublishedReleases(), app.getVersion()) }; }
-    catch { return { status: 'unavailable' }; }
+    catch (error) { return { status: 'unavailable', errorCode: safeReleaseCheckErrorCode(error) }; }
   });
   handle('updates:check', async distribution => {
     if (updateDownloadController) throw new Error('Wait for the current update download to finish or cancel it.');
@@ -102,23 +117,78 @@ app.whenReady().then(async()=>{
     };
   });
   handle('updates:download', async () => {
-    if (!availableUpdate) throw new Error('Check for an update before downloading.');
-    if (updateDownloadController) throw new Error('An update download is already running.');
+    const diagnosticEnabled = process.argv.includes('--tus-smoke-provenance-diagnostic');
+    const reportEarlyFailure = failureCode => {
+      if (diagnosticEnabled) win?.webContents.send('updates:progress', {
+        state: 'failed', phase: 'download', failureCode, verifierCode: 'OTHER', verifierErrorType: 'OTHER', httpStatus: null,
+      });
+    };
+    if (!availableUpdate) {
+      reportEarlyFailure('UPDATE_NOT_AVAILABLE');
+      throw new Error('Check for an update before downloading.');
+    }
+    if (updateDownloadController) {
+      reportEarlyFailure('DOWNLOAD_ALREADY_RUNNING');
+      throw new Error('An update download is already running.');
+    }
     const controller = new AbortController();
     updateDownloadController = controller;
+    let failureReported = false;
     try {
       const directory = path.join(app.getPath('downloads'), 'TheUnfinishedShapes-Updates');
-      const { downloadVerifiedAsset } = await import('./update-package.mjs');
+      const reportDiagnostic = async diagnostic => {
+        if (!diagnosticEnabled) return;
+        try {
+          const trustedRootTarget = await sigstoreTrustedRootTargetInfo();
+          win?.webContents.send('updates:progress', {
+            state: 'verifying', provenanceDiagnostic: { ...diagnostic, trustedRootTarget },
+          });
+        } catch {}
+      };
+      await reportDiagnostic({ stage: 'updater-module-import', status: 'starting' });
+      if (updaterSmokeBoundary) updaterSmokeBoundary.moduleImport = 'pending';
+      let downloadVerifiedAsset;
+      try {
+        ({ downloadVerifiedAsset } = await import('./update-package.mjs'));
+        if (updaterSmokeBoundary) updaterSmokeBoundary.moduleImport = 'fulfilled';
+      } catch (error) {
+        const moduleFailureCode = error?.code === 'ERR_MODULE_NOT_FOUND'
+          ? 'ERR_MODULE_NOT_FOUND'
+          : error?.name === 'SyntaxError' ? 'SyntaxError' : 'MODULE_IMPORT_REJECTED';
+        const moduleFailureName = safeUpdaterModuleFailureName(error);
+        if (updaterSmokeBoundary) {
+          updaterSmokeBoundary.moduleImport = 'rejected';
+          updaterSmokeBoundary.moduleFailureCode = moduleFailureCode;
+          updaterSmokeBoundary.moduleFailureName = moduleFailureName;
+        }
+        await reportDiagnostic({ stage: 'updater-module-import', status: 'rejected', moduleFailureCode, moduleFailureName });
+        throw error;
+      }
+      await reportDiagnostic({ stage: 'updater-module-import', status: 'ready' });
+      await reportDiagnostic({ stage: 'download-verified-asset', status: 'starting' });
+      if (updaterSmokeBoundary) updaterSmokeBoundary.downloadVerifiedAsset = 'pending';
       const result = await downloadVerifiedAsset({
         ...availableUpdate,
         tag: availableUpdate.release.tag_name,
         directory, signal: controller.signal,
-        onProgress: progress => win?.webContents.send('updates:progress', { state: 'downloading', ...progress }),
+        ...(diagnosticEnabled ? { onProvenanceDiagnostic: reportDiagnostic } : {}),
+        onProgress: progress => {
+          if (progress?.state === 'failed') failureReported = true;
+          win?.webContents.send('updates:progress', { state: 'downloading', ...progress });
+        },
       });
+      if (updaterSmokeBoundary) updaterSmokeBoundary.downloadVerifiedAsset = 'fulfilled';
       if (result?.cancelled === true) return result;
       downloadedUpdate = { ...availableUpdate, ...result };
       win?.webContents.send('updates:progress', { state: 'verified', assetName: result.assetName, sha256: result.sha256 });
       return { assetName: result.assetName, sha256: result.sha256, distribution: availableUpdate.distribution };
+    } catch (error) {
+      if (updaterSmokeBoundary?.downloadVerifiedAsset === 'pending') updaterSmokeBoundary.downloadVerifiedAsset = 'rejected';
+      if (!failureReported) {
+        await reportDiagnostic({ stage: 'main-catch-fallback', status: 'synthetic-other' });
+        win?.webContents.send('updates:progress', { state: 'failed', phase: 'download', failureCode: 'OTHER', verifierCode: 'OTHER', verifierErrorType: 'OTHER', httpStatus: null });
+      }
+      throw error;
     } finally {
       if (updateDownloadController === controller) updateDownloadController = null;
     }
@@ -132,11 +202,48 @@ app.whenReady().then(async()=>{
     if (!downloadedUpdate || downloadedUpdate.distribution === 'installer') throw new Error('Download a portable update archive first.');
     const choice = await dialog.showOpenDialog(win, { title: 'Choose a folder for the verified TUS update', properties: ['openDirectory'] });
     if (choice.canceled || !choice.filePaths[0]) return { canceled: true };
-    const { extractVerifiedArchive } = await import('./update-package.mjs');
-    extractedUpdate = await extractVerifiedArchive({
-      filePath: downloadedUpdate.filePath, directory: choice.filePaths[0], tag: downloadedUpdate.release.tag_name,
-      assetName: downloadedUpdate.assetName, sha256: downloadedUpdate.sha256,
-    });
+    const diagnosticEnabled = process.argv.includes('--tus-smoke-provenance-diagnostic');
+    if (updaterSmokeBoundary) {
+      updaterSmokeBoundary.extractArchive = 'starting';
+      updaterSmokeBoundary.extractModuleImport = 'starting';
+    }
+    let classifyExtractionFailure, classifyExtractionStage, classifyExtractionOperation;
+    try {
+      const updater = await import('./update-package.mjs');
+      if (updaterSmokeBoundary) updaterSmokeBoundary.extractModuleImport = 'fulfilled';
+      classifyExtractionFailure = updater.safeArchiveExtractionFailureCode;
+      classifyExtractionStage = updater.safeArchiveExtractionStage;
+      classifyExtractionOperation = updater.safeArchiveExtractionOperation;
+      if (updaterSmokeBoundary) {
+        updaterSmokeBoundary.extractCall = 'starting';
+        updaterSmokeBoundary.extractPhase = 'preflight';
+        updaterSmokeBoundary.extractSubstage = 'none';
+        updaterSmokeBoundary.extractAppAsarEntry = false;
+      }
+      extractedUpdate = await updater.extractVerifiedArchive({
+        filePath: downloadedUpdate.filePath, directory: choice.filePaths[0], tag: downloadedUpdate.release.tag_name,
+        assetName: downloadedUpdate.assetName, sha256: downloadedUpdate.sha256,
+      });
+      if (updaterSmokeBoundary) {
+        updaterSmokeBoundary.extractCall = 'fulfilled';
+        updaterSmokeBoundary.extractPhase = 'fulfilled';
+        updaterSmokeBoundary.extractArchive = 'fulfilled';
+      }
+    } catch (error) {
+      if (updaterSmokeBoundary) {
+        if (updaterSmokeBoundary.extractModuleImport === 'starting') updaterSmokeBoundary.extractModuleImport = 'rejected';
+        if (updaterSmokeBoundary.extractCall === 'starting') updaterSmokeBoundary.extractCall = 'rejected';
+        updaterSmokeBoundary.extractPhase = 'rejected';
+        updaterSmokeBoundary.extractArchive = 'rejected';
+      }
+      if (diagnosticEnabled) win?.webContents.send('updates:progress', {
+        state: 'extract-failed',
+        failureCode: typeof classifyExtractionFailure === 'function' ? classifyExtractionFailure(error) : 'OTHER',
+        extractStage: typeof classifyExtractionStage === 'function' ? classifyExtractionStage(error) : 'unknown',
+        extractOperation: typeof classifyExtractionOperation === 'function' ? classifyExtractionOperation(error) : 'unknown',
+      });
+      throw error;
+    }
     win?.webContents.send('updates:progress', { state: 'extracted' });
     return { extracted: true };
   });

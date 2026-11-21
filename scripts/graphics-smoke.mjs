@@ -15,8 +15,29 @@ export async function withSmokeCleanup(work, ...cleanup) {
 
 export async function closeSmokeApp(app, graphics, phase = 'normal close') {
   if (!app) return;
-  await withSmokeCleanup(async () => { graphics?.phase(phase); await graphics?.assertHealthy(); },
-    () => app.close(), () => graphics?.assertNoErrors());
+  const windows = process.platform === 'win32';
+  await withSmokeCleanup(async () => {
+    graphics?.phase(phase);
+    const startedAt = Date.now();
+    if (windows) console.log('TUS_WINDOWS_CLOSE: graphics-health-started');
+    try { await graphics?.assertHealthy(); }
+    finally { if (windows) console.log('TUS_UIA_TIMING: graphics-health-ms=' + (Date.now() - startedAt)); }
+  }, async () => {
+    const startedAt = Date.now();
+    if (windows) console.log('TUS_WINDOWS_CLOSE: app-close-started');
+    let outcome = 'failed';
+    try { await app.close(); outcome = 'completed'; }
+    finally {
+      if (windows) {
+        console.log('TUS_UIA_TIMING: app-close-ms=' + (Date.now() - startedAt));
+        console.log('TUS_WINDOWS_CLOSE: app-close-' + outcome);
+      }
+    }
+  }, async () => {
+    const startedAt = Date.now();
+    try { await graphics?.assertNoErrors(); }
+    finally { if (windows) console.log('TUS_UIA_TIMING: graphics-errors-ms=' + (Date.now() - startedAt)); }
+  });
 }
 
 export function isGraphicsFailure(message) {
