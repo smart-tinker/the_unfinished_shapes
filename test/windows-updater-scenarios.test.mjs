@@ -304,11 +304,15 @@ test('NSIS destination mismatch diagnostics expose only fixed readback categorie
     'TUS_NSIS_WIZARD event=destination-readback-other pid=4321',
     'TUS_NSIS_WIZARD event=destination-readback-unchanged pid=4321',
     'TUS_NSIS_WIZARD event=destination-readback-before-read-unavailable pid=4321',
+    'TUS_NSIS_WIZARD event=destination-readback-before-read-empty pid=4321',
+    'TUS_NSIS_WIZARD event=destination-readback-before-read-invalid pid=4321',
   ];
   const events = safeNsisWizardEvents([
     ...safeLines,
     'TUS_NSIS_WIZARD event=destination-readback-same-parent C:/private/path pid=4321',
     'TUS_NSIS_WIZARD event=destination-readback-before-read-unavailable value=C:/private/path pid=4321',
+    'TUS_NSIS_WIZARD event=destination-readback-before-read-empty value=C:/private/path pid=4321',
+    'TUS_NSIS_WIZARD event=destination-readback-before-read-invalid value=C:/private/path pid=4321',
     'raw destination C:/private/path',
   ].join(String.fromCharCode(10)));
   assert.deepEqual(events, safeLines);
@@ -326,12 +330,14 @@ test('NSIS destination mismatch diagnostics expose only fixed readback categorie
     'destination-readback-other',
     'destination-readback-unchanged',
     'destination-readback-before-read-unavailable',
+    'destination-readback-before-read-empty',
+    'destination-readback-before-read-invalid',
   ]) assert.ok(writer.includes("'" + name + "'"), 'writer permits only fixed readback event: ' + name);
 
   const setterStart = script.indexOf('function Set-NativeDirectoryEdit');
   const setterEnd = script.indexOf('function Get-NativeRadioSelection', setterStart);
   const setter = script.slice(setterStart, setterEnd);
-  for (const category of ['product-leaf-appended', 'same-parent', 'same-leaf', 'other', 'unchanged', 'before-read-unavailable']) {
+  for (const category of ['product-leaf-appended', 'same-parent', 'same-leaf', 'other', 'unchanged', 'before-read-unavailable', 'before-read-empty', 'before-read-invalid']) {
     assert.ok(setter.includes("$result.MismatchClass = '" + category + "'"),
       'the actual native readback producer maps to a fixed category: ' + category);
   }
@@ -344,9 +350,14 @@ test('NSIS destination mismatch diagnostics expose only fixed readback categorie
   assert.ok(setter.includes('[String]::Equals($normalizedBeforeValue, $normalizedValue, [StringComparison]::OrdinalIgnoreCase)') &&
       setter.includes("$result.MismatchClass = 'unchanged'"),
     'only an unchanged post-set value receives the fixed unchanged category');
-  assert.ok(setter.includes("if ($null -eq $normalizedBeforeValue)") &&
-      setter.includes("$result.MismatchClass = 'before-read-unavailable'"),
-    'a missing pre-set baseline has its own fixed category');
+  for (const status of ['unavailable', 'empty', 'invalid', 'read']) {
+    assert.ok(setter.includes("$beforeReadClass = '" + status + "'"),
+      'the pre-set reader records only a fixed local status: ' + status);
+  }
+  assert.ok(setter.includes('[String]::IsNullOrWhiteSpace($beforeValue)') &&
+      setter.includes("$result.MismatchClass = 'before-read-empty'") &&
+      setter.includes("$result.MismatchClass = 'before-read-invalid'"),
+    'empty text and non-empty normalization failures have separate safe categories');
 
   const directoryStart = script.indexOf("if ($stage -eq 'directory') {");
   const installStart = script.indexOf("if ($stage -eq 'installing') {", directoryStart);
@@ -354,5 +365,7 @@ test('NSIS destination mismatch diagnostics expose only fixed readback categorie
   assert.ok(directory.includes('switch ($nativeEdit.MismatchClass)'));
   assert.ok(directory.includes("'unchanged' { 'destination-readback-unchanged' }"));
   assert.ok(directory.includes("'before-read-unavailable' { 'destination-readback-before-read-unavailable' }"));
+  assert.ok(directory.includes("'before-read-empty' { 'destination-readback-before-read-empty' }"));
+  assert.ok(directory.includes("'before-read-invalid' { 'destination-readback-before-read-invalid' }"));
   assert.ok(directory.includes("Write-WizardEvent -Name $readbackEvent"));
 });
