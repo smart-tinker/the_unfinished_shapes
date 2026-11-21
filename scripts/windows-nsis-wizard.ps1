@@ -140,14 +140,12 @@ function Set-NativeDirectoryEdit {
       $postSetProcessId = [uint32]0
       $postSetThreadId = [TUSWindowApi]::GetWindowThreadProcessId($control, [ref]$postSetProcessId)
       if ($postSetThreadId -ne 0) {
-        $postSetParent = [TUSWindowApi]::GetParent($control)
         $postSetClass = [System.Text.StringBuilder]::new(128)
         $postSetClassLength = [TUSWindowApi]::GetClassName($control, $postSetClass, $postSetClass.Capacity)
-        $postSetMappedControl = [TUSWindowApi]::GetDlgItem($PageHandle, 1019)
         if ($postSetProcessId -ne [uint32]$ProcessId -or
-            $postSetParent -ne $PageHandle -or
+            [TUSWindowApi]::GetParent($control) -ne $PageHandle -or
             ($postSetClassLength -gt 0 -and $postSetClass.ToString() -ne 'Edit') -or
-            $postSetMappedControl -ne $control) {
+            [TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $control) {
           $result.PostSetControlStatus = 'mismatch'
         } elseif ($postSetClassLength -gt 0) {
           $result.PostSetControlStatus = 'match'
