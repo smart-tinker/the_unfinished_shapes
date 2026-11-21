@@ -4,7 +4,7 @@ const safeWizardEvents = new Set([
   'process-found', 'process-ambiguous', 'process-not-found',
   'window-found', 'window-not-found', 'window-mismatch',
   'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-verified', 'destination-unavailable', 'destination-mismatch',
-  'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-other', 'destination-readback-unchanged', 'destination-before-read-unavailable', 'destination-before-read-empty', 'destination-before-read-invalid',
+  'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-same-root', 'destination-readback-different-root', 'destination-readback-other', 'destination-readback-unchanged', 'destination-before-read-unavailable', 'destination-before-read-empty', 'destination-before-read-invalid',
   'next-unavailable', 'install-started',
   'finish-clicked', 'installer-exited',
   'installer-exited-early', 'installed-executable-missing', 'completed',

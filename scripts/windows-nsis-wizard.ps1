@@ -150,6 +150,10 @@ function Set-NativeDirectoryEdit {
           $result.MismatchClass = 'same-parent'
         } elseif ([String]::Equals([System.IO.Path]::GetFileName($normalizedValue), [System.IO.Path]::GetFileName($normalizedExpected), [StringComparison]::OrdinalIgnoreCase)) {
           $result.MismatchClass = 'same-leaf'
+        } elseif ([String]::Equals([System.IO.Path]::GetPathRoot($normalizedValue), [System.IO.Path]::GetPathRoot($normalizedExpected), [StringComparison]::OrdinalIgnoreCase)) {
+          $result.MismatchClass = 'same-root'
+        } else {
+          $result.MismatchClass = 'different-root'
         }
       }
     }
@@ -919,6 +923,8 @@ while ([DateTime]::UtcNow -lt $deadline) {
         'product-leaf-appended' { 'destination-readback-product-leaf-appended' }
         'same-parent' { 'destination-readback-same-parent' }
         'same-leaf' { 'destination-readback-same-leaf' }
+        'same-root' { 'destination-readback-same-root' }
+        'different-root' { 'destination-readback-different-root' }
         'unchanged' { 'destination-readback-unchanged' }
         default { 'destination-readback-other' }
       }
