@@ -417,3 +417,15 @@ test('NSIS destination readback preserves only safe root relation events', () =>
   assert.deepEqual(events, [sameRoot, differentRoot]);
   assert.equal(JSON.stringify(events).includes('C:/private'), false);
 });
+
+
+test('NSIS destination readback relation events are accepted by the PowerShell writer', async () => {
+  const source = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const start = source.indexOf('function Write-WizardEvent {');
+  const end = source.indexOf('\ntrap {', start);
+  assert.ok(start >= 0 && end > start, 'the event writer and its following trap exist');
+  const validateSet = source.slice(start, end).match(/\[ValidateSet\(([\s\S]*?)\)\]/)?.[1] ?? '';
+  for (const event of ['destination-readback-same-root', 'destination-readback-different-root']) {
+    assert.ok(validateSet.includes("'" + event + "'"), event + ' is allowed by the writer');
+  }
+});
