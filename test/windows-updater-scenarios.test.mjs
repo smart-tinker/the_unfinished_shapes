@@ -369,3 +369,35 @@ test('NSIS destination mismatch diagnostics expose only fixed readback categorie
   assert.ok(directory.includes("'before-read-invalid' { 'destination-readback-before-read-invalid' }"));
   assert.ok(directory.includes("Write-WizardEvent -Name $readbackEvent"));
 });
+
+test('NSIS mismatch keeps pre-read status separate from post-readback relation', async () => {
+  const safeLines = [
+    'TUS_NSIS_WIZARD event=destination-before-read-invalid pid=4321',
+    'TUS_NSIS_WIZARD event=destination-readback-same-parent pid=4321',
+  ];
+  const events = safeNsisWizardEvents([
+    ...safeLines,
+    'TUS_NSIS_WIZARD event=destination-before-read-invalid value=C:/private/path pid=4321',
+    'TUS_NSIS_WIZARD event=destination-readback-same-parent value=C:/private/path pid=4321',
+  ].join(String.fromCharCode(10)));
+  assert.deepEqual(events, safeLines);
+  assert.equal(JSON.stringify(events).includes('C:/private/path'), false);
+});
+
+test('NSIS destination producer keeps before-read and post-readback classifications independent', async () => {
+  const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const setterStart = script.indexOf('function Set-NativeDirectoryEdit');
+  const setterEnd = script.indexOf('function Get-NativeRadioSelection', setterStart);
+  const setter = script.slice(setterStart, setterEnd);
+  assert.ok(setter.includes("BeforeReadClass = 'unavailable'"));
+  assert.ok(setter.includes('$result.BeforeReadClass = $beforeReadClass'));
+  assert.equal(setter.includes("$result.MismatchClass = 'before-read-invalid'"), false);
+
+  const directoryStart = script.indexOf("if ($stage -eq 'directory') {");
+  const installStart = script.indexOf("if ($stage -eq 'installing') {", directoryStart);
+  const directory = script.slice(directoryStart, installStart);
+  assert.ok(directory.includes('switch ($nativeEdit.BeforeReadClass)'));
+  assert.ok(directory.includes('switch ($nativeEdit.MismatchClass)'));
+  assert.ok(directory.includes("Write-WizardEvent -Name $beforeReadEvent"));
+  assert.ok(directory.includes("Write-WizardEvent -Name $readbackEvent"));
+});
