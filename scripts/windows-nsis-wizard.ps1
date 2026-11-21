@@ -105,6 +105,13 @@ function Set-NativeDirectoryEdit {
     $expected = [System.IO.Path]::GetFullPath($ExpectedValue)
     $trimCharacters = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
     $normalizedExpected = $expected.TrimEnd($trimCharacters)
+    $normalizedBeforeValue = $null
+    try {
+      $beforeValue = Get-NativeDirectoryEditText -Control $control
+      if ($null -ne $beforeValue) {
+        $normalizedBeforeValue = [System.IO.Path]::GetFullPath($beforeValue).TrimEnd($trimCharacters)
+      }
+    } catch {}
     $expectedPointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($ExpectedValue)
     try {
       $setResult = [IntPtr]::Zero
@@ -122,13 +129,18 @@ function Set-NativeDirectoryEdit {
     } else {
       $result.Readback = 'mismatch'
       $result.MismatchClass = 'other'
-      $expectedChild = Join-Path $normalizedExpected ([System.IO.Path]::GetFileName($normalizedExpected))
-      if ([String]::Equals($normalizedValue, $expectedChild, [StringComparison]::OrdinalIgnoreCase)) {
-        $result.MismatchClass = 'product-leaf-appended'
-      } elseif ([String]::Equals([System.IO.Path]::GetDirectoryName($normalizedValue), [System.IO.Path]::GetDirectoryName($normalizedExpected), [StringComparison]::OrdinalIgnoreCase)) {
-        $result.MismatchClass = 'same-parent'
-      } elseif ([String]::Equals([System.IO.Path]::GetFileName($normalizedValue), [System.IO.Path]::GetFileName($normalizedExpected), [StringComparison]::OrdinalIgnoreCase)) {
-        $result.MismatchClass = 'same-leaf'
+      if ($null -ne $normalizedBeforeValue -and
+          [String]::Equals($normalizedBeforeValue, $normalizedValue, [StringComparison]::OrdinalIgnoreCase)) {
+        $result.MismatchClass = 'unchanged'
+      } else {
+        $expectedChild = Join-Path $normalizedExpected ([System.IO.Path]::GetFileName($normalizedExpected))
+        if ([String]::Equals($normalizedValue, $expectedChild, [StringComparison]::OrdinalIgnoreCase)) {
+          $result.MismatchClass = 'product-leaf-appended'
+        } elseif ([String]::Equals([System.IO.Path]::GetDirectoryName($normalizedValue), [System.IO.Path]::GetDirectoryName($normalizedExpected), [StringComparison]::OrdinalIgnoreCase)) {
+          $result.MismatchClass = 'same-parent'
+        } elseif ([String]::Equals([System.IO.Path]::GetFileName($normalizedValue), [System.IO.Path]::GetFileName($normalizedExpected), [StringComparison]::OrdinalIgnoreCase)) {
+          $result.MismatchClass = 'same-leaf'
+        }
       }
     }
   } catch {}
@@ -609,7 +621,7 @@ function Write-WizardEvent {
       'process-found', 'process-ambiguous', 'process-not-found',
       'window-found', 'window-not-found', 'window-mismatch',
       'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-verified', 'destination-unavailable', 'destination-mismatch',
-      'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-other',
+      'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-other', 'destination-readback-unchanged',
       'next-unavailable', 'install-started', 'finish-clicked', 'installer-exited',
       'installer-exited-early', 'installed-executable-missing', 'completed',
       'timeout', 'uia-unavailable', 'automation-failed'
@@ -890,6 +902,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
         'product-leaf-appended' { 'destination-readback-product-leaf-appended' }
         'same-parent' { 'destination-readback-same-parent' }
         'same-leaf' { 'destination-readback-same-leaf' }
+        'unchanged' { 'destination-readback-unchanged' }
         default { 'destination-readback-other' }
       }
       Write-WizardEvent -Name $readbackEvent -ProcessId $script:installerProcessId
