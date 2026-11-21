@@ -106,10 +106,20 @@ function Set-NativeDirectoryEdit {
     $trimCharacters = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
     $normalizedExpected = $expected.TrimEnd($trimCharacters)
     $normalizedBeforeValue = $null
+    $beforeReadClass = 'unavailable'
     try {
       $beforeValue = Get-NativeDirectoryEditText -Control $control
       if ($null -ne $beforeValue) {
-        $normalizedBeforeValue = [System.IO.Path]::GetFullPath($beforeValue).TrimEnd($trimCharacters)
+        if ([String]::IsNullOrWhiteSpace($beforeValue)) {
+          $beforeReadClass = 'empty'
+        } else {
+          try {
+            $normalizedBeforeValue = [System.IO.Path]::GetFullPath($beforeValue).TrimEnd($trimCharacters)
+            $beforeReadClass = 'read'
+          } catch {
+            $beforeReadClass = 'invalid'
+          }
+        }
       }
     } catch {}
     $expectedPointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($ExpectedValue)
@@ -128,7 +138,11 @@ function Set-NativeDirectoryEdit {
       $result.Readback = 'match'
     } else {
       $result.Readback = 'mismatch'
-      if ($null -eq $normalizedBeforeValue) {
+      if ($beforeReadClass -eq 'empty') {
+        $result.MismatchClass = 'before-read-empty'
+      } elseif ($beforeReadClass -eq 'invalid') {
+        $result.MismatchClass = 'before-read-invalid'
+      } elseif ($beforeReadClass -eq 'unavailable') {
         $result.MismatchClass = 'before-read-unavailable'
       } elseif ([String]::Equals($normalizedBeforeValue, $normalizedValue, [StringComparison]::OrdinalIgnoreCase)) {
         $result.MismatchClass = 'unchanged'
@@ -622,7 +636,7 @@ function Write-WizardEvent {
       'process-found', 'process-ambiguous', 'process-not-found',
       'window-found', 'window-not-found', 'window-mismatch',
       'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-verified', 'destination-unavailable', 'destination-mismatch',
-      'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-other', 'destination-readback-unchanged', 'destination-readback-before-read-unavailable',
+      'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-other', 'destination-readback-unchanged', 'destination-readback-before-read-unavailable', 'destination-readback-before-read-empty', 'destination-readback-before-read-invalid',
       'next-unavailable', 'install-started', 'finish-clicked', 'installer-exited',
       'installer-exited-early', 'installed-executable-missing', 'completed',
       'timeout', 'uia-unavailable', 'automation-failed'
@@ -905,6 +919,8 @@ while ([DateTime]::UtcNow -lt $deadline) {
         'same-leaf' { 'destination-readback-same-leaf' }
         'unchanged' { 'destination-readback-unchanged' }
         'before-read-unavailable' { 'destination-readback-before-read-unavailable' }
+        'before-read-empty' { 'destination-readback-before-read-empty' }
+        'before-read-invalid' { 'destination-readback-before-read-invalid' }
         default { 'destination-readback-other' }
       }
       Write-WizardEvent -Name $readbackEvent -ProcessId $script:installerProcessId
