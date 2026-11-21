@@ -296,12 +296,13 @@ test('NSIS directory target uses native Edit 1019 and exact readback before inst
     'destination entry does not depend on the unavailable UIA ValuePattern');
 });
 
-test('NSIS destination mismatch diagnostics keep only fixed path relations', async () => {
+test('NSIS destination mismatch diagnostics expose only fixed readback categories', async () => {
   const safeLines = [
     'TUS_NSIS_WIZARD event=destination-readback-product-leaf-appended pid=4321',
     'TUS_NSIS_WIZARD event=destination-readback-same-parent pid=4321',
     'TUS_NSIS_WIZARD event=destination-readback-same-leaf pid=4321',
     'TUS_NSIS_WIZARD event=destination-readback-other pid=4321',
+    'TUS_NSIS_WIZARD event=destination-readback-unchanged pid=4321',
   ];
   const events = safeNsisWizardEvents([
     ...safeLines,
@@ -321,19 +322,30 @@ test('NSIS destination mismatch diagnostics keep only fixed path relations', asy
     'destination-readback-same-parent',
     'destination-readback-same-leaf',
     'destination-readback-other',
+    'destination-readback-unchanged',
   ]) assert.ok(writer.includes("'" + name + "'"), 'writer permits only fixed readback event: ' + name);
 
   const setterStart = script.indexOf('function Set-NativeDirectoryEdit');
   const setterEnd = script.indexOf('function Get-NativeRadioSelection', setterStart);
   const setter = script.slice(setterStart, setterEnd);
-  for (const category of ['product-leaf-appended', 'same-parent', 'same-leaf', 'other']) {
+  for (const category of ['product-leaf-appended', 'same-parent', 'same-leaf', 'other', 'unchanged']) {
     assert.ok(setter.includes("$result.MismatchClass = '" + category + "'"),
       'the actual native readback producer maps to a fixed category: ' + category);
   }
+
+  const beforeReadAt = setter.indexOf('$beforeValue = Get-NativeDirectoryEditText -Control $control');
+  const setValueAt = setter.indexOf('SendMessageTimeout($control, 0x000C');
+  const afterReadAt = setter.indexOf('$value = Get-NativeDirectoryEditText -Control $control');
+  assert.ok(beforeReadAt >= 0 && setValueAt > beforeReadAt && afterReadAt > setValueAt,
+    'the bounded native reader brackets WM_SETTEXT without changing the destination gate');
+  assert.ok(setter.includes('[String]::Equals($normalizedBeforeValue, $normalizedValue, [StringComparison]::OrdinalIgnoreCase)') &&
+      setter.includes("$result.MismatchClass = 'unchanged'"),
+    'only an unchanged post-set value receives the fixed unchanged category');
 
   const directoryStart = script.indexOf("if ($stage -eq 'directory') {");
   const installStart = script.indexOf("if ($stage -eq 'installing') {", directoryStart);
   const directory = script.slice(directoryStart, installStart);
   assert.ok(directory.includes('switch ($nativeEdit.MismatchClass)'));
+  assert.ok(directory.includes("'unchanged' { 'destination-readback-unchanged' }"));
   assert.ok(directory.includes("Write-WizardEvent -Name $readbackEvent"));
 });
