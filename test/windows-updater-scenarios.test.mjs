@@ -673,7 +673,7 @@ test('NSIS directory UIA fallback is bound to the same writable native Edit and 
 
   const setValue = fallback.indexOf('$valuePattern.SetValue($ExpectedValue)');
   assert.ok(setValue >= 0, 'fallback uses ValuePattern on the verified Edit');
-  const postsetControlCheck = fallback.indexOf('[TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $Control', setValue);
+  const postsetControlCheck = fallback.indexOf('[TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $Control -or', setValue);
   const postsetReject = fallback.indexOf("return 'postset-mismatch'", setValue);
   assert.ok(postsetControlCheck > setValue && postsetReject > postsetControlCheck, 'fallback rechecks and fails closed on changed native provenance');
   assert.ok(fallback.includes('[TUSWindowApi]::GetDlgItem($PageHandle, 1019) -eq $Control'));
