@@ -135,7 +135,6 @@ function Set-NativeDirectoryEdit {
       [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
     }
     if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) {
-      $result.SetFailureStage = 'control'
       $uiEdits = @($AutomationEdits | Where-Object {
         try { [IntPtr]$_.Current.NativeWindowHandle -eq $control } catch { $false }
       })
