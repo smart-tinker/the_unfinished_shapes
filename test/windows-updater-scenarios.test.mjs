@@ -693,6 +693,35 @@ test('NSIS directory UIA fallback is bound to the same writable native Edit and 
   assert.ok(directory.includes("$nativeEdit.SetMethod -eq 'uia'"));
 });
 
+test('NSIS UIA element diagnostics preserve only the exact fixed guard outcome', async () => {
+  const statuses = ['owner-mismatch', 'handle-mismatch', 'type-mismatch', 'offscreen', 'disabled'];
+  const safe = statuses.map(status => 'TUS_NSIS_WIZARD event=destination-uia-' + status + ' pid=4321');
+  const output = [...safe, ...safe.map(line => line + ' value=C:/private/path')].join(String.fromCharCode(10));
+  assert.deepEqual(safeNsisWizardEvents(output), safe);
+  assert.equal(JSON.stringify(safeNsisWizardEvents(output)).includes('C:/private/path'), false);
+
+  const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const start = script.indexOf('function Set-NativeDirectoryEditWithUIA {');
+  const end = script.indexOf(String.fromCharCode(10) + 'function Set-NativeDirectoryEdit {', start);
+  assert.ok(start >= 0 && end > start);
+  const fallback = script.slice(start, end);
+  const guards = [
+    ["$uiEdit.Current.ProcessId -ne $ProcessId", "return 'owner-mismatch'"],
+    ["[IntPtr]$uiEdit.Current.NativeWindowHandle -ne $Control", "return 'handle-mismatch'"],
+    ["$uiEdit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit", "return 'type-mismatch'"],
+    ['$uiEdit.Current.IsOffscreen', "return 'offscreen'"],
+    ['-not $uiEdit.Current.IsEnabled', "return 'disabled'"],
+  ];
+  const setValue = fallback.indexOf('$valuePattern.SetValue($ExpectedValue)');
+  assert.ok(setValue >= 0);
+  for (const [guard, result] of guards) {
+    const guardAt = fallback.indexOf(guard);
+    const resultAt = fallback.indexOf(result, guardAt);
+    assert.ok(guardAt >= 0 && resultAt > guardAt && resultAt < setValue,
+      'the exact UIA property has its own fail-closed outcome: ' + result);
+  }
+});
+
 test('NSIS UIA fallback outcomes use safe, producer-mapped enums', async () => {
   const statuses = ['element-unavailable', 'element-mismatch', 'control-mismatch', 'read-only', 'set-error', 'postset-mismatch', 'unknown'];
   const events = ['TUS_NSIS_WIZARD event=destination-set-uia-fallback pid=4321', ...statuses.map(status => 'TUS_NSIS_WIZARD event=destination-uia-' + status + ' pid=4321')];
