@@ -3,8 +3,14 @@ import assert from 'node:assert/strict';
 export function waitForExit(child, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     if (child.exitCode !== null) return resolve();
-    const timer = setTimeout(() => reject(new Error('The packaged updater process did not exit after confirmed launch.')), timeoutMs);
-    child.once('exit', () => { clearTimeout(timer); resolve(); });
+    const onExit = () => { clearTimeout(timer); resolve(); };
+    const timer = setTimeout(() => {
+      child.removeListener('exit', onExit);
+      const error = new Error('The packaged updater process did not exit after confirmed launch.');
+      error.code = 'ETIMEDOUT';
+      reject(error);
+    }, timeoutMs);
+    child.once('exit', onExit);
   });
 }
 

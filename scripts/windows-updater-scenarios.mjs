@@ -21,6 +21,7 @@ const safeHandoffCheckResults = new Set(['match', 'mismatch', 'failed']);
 const safeScenarioStages = new Set([
   'source-setup', 'source-identity', 'source-prepare', 'check-download',
   'extract', 'relaunch', 'relaunch-cancel', 'relaunch-approve', 'relaunch-exit',
+  'relaunch-click', 'relaunch-source-exit', 'relaunch-cleanup',
   'relaunch-prompt', 'relaunch-request', 'relaunch-target', 'wizard', 'target-verify', 'complete',
 ]);
 const safeScenarioCategories = new Set([
@@ -80,7 +81,7 @@ export function safeInstallerHandoffEvents(output) {
   });
 }
 
-function windowsScenarioFailureCategory(error) {
+export function safeWindowsScenarioFailureCategory(error) {
   if (error?.name === 'TimeoutError' || ['ETIMEDOUT', 'ERR_SCRIPT_EXECUTION_TIMEOUT'].includes(error?.code)) return 'timeout';
   const childOutput = String(error?.stdout || '') + String(error?.stderr || '');
   if (error?.code === 'ERR_ASSERTION' || childOutput.includes('AssertionError [ERR_ASSERTION]')) return 'assertion';
@@ -97,7 +98,7 @@ export async function runWindowsRelaunch({ child, click, waitForExit, cleanup })
   let order = 0;
   const capture = (stage, operation) => Promise.resolve().then(operation).then(() => null, error => {
     const failure = error instanceof Error ? error : new Error('Windows updater relaunch failed.');
-    failure.tusScenarioDiagnostic = { stage, category: windowsScenarioFailureCategory(failure) };
+    failure.tusScenarioDiagnostic = { stage, category: safeWindowsScenarioFailureCategory(failure) };
     return { order: order++, error: failure };
   });
   const [clickFailure, exitFailure] = await Promise.all([
@@ -109,7 +110,7 @@ export async function runWindowsRelaunch({ child, click, waitForExit, cleanup })
   let cleanupFailure = null;
   try { await cleanup(child, primary); } catch (error) {
     const failure = error instanceof Error ? error : new Error('Windows updater cleanup failed.');
-    failure.tusScenarioDiagnostic = { stage: 'relaunch-cleanup', category: windowsScenarioFailureCategory(failure) };
+    failure.tusScenarioDiagnostic = { stage: 'relaunch-cleanup', category: safeWindowsScenarioFailureCategory(failure) };
     cleanupFailure = failure;
   }
   if (primary && cleanupFailure) {

@@ -4,7 +4,7 @@ import { waitForExit } from '../scripts/graphics-smoke.mjs';
 import { test } from 'node:test';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents } from '../scripts/windows-updater-scenarios.mjs';
+import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory } from '../scripts/windows-updater-scenarios.mjs';
 
 test('Windows installer acceptance still runs when portable acceptance fails', async () => {
   const calls = [];
@@ -597,6 +597,7 @@ test('installer click rejection is separate and cleanup receives the exact start
 
   assert.equal(cleanedChild, child);
   assert.equal(outcomes.installer.error, clickFailure);
+  assert.equal(safeWindowsScenarioFailureCategory(clickFailure), 'timeout');
   assert.deepEqual(outcomes.installer.diagnostic, { stage: 'relaunch-click', category: 'timeout' });
   assert.doesNotMatch(JSON.stringify(outcomes.installer.diagnostic), /C:\/private/);
 });
