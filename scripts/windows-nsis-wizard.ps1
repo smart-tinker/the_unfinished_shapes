@@ -73,7 +73,7 @@ function Get-NativeDirectoryEditText {
 
 function Set-NativeDirectoryEdit {
   param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [string]$ExpectedValue)
-  $result = [ordered]@{ SetStatus = 'unavailable'; SetFailureStage = 'precondition'; BeforeReadClass = 'unavailable'; Readback = 'unknown'; MismatchClass = 'unknown' }
+  $result = [ordered]@{ SetStatus = 'unavailable'; SetFailureStage = 'precondition'; BeforeReadClass = 'unavailable'; PostSetControlStatus = 'unknown'; Readback = 'unknown'; MismatchClass = 'unknown' }
   if (-not $script:nativeWindowApiAvailable -or $MainWindowHandle -eq [IntPtr]::Zero -or
       $PageHandle -eq [IntPtr]::Zero -or [string]::IsNullOrWhiteSpace($ExpectedValue) -or
       $ExpectedValue.Length -ge 32768) { return [pscustomobject]$result }
@@ -136,6 +136,25 @@ function Set-NativeDirectoryEdit {
     } finally {
       [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
     }
+    try {
+      $postSetProcessId = [uint32]0
+      $postSetThreadId = [TUSWindowApi]::GetWindowThreadProcessId($control, [ref]$postSetProcessId)
+      if ($postSetThreadId -ne 0) {
+        $postSetParent = [TUSWindowApi]::GetParent($control)
+        $postSetClass = [System.Text.StringBuilder]::new(128)
+        $postSetClassLength = [TUSWindowApi]::GetClassName($control, $postSetClass, $postSetClass.Capacity)
+        $postSetMappedControl = [TUSWindowApi]::GetDlgItem($PageHandle, 1019)
+        if ($postSetProcessId -ne [uint32]$ProcessId -or
+            $postSetParent -ne $PageHandle -or
+            ($postSetClassLength -gt 0 -and $postSetClass.ToString() -ne 'Edit') -or
+            $postSetMappedControl -ne $control) {
+          $result.PostSetControlStatus = 'mismatch'
+        } elseif ($postSetClassLength -gt 0) {
+          $result.PostSetControlStatus = 'match'
+        }
+      }
+    } catch {}
+    if ($result.PostSetControlStatus -ne 'match') { return [pscustomobject]$result }
     $value = Get-NativeDirectoryEditText -Control $control
     if ($null -eq $value) { return [pscustomobject]$result }
     $normalizedValue = [System.IO.Path]::GetFullPath($value).TrimEnd($trimCharacters)
@@ -640,7 +659,7 @@ function Write-WizardEvent {
     [ValidateSet(
       'process-found', 'process-ambiguous', 'process-not-found',
       'window-found', 'window-not-found', 'window-mismatch',
-      'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-verified', 'destination-unavailable', 'destination-mismatch', 'destination-edits-ambiguous',
+      'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-postset-edit-match', 'destination-postset-edit-mismatch', 'destination-postset-edit-unknown', 'destination-verified', 'destination-unavailable', 'destination-mismatch', 'destination-edits-ambiguous',
   'destination-set-precondition-unavailable', 'destination-set-provenance-unavailable', 'destination-set-control-unavailable', 'destination-set-message-failed', 'destination-set-exception', 'destination-set-unknown',
       'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-same-root', 'destination-readback-different-root', 'destination-readback-other', 'destination-readback-unchanged', 'destination-before-read-unavailable', 'destination-before-read-empty', 'destination-before-read-invalid',
       'next-unavailable', 'install-started', 'finish-clicked', 'installer-exited',
@@ -923,6 +942,17 @@ while ([DateTime]::UtcNow -lt $deadline) {
       exit 2
     }
     Write-WizardEvent -Name 'destination-entered' -ProcessId $script:installerProcessId
+    $postSetEvent = switch ($nativeEdit.PostSetControlStatus) {
+      'match' { 'destination-postset-edit-match' }
+      'mismatch' { 'destination-postset-edit-mismatch' }
+      'unknown' { 'destination-postset-edit-unknown' }
+      default { 'destination-postset-edit-unknown' }
+    }
+    Write-WizardEvent -Name $postSetEvent -ProcessId $script:installerProcessId
+    if ($nativeEdit.PostSetControlStatus -ne 'match') {
+      Write-WizardEvent -Name 'destination-unavailable' -ProcessId $script:installerProcessId
+      exit 2
+    }
     if ($nativeEdit.Readback -eq 'unknown') {
       Write-WizardEvent -Name 'destination-unavailable' -ProcessId $script:installerProcessId
       exit 2
