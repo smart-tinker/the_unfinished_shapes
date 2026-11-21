@@ -429,3 +429,25 @@ test('NSIS destination readback relation events are accepted by the PowerShell w
     assert.ok(validateSet.includes("'" + event + "'"), event + ' is allowed by the writer');
   }
 });
+
+
+test('NSIS destination setter preserves only bounded pre-write failure stages', async () => {
+  const source = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const start = source.indexOf('function Write-WizardEvent {');
+  const end = source.indexOf('\ntrap {', start);
+  assert.ok(start >= 0 && end > start, 'the event writer and its following trap exist');
+  const validateSet = source.slice(start, end).match(/\[ValidateSet\(([\s\S]*?)\)\]/)?.[1] ?? '';
+  const stages = ['precondition-unavailable', 'provenance-unavailable', 'control-unavailable', 'prepare-unavailable', 'message-failed', 'exception', 'unknown'];
+  const lines = stages.map(stage => 'TUS_NSIS_WIZARD event=destination-set-' + stage + ' pid=4321');
+  const events = safeNsisWizardEvents([
+    ...lines,
+    'TUS_NSIS_WIZARD event=destination-set-control-unavailable pid=4321 C:/private/path',
+    'raw destination C:/private/path',
+  ].join(String.fromCharCode(10)));
+  assert.deepEqual(events, lines);
+  assert.equal(JSON.stringify(events).includes('C:/private'), false);
+  for (const line of lines) {
+    const event = line.match(/event=([a-z-]+)/)[1];
+    assert.ok(validateSet.includes("'" + event + "'"), event + ' is accepted by the writer');
+  }
+});
