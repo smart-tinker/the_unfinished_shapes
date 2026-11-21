@@ -498,3 +498,61 @@ test('NSIS destination diagnostics map reachable producer failure paths', async 
     assert.ok(validateSet.includes("'" + event + "'"), event + ' is accepted by the writer');
   }
 });
+
+
+test('NSIS destination setter rechecks same Edit ownership after WM_SETTEXT and logs only safe result enums', async () => {
+  const source = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const setterStart = source.indexOf('function Set-NativeDirectoryEdit {');
+  const setterEnd = source.indexOf(String.fromCharCode(10) + 'function Get-NativeRadioSelection', setterStart);
+  const setter = source.slice(setterStart, setterEnd);
+  assert.ok(setterStart >= 0 && setterEnd > setterStart);
+
+  const sent = setter.indexOf("$result.SetStatus = 'sent'");
+  const readback = setter.indexOf('$value = Get-NativeDirectoryEditText -Control $control', sent);
+  assert.ok(sent >= 0 && readback > sent);
+  const postSetCheck = setter.slice(sent, readback);
+  for (const check of [
+    '[TUSWindowApi]::GetWindowThreadProcessId($control',
+    '$postSetProcessId -ne [uint32]$ProcessId',
+    '[TUSWindowApi]::GetParent($control) -ne $PageHandle',
+    '[TUSWindowApi]::GetClassName($control',
+    "$postSetClass.ToString() -ne 'Edit'",
+    '[TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $control',
+  ]) {
+    assert.ok(postSetCheck.includes(check), 'post-set check verifies the same Edit: ' + check);
+  }
+
+  const directoryStart = source.indexOf("if ($stage -eq 'directory') {");
+  const installStart = source.indexOf("if ($stage -eq 'installing') {", directoryStart);
+  const directory = source.slice(directoryStart, installStart);
+  const setterCall = directory.indexOf('$nativeEdit = Set-NativeDirectoryEdit');
+  const eventMapStart = directory.indexOf('$postSetEvent = switch ($nativeEdit.PostSetControlStatus)');
+  const eventMapEnd = directory.indexOf('Write-WizardEvent -Name $postSetEvent', eventMapStart);
+  const rejectStart = directory.indexOf("if ($nativeEdit.PostSetControlStatus -ne 'match')", eventMapEnd);
+  const readbackGate = directory.indexOf("if ($nativeEdit.Readback -eq 'unknown')", rejectStart);
+  assert.ok(setterCall >= 0 && eventMapStart > setterCall && eventMapEnd > eventMapStart);
+  assert.ok(rejectStart > eventMapEnd && readbackGate > rejectStart);
+  const reject = directory.slice(rejectStart, readbackGate);
+  assert.ok(reject.includes('exit 2'), 'non-matching provenance exits before using the destination readback');
+  assert.ok(setter.includes('[String]::Equals($normalizedValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)'), 'the exact normalized destination gate remains');
+
+  const writerStart = source.indexOf('function Write-WizardEvent {');
+  const writerEnd = source.indexOf(String.fromCharCode(10) + 'trap {', writerStart);
+  const validateSet = source.slice(writerStart, writerEnd).match(/\[ValidateSet\(([\s\S]*?)\)\]/)?.[1] ?? '';
+  const mapping = directory.slice(eventMapStart, eventMapEnd);
+  const statuses = ['match', 'mismatch', 'unknown'];
+  const safeLines = statuses.map(status => 'TUS_NSIS_WIZARD event=destination-postset-edit-' + status + ' pid=4321');
+  for (const status of statuses) {
+    const event = 'destination-postset-edit-' + status;
+    assert.ok(mapping.includes("'" + status + "' { '" + event + "' }"), status + ' maps to its fixed event');
+    assert.ok(validateSet.includes("'" + event + "'"), event + ' is accepted by the writer');
+  }
+  assert.ok(mapping.includes("default { 'destination-postset-edit-unknown' }"));
+  const sanitized = safeNsisWizardEvents([
+    ...safeLines,
+    ...safeLines.map(line => line + ' value=C:/private/path'),
+    'raw window output C:/private/path',
+  ].join(String.fromCharCode(10)));
+  assert.deepEqual(sanitized, safeLines);
+  assert.equal(JSON.stringify(sanitized).includes('C:/private/path'), false);
+});
