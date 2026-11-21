@@ -73,10 +73,11 @@ function Get-NativeDirectoryEditText {
 
 function Set-NativeDirectoryEdit {
   param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [string]$ExpectedValue)
-  $result = [ordered]@{ SetStatus = 'unavailable'; BeforeReadClass = 'unavailable'; Readback = 'unknown'; MismatchClass = 'unknown' }
+  $result = [ordered]@{ SetStatus = 'unavailable'; SetFailureStage = 'precondition'; BeforeReadClass = 'unavailable'; Readback = 'unknown'; MismatchClass = 'unknown' }
   if (-not $script:nativeWindowApiAvailable -or $MainWindowHandle -eq [IntPtr]::Zero -or
       $PageHandle -eq [IntPtr]::Zero -or [string]::IsNullOrWhiteSpace($ExpectedValue) -or
       $ExpectedValue.Length -ge 32768) { return [pscustomobject]$result }
+  $result.SetFailureStage = 'provenance'
   try {
     $mainProcessId = [uint32]0
     $mainThreadId = [TUSWindowApi]::GetWindowThreadProcessId($MainWindowHandle, [ref]$mainProcessId)
@@ -90,6 +91,7 @@ function Set-NativeDirectoryEdit {
         [TUSWindowApi]::GetClassName($PageHandle, $pageClass, $pageClass.Capacity) -le 0 -or
         $pageClass.ToString() -ne '#32770') { return [pscustomobject]$result }
 
+    $result.SetFailureStage = 'control'
     $control = [TUSWindowApi]::GetDlgItem($PageHandle, 1019)
     if ($control -eq [IntPtr]::Zero) { return [pscustomobject]$result }
     $controlProcessId = [uint32]0
@@ -102,6 +104,7 @@ function Set-NativeDirectoryEdit {
         -not [TUSWindowApi]::IsWindowVisible($control) -or
         -not [TUSWindowApi]::IsWindowEnabled($control)) { return [pscustomobject]$result }
 
+    $result.SetFailureStage = 'prepare'
     $expected = [System.IO.Path]::GetFullPath($ExpectedValue)
     $trimCharacters = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
     $normalizedExpected = $expected.TrimEnd($trimCharacters)
@@ -124,11 +127,13 @@ function Set-NativeDirectoryEdit {
     } catch {}
     $result.BeforeReadClass = $beforeReadClass
     $expectedPointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($ExpectedValue)
+    $result.SetFailureStage = 'message'
     try {
       $setResult = [IntPtr]::Zero
       $setSent = [TUSWindowApi]::SendMessageTimeout($control, 0x000C, [IntPtr]::Zero, $expectedPointer, 0x0002, 500, [ref]$setResult)
       if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) { return [pscustomobject]$result }
       $result.SetStatus = 'sent'
+      $result.SetFailureStage = 'none'
     } finally {
       [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
     }
@@ -157,7 +162,9 @@ function Set-NativeDirectoryEdit {
         }
       }
     }
-  } catch {}
+  } catch {
+    if ($result.SetStatus -ne 'sent') { $result.SetFailureStage = 'exception' }
+  }
   return [pscustomobject]$result
 }
 
@@ -635,6 +642,7 @@ function Write-WizardEvent {
       'process-found', 'process-ambiguous', 'process-not-found',
       'window-found', 'window-not-found', 'window-mismatch',
       'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-verified', 'destination-unavailable', 'destination-mismatch',
+  'destination-set-precondition-unavailable', 'destination-set-provenance-unavailable', 'destination-set-control-unavailable', 'destination-set-prepare-unavailable', 'destination-set-message-failed', 'destination-set-exception', 'destination-set-unknown',
       'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-same-root', 'destination-readback-different-root', 'destination-readback-other', 'destination-readback-unchanged', 'destination-before-read-unavailable', 'destination-before-read-empty', 'destination-before-read-invalid',
       'next-unavailable', 'install-started', 'finish-clicked', 'installer-exited',
       'installer-exited-early', 'installed-executable-missing', 'completed',
@@ -902,6 +910,16 @@ while ([DateTime]::UtcNow -lt $deadline) {
     }
     $nativeEdit = Set-NativeDirectoryEdit -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle -PageHandle $nativeWindow.PageHandle -ExpectedValue $expectedInstallDir
     if ($nativeEdit.SetStatus -ne 'sent') {
+      $setFailureEvent = switch ($nativeEdit.SetFailureStage) {
+        'precondition' { 'destination-set-precondition-unavailable' }
+        'provenance' { 'destination-set-provenance-unavailable' }
+        'control' { 'destination-set-control-unavailable' }
+        'prepare' { 'destination-set-prepare-unavailable' }
+        'message' { 'destination-set-message-failed' }
+        'exception' { 'destination-set-exception' }
+        default { 'destination-set-unknown' }
+      }
+      Write-WizardEvent -Name $setFailureEvent -ProcessId $script:installerProcessId
       Write-WizardEvent -Name 'destination-unavailable' -ProcessId $script:installerProcessId
       exit 2
     }
