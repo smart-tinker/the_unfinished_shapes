@@ -642,3 +642,34 @@ test('installer relaunch cleanup failure is distinct and does not expose details
   assert.deepEqual(outcomes.installer.diagnostic, { stage: 'relaunch-cleanup', category: 'other' });
   assert.doesNotMatch(JSON.stringify(outcomes.installer.diagnostic), /C:\/private/);
 });
+
+
+test('NSIS directory UIA fallback is bound to the same writable native Edit and read back', async () => {
+  const source = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const setterStart = source.indexOf('function Set-NativeDirectoryEdit {');
+  const setterEnd = source.indexOf(String.fromCharCode(10) + 'function Get-NativeRadioSelection', setterStart);
+  const setter = source.slice(setterStart, setterEnd);
+  assert.ok(setterStart >= 0 && setterEnd > setterStart);
+  for (const guard of [
+    '[object[]]$AutomationEdits',
+    '[IntPtr]$_.Current.NativeWindowHandle -eq $control',
+    '$uiEdit.Current.ProcessId -ne $ProcessId',
+    '$uiEdit.Current.IsOffscreen',
+    '$valuePattern.Current.IsReadOnly',
+  ]) assert.ok(setter.includes(guard), 'UIA fallback guard exists: ' + guard);
+
+  const setValue = setter.indexOf('$valuePattern.SetValue($ExpectedValue)');
+  const readback = setter.indexOf('$value = Get-NativeDirectoryEditText -Control $control', setValue);
+  assert.ok(setValue >= 0 && readback > setValue, 'fallback uses the existing exact native readback');
+
+  const directoryStart = source.indexOf("if ($stage -eq 'directory') {");
+  const installStart = source.indexOf("if ($stage -eq 'installing') {", directoryStart);
+  const directory = source.slice(directoryStart, installStart);
+  assert.ok(directory.includes('-AutomationEdits $edits'));
+  assert.ok(directory.includes("$nativeEdit.SetMethod -eq 'uia'"));
+});
+
+test('NSIS UIA fallback outcome is emitted through the safe wizard event allowlist', () => {
+  const event = 'TUS_NSIS_WIZARD event=destination-set-uia-fallback pid=4321';
+  assert.deepEqual(safeNsisWizardEvents(event), [event]);
+});
