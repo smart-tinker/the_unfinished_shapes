@@ -162,7 +162,7 @@ test('NSIS timeout snapshot identifies pinned MUI page controls without exposing
   assert.ok(script.includes('[System.Windows.Automation.ControlType]::ProgressBar'));
   assert.ok(script.includes('native-page=$NativePage'));
   assert.ok(script.indexOf('if ($null -eq $pageWindow)') < script.indexOf('$selection.Select()'));
-  assert.ok(script.indexOf('if ($null -eq $pageWindow)') < script.indexOf('$valuePattern.SetValue($expectedInstallDir)'));
+  assert.ok(script.indexOf("if ($null -eq $pageWindow -and -not $nativeDirectoryPage)") < script.indexOf("if ($stage -eq 'directory') {"));
 });
 
 test('NSIS child-page snapshot requires visible parent and process provenance', () => {
@@ -232,7 +232,7 @@ test('NSIS snapshot maps the production writer fields and rejects private option
   assert.ok(pageReader.includes('Get-NativeRadioSelection'), 'selected state is read through the bounded native query');
   assert.equal(script.includes('option-page=$OptionPage'), true);
   assert.equal(script.includes('caption=$Caption'), false);
-  const nextReader = script.slice(script.indexOf('function Get-OptionNextControl'), script.indexOf('function Get-NsisPageSummary'));
+  const nextReader = script.slice(script.indexOf('function Get-MuiNextControl'), script.indexOf('function Get-NsisPageSummary'));
   for (const check of [
     'GetDlgItem($MainWindowHandle, 1)', 'GetParent($control) -ne $MainWindowHandle',
     'GetWindowThreadProcessId($MainWindowHandle, [ref]$mainWindowProcessId)',
@@ -249,7 +249,7 @@ test('NSIS snapshot maps the production writer fields and rejects private option
     "$nativeWindow.PageProcess -ne 'match'",
     "$nativeWindow.PageParent -ne 'match'",
     "$nativeWindow.OptionNext -ne 'match'",
-    'Get-OptionNextControl -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle',
+    'Get-MuiNextControl -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle',
     'SendMessageTimeout($nextControl.Handle, 0x00F5',
   ]) assert.ok(optionAction.includes(check), 'native Next action remains fail-closed: ' + check);
   assert.equal(script.includes('option-next=$OptionNext'), true);

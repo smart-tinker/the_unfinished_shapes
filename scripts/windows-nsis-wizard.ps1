@@ -54,6 +54,78 @@ function Get-NativeControlStatus {
     return 'wrong-class'
   } catch { return 'unknown' }
 }
+function Get-NativeDirectoryEditText {
+  param([IntPtr]$Control)
+  $capacity = 32768
+  $buffer = [Runtime.InteropServices.Marshal]::AllocHGlobal($capacity * 2)
+  try {
+    [Runtime.InteropServices.Marshal]::WriteInt16($buffer, 0, 0)
+    $messageResult = [IntPtr]::Zero
+    $sent = [TUSWindowApi]::SendMessageTimeout($Control, 0x000D, [IntPtr]$capacity, $buffer, 0x0002, 500, [ref]$messageResult)
+    if ($sent -eq [IntPtr]::Zero) { return $null }
+    $length = $messageResult.ToInt64()
+    if ($length -lt 0 -or $length -ge $capacity) { return $null }
+    return [Runtime.InteropServices.Marshal]::PtrToStringUni($buffer, [int]$length)
+  } finally {
+    [Runtime.InteropServices.Marshal]::FreeHGlobal($buffer)
+  }
+}
+
+function Set-NativeDirectoryEdit {
+  param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [string]$ExpectedValue)
+  $result = [ordered]@{ SetStatus = 'unavailable'; Readback = 'unknown' }
+  if (-not $script:nativeWindowApiAvailable -or $MainWindowHandle -eq [IntPtr]::Zero -or
+      $PageHandle -eq [IntPtr]::Zero -or [string]::IsNullOrWhiteSpace($ExpectedValue) -or
+      $ExpectedValue.Length -ge 32768) { return [pscustomobject]$result }
+  try {
+    $mainProcessId = [uint32]0
+    $mainThreadId = [TUSWindowApi]::GetWindowThreadProcessId($MainWindowHandle, [ref]$mainProcessId)
+    $pageProcessId = [uint32]0
+    $pageThreadId = [TUSWindowApi]::GetWindowThreadProcessId($PageHandle, [ref]$pageProcessId)
+    $pageClass = [System.Text.StringBuilder]::new(128)
+    if ($mainThreadId -eq 0 -or $mainProcessId -ne $ProcessId -or
+        $pageThreadId -eq 0 -or $pageProcessId -ne $ProcessId -or
+        [TUSWindowApi]::GetParent($PageHandle) -ne $MainWindowHandle -or
+        -not [TUSWindowApi]::IsWindowVisible($PageHandle) -or
+        [TUSWindowApi]::GetClassName($PageHandle, $pageClass, $pageClass.Capacity) -le 0 -or
+        $pageClass.ToString() -ne '#32770') { return [pscustomobject]$result }
+
+    $control = [TUSWindowApi]::GetDlgItem($PageHandle, 1019)
+    if ($control -eq [IntPtr]::Zero) { return [pscustomobject]$result }
+    $controlProcessId = [uint32]0
+    $controlThreadId = [TUSWindowApi]::GetWindowThreadProcessId($control, [ref]$controlProcessId)
+    $controlClass = [System.Text.StringBuilder]::new(128)
+    if ($controlThreadId -eq 0 -or $controlProcessId -ne $ProcessId -or
+        [TUSWindowApi]::GetParent($control) -ne $PageHandle -or
+        [TUSWindowApi]::GetClassName($control, $controlClass, $controlClass.Capacity) -le 0 -or
+        $controlClass.ToString() -ne 'Edit' -or
+        -not [TUSWindowApi]::IsWindowVisible($control) -or
+        -not [TUSWindowApi]::IsWindowEnabled($control)) { return [pscustomobject]$result }
+
+    $expected = [System.IO.Path]::GetFullPath($ExpectedValue)
+    $trimCharacters = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $normalizedExpected = $expected.TrimEnd($trimCharacters)
+    $expectedPointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($ExpectedValue)
+    try {
+      $setResult = [IntPtr]::Zero
+      $setSent = [TUSWindowApi]::SendMessageTimeout($control, 0x000C, [IntPtr]::Zero, $expectedPointer, 0x0002, 500, [ref]$setResult)
+      if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) { return [pscustomobject]$result }
+      $result.SetStatus = 'sent'
+    } finally {
+      [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
+    }
+    $value = Get-NativeDirectoryEditText -Control $control
+    if ($null -eq $value) { return [pscustomobject]$result }
+    $normalizedValue = [System.IO.Path]::GetFullPath($value).TrimEnd($trimCharacters)
+    if ([String]::Equals($normalizedValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)) {
+      $result.Readback = 'match'
+    } else {
+      $result.Readback = 'mismatch'
+    }
+  } catch {}
+  return [pscustomobject]$result
+}
+
 function Get-NativeRadioSelection {
   param([IntPtr]$Handle, [int]$ProcessId, [IntPtr]$PageHandle)
   if (-not $script:nativeWindowApiAvailable -or $Handle -eq [IntPtr]::Zero -or $PageHandle -eq [IntPtr]::Zero) { return 'unknown' }
@@ -84,7 +156,7 @@ function Get-DesktopName {
     return $buffer.ToString()
   } catch { return $null }
 }
-function Get-OptionNextControl {
+function Get-MuiNextControl {
   param([int]$ProcessId, [IntPtr]$MainWindowHandle)
   $result = [ordered]@{ Handle = [IntPtr]::Zero; Status = 'unknown' }
   if (-not $script:nativeWindowApiAvailable -or $MainWindowHandle -eq [IntPtr]::Zero) { return [pscustomobject]$result }
@@ -249,7 +321,7 @@ function Get-NsisPageSummary {
       }
     }
     if ($result.OptionPage -eq 'install-options') {
-      $next = Get-OptionNextControl -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle
+      $next = Get-MuiNextControl -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle
       $result.OptionNext = $next.Status
       $result.OptionNextHandle = $next.Handle
     }
@@ -703,7 +775,12 @@ while ([DateTime]::UtcNow -lt $deadline) {
     Destination = $destinationStatus
   }
 
-  if ($null -eq $pageWindow) { Start-Sleep -Milliseconds 100; continue }
+  $nativeDirectoryPage = $nativeWindow.NativePage -eq 'directory' -and
+    $nativeWindow.PageWindow -eq 'present' -and $nativeWindow.PageParent -eq 'match' -and
+    $nativeWindow.PageProcess -eq 'match' -and $nativeWindow.PageVisible -eq 'visible' -and
+    $nativeWindow.PageClass -eq 'native-dialog' -and $nativeWindow.DirectoryEdit -eq 'match' -and
+    $nativeWindow.DirectoryBrowse -eq 'match' -and $nativeWindow.DirectoryText -eq 'match'
+  if ($null -eq $pageWindow -and -not $nativeDirectoryPage) { Start-Sleep -Milliseconds 100; continue }
 
   if ($stage -eq 'entry') {
     if ($modeStatus -eq 'present' -and $uiaPageStatus -eq 'install-mode') {
@@ -751,7 +828,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
         Write-WizardEvent -Name 'install-mode-unavailable' -ProcessId $script:installerProcessId
         exit 2
       }
-      $nextControl = Get-OptionNextControl -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle
+      $nextControl = Get-MuiNextControl -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle
       if ($nativeWindow.OptionNext -ne 'match' -or $nextControl.Status -ne 'match' -or
           $nextControl.Handle -eq [IntPtr]::Zero -or $nextControl.Handle -ne $nativeWindow.OptionNextHandle) {
         Write-WizardEvent -Name 'next-unavailable' -ProcessId $script:installerProcessId
@@ -770,7 +847,9 @@ while ([DateTime]::UtcNow -lt $deadline) {
       continue
     }
     if ($modeStatus -eq 'unknown') { Start-Sleep -Milliseconds 100; continue }
-    if ($edits.Count -eq 1 -and $uiaPageStatus -eq 'directory' -and $nativeWindow.NativePage -eq 'directory') {
+    if ($nativeDirectoryPage) {
+      $stage = 'directory'; $snapshot.Stage = $stage
+    } elseif ($edits.Count -eq 1 -and $uiaPageStatus -eq 'directory' -and $nativeWindow.NativePage -eq 'directory') {
       $stage = 'directory'; $snapshot.Stage = $stage
     } elseif ($edits.Count -gt 1) {
       Write-WizardEvent -Name 'destination-unavailable' -ProcessId $script:installerProcessId; exit 2
@@ -781,23 +860,21 @@ while ([DateTime]::UtcNow -lt $deadline) {
   }
 
   if ($stage -eq 'directory') {
-    if ($uiaPageStatus -ne 'directory' -or $nativeWindow.NativePage -ne 'directory') {
+    if (-not $nativeDirectoryPage) {
       Start-Sleep -Milliseconds 100
       continue
     }
-    if ($edits.Count -ne 1) { Write-WizardEvent -Name 'destination-unavailable' -ProcessId $script:installerProcessId; exit 2 }
-    try {
-      if (-not $edits[0].Current.IsEnabled) { throw 'disabled' }
-      $valuePattern = $edits[0].GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-      $valuePattern.SetValue($expectedInstallDir)
-      Write-WizardEvent -Name 'destination-entered' -ProcessId $script:installerProcessId
-      $value = [string]$valuePattern.Current.Value
-      $normalizedValue = [System.IO.Path]::GetFullPath($value).TrimEnd($trimCharacters)
-    } catch {
+    $nativeEdit = Set-NativeDirectoryEdit -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle -PageHandle $nativeWindow.PageHandle -ExpectedValue $expectedInstallDir
+    if ($nativeEdit.SetStatus -ne 'sent') {
       Write-WizardEvent -Name 'destination-unavailable' -ProcessId $script:installerProcessId
       exit 2
     }
-    if (-not [String]::Equals($normalizedValue, $normalizedExpectedDir, [StringComparison]::OrdinalIgnoreCase)) {
+    Write-WizardEvent -Name 'destination-entered' -ProcessId $script:installerProcessId
+    if ($nativeEdit.Readback -eq 'unknown') {
+      Write-WizardEvent -Name 'destination-unavailable' -ProcessId $script:installerProcessId
+      exit 2
+    }
+    if ($nativeEdit.Readback -ne 'match') {
       $destinationStatus = 'mismatch'
       Write-WizardEvent -Name 'destination-mismatch' -ProcessId $script:installerProcessId
       exit 2
@@ -805,32 +882,25 @@ while ([DateTime]::UtcNow -lt $deadline) {
     $destinationVerified = $true
     $destinationStatus = 'match'
     Write-WizardEvent -Name 'destination-verified' -ProcessId $script:installerProcessId
-    if ($next.Count -eq 1 -and $install.Count -eq 0) {
-      $next[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-      Write-WizardEvent -Name 'directory-advanced' -ProcessId $script:installerProcessId
-      $stage = 'installing'
-      Start-Sleep -Milliseconds 100
-      continue
+
+    $nextControl = Get-MuiNextControl -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle
+    if ($nextControl.Status -ne 'match' -or $nextControl.Handle -eq [IntPtr]::Zero) {
+      Write-WizardEvent -Name 'next-unavailable' -ProcessId $script:installerProcessId
+      exit 2
     }
-    if ($install.Count -eq 1 -and $next.Count -eq 0) {
-      $install[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-      Write-WizardEvent -Name 'install-started' -ProcessId $script:installerProcessId
-      $stage = 'installing'
-      Start-Sleep -Milliseconds 100
-      continue
+    $clickResult = [IntPtr]::Zero
+    $sent = [TUSWindowApi]::SendMessageTimeout($nextControl.Handle, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero, 0x0002, 500, [ref]$clickResult)
+    if ($sent -eq [IntPtr]::Zero) {
+      Write-WizardEvent -Name 'next-unavailable' -ProcessId $script:installerProcessId
+      exit 2
     }
-    Write-WizardEvent -Name 'next-unavailable' -ProcessId $script:installerProcessId
-    exit 2
+    Write-WizardEvent -Name 'directory-advanced' -ProcessId $script:installerProcessId
+    $stage = 'installing'
+    Start-Sleep -Milliseconds 100
+    continue
   }
 
   if ($stage -eq 'installing') {
-    if ($install.Count -eq 1 -and $destinationVerified -and $uiaPageStatus -eq 'directory' -and
-        $nativeWindow.NativePage -eq 'directory') {
-      $install[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-      Write-WizardEvent -Name 'install-started' -ProcessId $script:installerProcessId
-      Start-Sleep -Milliseconds 100
-      continue
-    }
     if ($finish.Count -eq 1 -and $uiaPageStatus -eq 'finish') {
       $finish[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
       Write-WizardEvent -Name 'finish-clicked' -ProcessId $script:installerProcessId
