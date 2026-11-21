@@ -128,11 +128,12 @@ function Set-NativeDirectoryEdit {
       $result.Readback = 'match'
     } else {
       $result.Readback = 'mismatch'
-      $result.MismatchClass = 'other'
-      if ($null -ne $normalizedBeforeValue -and
-          [String]::Equals($normalizedBeforeValue, $normalizedValue, [StringComparison]::OrdinalIgnoreCase)) {
+      if ($null -eq $normalizedBeforeValue) {
+        $result.MismatchClass = 'before-read-unavailable'
+      } elseif ([String]::Equals($normalizedBeforeValue, $normalizedValue, [StringComparison]::OrdinalIgnoreCase)) {
         $result.MismatchClass = 'unchanged'
       } else {
+        $result.MismatchClass = 'other'
         $expectedChild = Join-Path $normalizedExpected ([System.IO.Path]::GetFileName($normalizedExpected))
         if ([String]::Equals($normalizedValue, $expectedChild, [StringComparison]::OrdinalIgnoreCase)) {
           $result.MismatchClass = 'product-leaf-appended'
@@ -621,7 +622,7 @@ function Write-WizardEvent {
       'process-found', 'process-ambiguous', 'process-not-found',
       'window-found', 'window-not-found', 'window-mismatch',
       'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-verified', 'destination-unavailable', 'destination-mismatch',
-      'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-other', 'destination-readback-unchanged',
+      'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-other', 'destination-readback-unchanged', 'destination-readback-before-read-unavailable',
       'next-unavailable', 'install-started', 'finish-clicked', 'installer-exited',
       'installer-exited-early', 'installed-executable-missing', 'completed',
       'timeout', 'uia-unavailable', 'automation-failed'
@@ -903,6 +904,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
         'same-parent' { 'destination-readback-same-parent' }
         'same-leaf' { 'destination-readback-same-leaf' }
         'unchanged' { 'destination-readback-unchanged' }
+        'before-read-unavailable' { 'destination-readback-before-read-unavailable' }
         default { 'destination-readback-other' }
       }
       Write-WizardEvent -Name $readbackEvent -ProcessId $script:installerProcessId
