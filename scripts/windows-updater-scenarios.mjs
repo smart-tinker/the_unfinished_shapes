@@ -11,6 +11,7 @@ const safeWizardEvents = new Set([
   'finish-clicked', 'installer-exited',
   'installer-exited-early', 'installed-executable-missing', 'completed',
   'timeout', 'uia-unavailable', 'automation-failed',
+  'cleanup-not-found', 'cleanup-ambiguous', 'cleanup-stopped', 'cleanup-failed',
 ]);
 const safeHandoffStages = new Set([
   'source-setup-started', 'source-setup-complete', 'source-identity-verified', 'source-fixture-verified',

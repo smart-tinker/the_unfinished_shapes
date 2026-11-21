@@ -724,12 +724,16 @@ test('Windows relaunch failure cleanup stops only the exact verified Setup path'
       '-InstallerPath', exactPath,
       '-ExpectedInstallDir', path.join(root, 'install'),
       '-CleanupOnly',
-    ], { timeout: 10000, maxBuffer: 65536, windowsHide: true });
+    ], { timeout: 15000, maxBuffer: 65536, windowsHide: true });
   } catch {
-    throw new Error('exact-path installer cleanup did not complete');
+    assert.equal(exact.exitCode, null, 'the exact-path process remains active if cleanup is unavailable');
+    throw new Error('exact-path installer cleanup did not stop the matched process');
   }
 
-  assert.match(result.stdout, /^TUS_NSIS_WIZARD event=cleanup-stopped pid=\\d+$/m);
+  const event = `TUS_NSIS_WIZARD event=cleanup-stopped pid=${exact.pid}`;
+  assert.deepEqual(safeNsisWizardEvents(result.stdout), [event]);
+  assert.equal(result.stdout.includes(exactPath), false, 'cleanup output does not expose the verified path');
+  assert.equal(result.stdout.includes(otherPath), false, 'cleanup output does not expose unrelated paths');
   await waitForExit(exact, 5000);
   assert.equal(other.exitCode, null, 'cleanup leaves a different executable path untouched');
 });

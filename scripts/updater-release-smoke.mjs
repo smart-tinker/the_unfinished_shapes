@@ -522,6 +522,30 @@ async function runWindowsNsisWizard(installerPath, expectedInstallDir) {
   }
 }
 
+async function cleanupWindowsNsisInstaller(installerPath, expectedInstallDir) {
+  const args = [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+    '-File', 'scripts/windows-nsis-wizard.ps1',
+    '-InstallerPath', path.resolve(installerPath),
+    '-ExpectedInstallDir', path.resolve(expectedInstallDir),
+    '-CleanupOnly',
+  ];
+  let output = '';
+  try {
+    output = (await execute('powershell.exe', args, { timeout: 15000, maxBuffer: 65536, windowsHide: true })).stdout || '';
+  } catch (error) {
+    logNsisWizardEvents(error.stdout || '');
+    throw new Error('The exact verified installer cleanup did not complete.');
+  }
+  const events = safeNsisWizardEvents(output);
+  logNsisWizardEvents(output);
+  if (events.length === 1 && (
+    events[0] === 'TUS_NSIS_WIZARD event=cleanup-not-found' ||
+    events[0].startsWith('TUS_NSIS_WIZARD event=cleanup-stopped pid=')
+  )) return;
+  throw new Error('The exact verified installer cleanup did not complete.');
+}
+
 async function runIndependentWindowsScenario(distribution) {
   let diagnostic = {
     stage: distribution === 'installer' ? 'source-setup' : 'source-identity',
@@ -849,8 +873,14 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
       waitForExit,
       cleanup: async (startedChild, failure) => {
         assert.equal(startedChild, child, 'relaunch cleanup uses the exact started updater child');
-        if (failure) await closeActive('failed installer relaunch');
-        else await closeAfterQuit(closing, Promise.resolve());
+        if (failure) {
+          let closeFailure;
+          try { await closeActive('failed installer relaunch'); } catch (error) { closeFailure = error; }
+          await cleanupWindowsNsisInstaller(downloadedPath, handoffProfile.installDir);
+          if (closeFailure) throw closeFailure;
+        } else {
+          await closeAfterQuit(closing, Promise.resolve());
+        }
       },
     });
   } else {

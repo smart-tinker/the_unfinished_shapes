@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory=$true)][string]$InstallerPath,
   [Parameter(Mandatory=$true)][string]$ExpectedInstallDir,
-  [ValidateRange(30,180)][int]$TimeoutSeconds = 180
+  [ValidateRange(30,180)][int]$TimeoutSeconds = 180,
+  [switch]$CleanupOnly
 )
 $ErrorActionPreference = 'Stop'
 $script:installerProcessId = 0
@@ -35,6 +36,63 @@ try {
   Add-Type -TypeDefinition $nativeWindowApi -ErrorAction Stop | Out-Null
   $script:nativeWindowApiAvailable = $true
 } catch {}
+function Write-CleanupEvent {
+  param(
+    [Parameter(Mandatory=$true)]
+    [ValidateSet('not-found', 'ambiguous', 'stopped', 'failed')][string]$Name,
+    [int]$ProcessId = 0
+  )
+  if ($ProcessId -gt 0) { [Console]::Out.WriteLine("TUS_NSIS_WIZARD event=cleanup-$Name pid=$ProcessId") }
+  else { [Console]::Out.WriteLine("TUS_NSIS_WIZARD event=cleanup-$Name") }
+  [Console]::Out.Flush()
+}
+function Get-ExactInstallerProcesses {
+  param([string]$Path)
+  foreach ($candidate in [Diagnostics.Process]::GetProcesses()) {
+    try {
+      $candidate.Refresh()
+      $candidatePath = [System.IO.Path]::GetFullPath($candidate.MainModule.FileName)
+      if ([String]::Equals($candidatePath, $Path, [StringComparison]::OrdinalIgnoreCase)) { $candidate }
+    } catch {}
+  }
+}
+
+if ($CleanupOnly) {
+  try { $installerPath = [System.IO.Path]::GetFullPath($InstallerPath) }
+  catch { Write-CleanupEvent -Name 'failed'; exit 2 }
+
+  $process = $null
+  $searchDeadline = [DateTime]::UtcNow.AddSeconds(5)
+  do {
+    try { $installerProcesses = @(Get-ExactInstallerProcesses -Path $installerPath) }
+    catch { Write-CleanupEvent -Name 'failed'; exit 2 }
+    if ($installerProcesses.Count -gt 1) { Write-CleanupEvent -Name 'ambiguous'; exit 2 }
+    if ($installerProcesses.Count -eq 1) { $process = $installerProcesses[0]; break }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $searchDeadline)
+  if (-not $process) { Write-CleanupEvent -Name 'not-found'; exit 0 }
+
+  $processId = $process.Id
+  try {
+    $installerProcesses = @(Get-ExactInstallerProcesses -Path $installerPath)
+    if ($installerProcesses.Count -eq 0) { Write-CleanupEvent -Name 'not-found'; exit 0 }
+    if ($installerProcesses.Count -ne 1) { Write-CleanupEvent -Name 'ambiguous'; exit 2 }
+    $process = $installerProcesses[0]
+    $processId = $process.Id
+    $taskkillPath = Join-Path $env:SystemRoot 'System32/taskkill.exe'
+    & $taskkillPath /PID $processId /T /F *> $null
+    $stopDeadline = [DateTime]::UtcNow.AddSeconds(5)
+    while ([DateTime]::UtcNow -lt $stopDeadline) {
+      if ($process.WaitForExit(100)) {
+        Write-CleanupEvent -Name 'stopped' -ProcessId $processId
+        exit 0
+      }
+    }
+  } catch {}
+  Write-CleanupEvent -Name 'failed' -ProcessId $processId
+  exit 2
+}
+
 function Get-SafeControlCount {
   param([int]$Count)
   if ($Count -le 0) { return 'none' }
@@ -732,16 +790,7 @@ try {
 $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
 $process = $null
 while ([DateTime]::UtcNow -lt $deadline -and -not $process) {
-  $matchedProcesses = @()
-  foreach ($candidate in [Diagnostics.Process]::GetProcesses()) {
-    try {
-      $candidate.Refresh()
-      $candidatePath = [System.IO.Path]::GetFullPath($candidate.MainModule.FileName)
-      if ([String]::Equals($candidatePath, $installerPath, [StringComparison]::OrdinalIgnoreCase)) {
-        $matchedProcesses += $candidate
-      }
-    } catch {}
-  }
+  $matchedProcesses = @(Get-ExactInstallerProcesses -Path $installerPath)
   if ($matchedProcesses.Count -gt 1) {
     Write-WizardEvent -Name 'process-ambiguous'
     exit 2
