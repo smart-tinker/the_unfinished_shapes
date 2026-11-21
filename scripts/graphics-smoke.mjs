@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
 
+export function waitForExit(child, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    if (child.exitCode !== null) return resolve();
+    const timer = setTimeout(() => reject(new Error('The packaged updater process did not exit after confirmed launch.')), timeoutMs);
+    child.once('exit', () => { clearTimeout(timer); resolve(); });
+  });
+}
+
 // Preserve the first failure and still attempt every independent cleanup action.
 export async function withSmokeCleanup(work, ...cleanup) {
   const errors = [];

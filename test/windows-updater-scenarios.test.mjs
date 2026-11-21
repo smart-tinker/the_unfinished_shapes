@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { waitForExit } from '../scripts/graphics-smoke.mjs';
 import { test } from 'node:test';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents } from '../scripts/windows-updater-scenarios.mjs';
+import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents } from '../scripts/windows-updater-scenarios.mjs';
 
 test('Windows installer acceptance still runs when portable acceptance fails', async () => {
   const calls = [];
@@ -577,4 +579,65 @@ test('Windows installer relaunch failures preserve fixed safe stage enums', asyn
   }
   assert.deepEqual(await diagnosticFor('relaunch-C:/private/path'), { stage: 'unknown', category: 'other' });
   assert.equal(JSON.stringify(stages).includes('C:/private'), false);
+});
+
+test('installer click rejection is separate and cleanup receives the exact started child', async () => {
+  const child = { exitCode: null };
+  const clickFailure = Object.assign(new Error('C:/private/click failure'), { name: 'TimeoutError' });
+  let cleanedChild;
+  const outcomes = await runWindowsUpdaterScenarios({
+    portable: async () => {},
+    installer: () => runWindowsRelaunch({
+      child,
+      click: async () => { throw clickFailure; },
+      waitForExit: async observedChild => { assert.equal(observedChild, child); },
+      cleanup: async observedChild => { cleanedChild = observedChild; },
+    }),
+  });
+
+  assert.equal(cleanedChild, child);
+  assert.equal(outcomes.installer.error, clickFailure);
+  assert.deepEqual(outcomes.installer.diagnostic, { stage: 'relaunch-click', category: 'timeout' });
+  assert.doesNotMatch(JSON.stringify(outcomes.installer.diagnostic), /C:\/private/);
+});
+
+test('installer bounded source exit timeout is distinct and cleans its exact child', async () => {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  let cleanedChild;
+  const outcomes = await runWindowsUpdaterScenarios({
+    portable: async () => {},
+    installer: () => runWindowsRelaunch({
+      child,
+      click: async () => {},
+      waitForExit: observedChild => waitForExit(observedChild, 5),
+      cleanup: async observedChild => { cleanedChild = observedChild; },
+    }),
+  });
+
+  assert.equal(cleanedChild, child);
+  assert.equal(outcomes.installer.error?.code, 'ETIMEDOUT');
+  assert.deepEqual(outcomes.installer.diagnostic, { stage: 'relaunch-source-exit', category: 'timeout' });
+  assert.equal(child.listenerCount('exit'), 0);
+});
+
+test('installer relaunch cleanup failure is distinct and does not expose details', async () => {
+  const child = { exitCode: 0 };
+  const cleanupFailure = new Error('C:/private/cleanup failure');
+  const outcomes = await runWindowsUpdaterScenarios({
+    portable: async () => {},
+    installer: () => runWindowsRelaunch({
+      child,
+      click: async () => {},
+      waitForExit: async observedChild => { assert.equal(observedChild, child); },
+      cleanup: async observedChild => {
+        assert.equal(observedChild, child);
+        throw cleanupFailure;
+      },
+    }),
+  });
+
+  assert.equal(outcomes.installer.error, cleanupFailure);
+  assert.deepEqual(outcomes.installer.diagnostic, { stage: 'relaunch-cleanup', category: 'other' });
+  assert.doesNotMatch(JSON.stringify(outcomes.installer.diagnostic), /C:\/private/);
 });

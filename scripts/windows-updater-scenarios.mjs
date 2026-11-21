@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { safeUpdaterFailureCode } from '../src/update-package.mjs';
 
 const safeWizardEvents = new Set([
   'process-found', 'process-ambiguous', 'process-not-found',
@@ -77,6 +78,47 @@ export function safeInstallerHandoffEvents(output) {
     }
     return [];
   });
+}
+
+function windowsScenarioFailureCategory(error) {
+  if (error?.name === 'TimeoutError' || ['ETIMEDOUT', 'ERR_SCRIPT_EXECUTION_TIMEOUT'].includes(error?.code)) return 'timeout';
+  const childOutput = String(error?.stdout || '') + String(error?.stderr || '');
+  if (error?.code === 'ERR_ASSERTION' || childOutput.includes('AssertionError [ERR_ASSERTION]')) return 'assertion';
+  if (['EACCES', 'EPERM', 'ENOENT', 'ENOSPC', 'EIO'].includes(error?.code)) return 'filesystem';
+  if (['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed'].includes(error?.code)) return error.code;
+  const failureCode = safeUpdaterFailureCode(error?.failureCode);
+  if (['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed'].includes(failureCode)) return failureCode;
+  if (failureCode === 'SIGNATURE_REJECTED') return 'provenance';
+  if (Number.isInteger(error?.code)) return 'process-exit';
+  return 'other';
+}
+
+export async function runWindowsRelaunch({ child, click, waitForExit, cleanup }) {
+  let order = 0;
+  const capture = (stage, operation) => Promise.resolve().then(operation).then(() => null, error => {
+    const failure = error instanceof Error ? error : new Error('Windows updater relaunch failed.');
+    failure.tusScenarioDiagnostic = { stage, category: windowsScenarioFailureCategory(failure) };
+    return { order: order++, error: failure };
+  });
+  const [clickFailure, exitFailure] = await Promise.all([
+    capture('relaunch-click', click),
+    capture('relaunch-source-exit', () => waitForExit(child)),
+  ]);
+  const failures = [clickFailure, exitFailure].filter(Boolean).sort((left, right) => left.order - right.order);
+  const primary = failures[0]?.error;
+  let cleanupFailure = null;
+  try { await cleanup(child, primary); } catch (error) {
+    const failure = error instanceof Error ? error : new Error('Windows updater cleanup failed.');
+    failure.tusScenarioDiagnostic = { stage: 'relaunch-cleanup', category: windowsScenarioFailureCategory(failure) };
+    cleanupFailure = failure;
+  }
+  if (primary && cleanupFailure) {
+    const combined = new AggregateError([primary, cleanupFailure], 'Windows updater relaunch and cleanup failed', { cause: primary });
+    combined.tusScenarioDiagnostic = primary.tusScenarioDiagnostic;
+    throw combined;
+  }
+  if (primary) throw primary;
+  if (cleanupFailure) throw cleanupFailure;
 }
 
 function safeScenarioDiagnostic(error) {

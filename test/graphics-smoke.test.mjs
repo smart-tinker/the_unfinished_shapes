@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import vm from 'node:vm';
-import { isGraphicsFailure, observeGraphics, closeSmokeApp, withSmokeCleanup } from '../scripts/graphics-smoke.mjs';
+import { isGraphicsFailure, observeGraphics, closeSmokeApp, waitForExit, withSmokeCleanup } from '../scripts/graphics-smoke.mjs';
 
 function fakePage({ messages = [], errors = [] } = {}) {
   const page = new EventEmitter();
@@ -197,3 +197,12 @@ test('initial GL snapshot is captured while healthy before later loss', async ()
   assert.equal(initial.state.available, true);
 });
 
+
+test('bounded child exit timeout uses ETIMEDOUT and releases its listener', async () => {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  const error = await waitForExit(child, 5).then(() => null, failure => failure);
+
+  assert.equal(error?.code, 'ETIMEDOUT');
+  assert.equal(child.listenerCount('exit'), 0);
+});

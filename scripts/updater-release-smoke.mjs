@@ -8,11 +8,11 @@ import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import { compareReleaseVersions } from '../src/update-release.mjs';
-import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, verifyReleaseAttestation } from '../src/update-package.mjs';
-import { closeSmokeApp, observeGraphics, withSmokeCleanup } from './graphics-smoke.mjs';
+import { safeVerifierCode, safeVerifierErrorType, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { closeSmokeApp, observeGraphics, waitForExit, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
-import { runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, windowsInstallerHandoffInstallDir } from './windows-updater-scenarios.mjs';
+import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory, windowsInstallerHandoffInstallDir } from './windows-updater-scenarios.mjs';
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
 const updateHttpStatusPattern = /\bHTTP (\d{3})\b/;
@@ -43,14 +43,6 @@ let active = null;
 const platform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
 const runnerFlags = process.platform === 'linux' || process.platform === 'win32'
   ? ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader'] : [];
-
-function waitForExit(child, timeoutMs = 30000) {
-  return new Promise((resolve, reject) => {
-    if (child.exitCode !== null) return resolve();
-    const timer = setTimeout(() => reject(new Error('The packaged updater process did not exit after confirmed launch.')), timeoutMs);
-    child.once('exit', () => { clearTimeout(timer); resolve(); });
-  });
-}
 
 function withTimeout(promise, label, timeoutMs = 30000) {
   let timer;
@@ -159,19 +151,6 @@ async function assertInstalledSourceIdentity(current, profile) {
   }));
   assert.equal(path.resolve(identity.executable).toLowerCase() === path.resolve(profile.installedExe).toLowerCase(), true, 'the updater process is the installed source executable');
   assert.equal(path.resolve(identity.userData).toLowerCase() === path.resolve(profile.userData).toLowerCase(), true, 'the updater process uses the source profile user-data directory');
-}
-
-function windowsScenarioFailureCategory(error) {
-  if (error?.name === 'TimeoutError' || ['ETIMEDOUT', 'ERR_SCRIPT_EXECUTION_TIMEOUT'].includes(error?.code)) return 'timeout';
-  const childOutput = String(error?.stdout || '') + String(error?.stderr || '');
-  if (error?.code === 'ERR_ASSERTION' || childOutput.includes('AssertionError [ERR_ASSERTION]')) return 'assertion';
-  if (['EACCES', 'EPERM', 'ENOENT', 'ENOSPC', 'EIO'].includes(error?.code)) return 'filesystem';
-  if (['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed'].includes(error?.code)) return error.code;
-  const failureCode = safeUpdaterFailureCode(error?.failureCode);
-  if (['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed'].includes(failureCode)) return failureCode;
-  if (failureCode === 'SIGNATURE_REJECTED') return 'provenance';
-  if (Number.isInteger(error?.code)) return 'process-exit';
-  return 'other';
 }
 
 async function fileDigest(filePath) {
@@ -476,7 +455,7 @@ async function runWindowsInstallerMode(mode, profile, { installerPath, expectedV
             : lastStage === 'source-setup-complete' ? 'source-identity'
               : lastStage === 'source-identity-verified' || lastStage === 'source-fixture-verified' ? 'source-prepare' : 'source-setup';
       const failure = new Error('Windows installer smoke failed.');
-      failure.tusScenarioDiagnostic = { stage, category: check || windowsScenarioFailureCategory(error) };
+      failure.tusScenarioDiagnostic = { stage, category: check || safeWindowsScenarioFailureCategory(error) };
       throw failure;
     }
     console.log(result.stdout);
@@ -529,7 +508,7 @@ async function runWindowsNsisWizard(installerPath, expectedInstallDir) {
     logNsisWizardEvents(output);
     const pid = events.find(line => line.startsWith('TUS_NSIS_WIZARD event=process-found'))?.split('pid=')[1];
     if (pid) await execute('taskkill.exe', ['/PID', pid, '/T', '/F'], { timeout: 5000 }).catch(() => {});
-    const category = events.some(line => line.includes('event=timeout')) || windowsScenarioFailureCategory(error) === 'timeout'
+    const category = events.some(line => line.includes('event=timeout')) || safeWindowsScenarioFailureCategory(error) === 'timeout'
       ? 'timeout' : events.some(line => line.includes('event=uia-unavailable') || line.includes('event=automation-failed'))
         ? 'uia' : 'process-exit';
     const failure = new Error('The exact published installer wizard did not complete.');
@@ -557,7 +536,7 @@ async function runIndependentWindowsScenario(distribution) {
     const failure = new Error('Windows updater scenario failed.');
     failure.tusScenarioDiagnostic = {
       stage: detail?.stage || diagnostic.stage,
-      category: detail?.category || diagnostic.category || windowsScenarioFailureCategory(error),
+      category: detail?.category || diagnostic.category || safeWindowsScenarioFailureCategory(error),
     };
     throw failure;
   }
@@ -859,12 +838,29 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   await current.instance.evaluate(() => { globalThis.__tusUpdateChoice = 1; });
 
   const closing = current;
-  const exit = waitForExit(closing.instance.process());
-  const click = closing.page.locator('#updates-launch').click({ timeout: 10000 }).catch(error => {
-    if (closing.instance.process().exitCode === null) throw error;
-  });
-  setDiagnostic(distribution === 'installer' ? 'relaunch-exit' : 'relaunch');
-  await Promise.all([click, closeAfterQuit(closing, exit)]);
+  if (distribution === 'installer') {
+    const child = closing.instance.process();
+    setDiagnostic('relaunch-click');
+    await runWindowsRelaunch({
+      child,
+      click: () => closing.page.locator('#updates-launch').click({ timeout: 10000 }).catch(error => {
+        if (child.exitCode === null) throw error;
+      }),
+      waitForExit,
+      cleanup: async (startedChild, failure) => {
+        assert.equal(startedChild, child, 'relaunch cleanup uses the exact started updater child');
+        if (failure) await closeActive('failed installer relaunch');
+        else await closeAfterQuit(closing, Promise.resolve());
+      },
+    });
+  } else {
+    const exit = waitForExit(closing.instance.process());
+    const click = closing.page.locator('#updates-launch').click({ timeout: 10000 }).catch(error => {
+      if (closing.instance.process().exitCode === null) throw error;
+    });
+    setDiagnostic('relaunch');
+    await Promise.all([click, closeAfterQuit(closing, exit)]);
+  }
 
   setDiagnostic(distribution === 'installer' ? 'relaunch-prompt' : 'relaunch');
   const prompt = JSON.parse(await readFile(path.join(workDir, 'update-dialog.json'), 'utf8'));
