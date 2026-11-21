@@ -651,6 +651,33 @@ test('installer relaunch cleanup failure is distinct and does not expose details
 });
 
 
+test('NSIS UIA fallback trusts the verified native Edit and ValuePattern over UIA type label', async () => {
+  const source = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const fallbackStart = source.indexOf('function Set-NativeDirectoryEditWithUIA {');
+  const fallbackEnd = source.indexOf(String.fromCharCode(10) + 'function Set-NativeDirectoryEdit {', fallbackStart);
+  const setterEnd = source.indexOf(String.fromCharCode(10) + 'function Get-NativeRadioSelection', fallbackEnd);
+  assert.ok(fallbackStart >= 0 && fallbackEnd > fallbackStart && setterEnd > fallbackEnd);
+  const fallback = source.slice(fallbackStart, fallbackEnd);
+  const setter = source.slice(fallbackEnd, setterEnd);
+
+  for (const identity of [
+    '[System.Windows.Automation.AutomationElement]::FromHandle($Control)',
+    '$uiCurrent.ProcessId -ne $ProcessId',
+    '[IntPtr]$uiCurrent.NativeWindowHandle -ne $Control',
+    '$uiCurrent.IsOffscreen',
+    '-not $uiCurrent.IsEnabled',
+    '$valuePattern.Current.IsReadOnly',
+    '$valuePattern.SetValue($ExpectedValue)',
+    "[TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $Control",
+    "$controlClass.ToString() -ne 'Edit'",
+  ]) assert.ok(fallback.includes(identity) || setter.includes(identity), 'exact native/UIA value identity remains guarded: ' + identity);
+
+  assert.equal(fallback.includes('$uiCurrent.ControlType'), false,
+    'the confirmed type-label mismatch cannot reject a native Edit 1019 with the matching HWND');
+  assert.ok(fallback.includes("return 'postset-mismatch'") &&
+    fallback.includes('[TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $Control'),
+    'post-set native provenance remains fail-closed');
+});
 test('NSIS directory UIA fallback is bound to the same writable native Edit and read back', async () => {
   const source = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
   const fallbackStart = source.indexOf('function Set-NativeDirectoryEditWithUIA {');
