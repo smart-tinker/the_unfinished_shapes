@@ -255,3 +255,38 @@ test('NSIS snapshot maps the production writer fields and rejects private option
   assert.equal(script.includes('option-next=$OptionNext'), true);
   assert.equal(script.includes('caption=$Caption'), false);
 });
+
+test('NSIS directory target uses native Edit 1019 and exact readback before install', async () => {
+  const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const setterStart = script.indexOf('function Set-NativeDirectoryEdit');
+  const setterEnd = script.indexOf('function Get-NativeRadioSelection', setterStart);
+  assert.ok(setterStart >= 0 && setterEnd > setterStart, 'the native directory edit writer exists');
+  const setter = script.slice(setterStart, setterEnd);
+  for (const check of [
+    'GetDlgItem($PageHandle, 1019)',
+    'GetWindowThreadProcessId($control',
+    'GetParent($control) -ne $PageHandle',
+    'GetClassName($control',
+    'IsWindowVisible($control)',
+    'IsWindowEnabled($control)',
+    'SendMessageTimeout($control, 0x000C',
+    'SendMessageTimeout($control, 0x000D',
+    '[System.IO.Path]::GetFullPath($value)',
+  ]) assert.ok(setter.includes(check), 'native Edit setter keeps the verified control and exact readback: ' + check);
+
+  const directoryStart = script.indexOf("if ($stage -eq 'directory') {");
+  const installStart = script.indexOf("if ($stage -eq 'installing') {", directoryStart);
+  assert.ok(directoryStart >= 0 && installStart > directoryStart);
+  const directory = script.slice(directoryStart, installStart);
+  const setAt = directory.indexOf('Set-NativeDirectoryEdit -ProcessId $script:installerProcessId');
+  const enteredAt = directory.indexOf("Write-WizardEvent -Name 'destination-entered'");
+  const verifiedAt = directory.indexOf("Write-WizardEvent -Name 'destination-verified'");
+  const clickAt = directory.indexOf('SendMessageTimeout($nextControl.Handle, 0x00F5');
+  assert.ok(setAt >= 0 && enteredAt > setAt && verifiedAt > enteredAt && clickAt > verifiedAt,
+    'the exact native field readback precedes any wizard advance');
+  assert.ok(directory.includes("$nativeWindow.NativePage -ne 'directory'"));
+  assert.equal(directory.includes("$uiaPageStatus -ne 'directory'"), false,
+    'a missing UIA page label does not block the independently verified native Directory controls');
+  assert.equal(directory.includes('$valuePattern.SetValue'), false,
+    'destination entry does not depend on the unavailable UIA ValuePattern');
+});
