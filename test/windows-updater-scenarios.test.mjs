@@ -161,7 +161,7 @@ test('NSIS timeout snapshot identifies pinned MUI page controls without exposing
   for (const controlId of ['1019', '1001', '1006', '1004']) assert.ok(script.includes('-ControlId ' + controlId));
   assert.ok(script.includes('[System.Windows.Automation.ControlType]::ProgressBar'));
   assert.ok(script.includes('native-page=$NativePage'));
-  assert.ok(script.indexOf('if ($null -eq $pageWindow)') < script.indexOf('$selection.Select()'));
+  assert.ok(script.indexOf("if ($null -eq $pageWindow -and -not $nativeDirectoryPage)") < script.indexOf('$selection.Select()'));
   assert.ok(script.indexOf("if ($null -eq $pageWindow -and -not $nativeDirectoryPage)") < script.indexOf("if ($stage -eq 'directory') {"));
 });
 
@@ -270,7 +270,7 @@ test('NSIS directory target uses native Edit 1019 and exact readback before inst
     'IsWindowVisible($control)',
     'IsWindowEnabled($control)',
     'SendMessageTimeout($control, 0x000C',
-    'SendMessageTimeout($control, 0x000D',
+    'SendMessageTimeout($Control, 0x000D',
     '[System.IO.Path]::GetFullPath($value)',
   ]) assert.ok(setter.includes(check), 'native Edit setter keeps the verified control and exact readback: ' + check);
 
@@ -284,7 +284,7 @@ test('NSIS directory target uses native Edit 1019 and exact readback before inst
   const clickAt = directory.indexOf('SendMessageTimeout($nextControl.Handle, 0x00F5');
   assert.ok(setAt >= 0 && enteredAt > setAt && verifiedAt > enteredAt && clickAt > verifiedAt,
     'the exact native field readback precedes any wizard advance');
-  assert.ok(directory.includes("$nativeWindow.NativePage -ne 'directory'"));
+  assert.ok(directory.includes('if (-not $nativeDirectoryPage)'));
   assert.equal(directory.includes("$uiaPageStatus -ne 'directory'"), false,
     'a missing UIA page label does not block the independently verified native Directory controls');
   assert.equal(directory.includes('$valuePattern.SetValue'), false,
