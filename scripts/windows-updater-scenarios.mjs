@@ -3,8 +3,8 @@ import path from 'node:path';
 const safeWizardEvents = new Set([
   'process-found', 'process-ambiguous', 'process-not-found',
   'window-found', 'window-not-found', 'window-mismatch',
-  'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-verified', 'destination-unavailable', 'destination-mismatch',
-  'destination-set-precondition-unavailable', 'destination-set-provenance-unavailable', 'destination-set-control-unavailable', 'destination-set-prepare-unavailable', 'destination-set-message-failed', 'destination-set-exception', 'destination-set-unknown',
+  'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-verified', 'destination-unavailable', 'destination-mismatch', 'destination-edits-ambiguous',
+  'destination-set-precondition-unavailable', 'destination-set-provenance-unavailable', 'destination-set-control-unavailable', 'destination-set-message-failed', 'destination-set-exception', 'destination-set-unknown',
   'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-same-root', 'destination-readback-different-root', 'destination-readback-other', 'destination-readback-unchanged', 'destination-before-read-unavailable', 'destination-before-read-empty', 'destination-before-read-invalid',
   'next-unavailable', 'install-started',
   'finish-clicked', 'installer-exited',
