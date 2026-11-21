@@ -1,7 +1,7 @@
 import { safeArchiveExtractionOperation, safeArchiveExtractionStage, safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType } from '../src/update-package.mjs';
 import { safeUpdaterModuleName } from '../src/update-release.mjs';
 
-export const updaterZipStreamSampleOffsetsMs = Object.freeze([15_000, 35_000, 55_000, 75_000, 95_000]);
+export const updaterZipStreamSampleOffsetsMs = Object.freeze([15_000, 35_000, 55_000, 75_000, 95_000, 110_000]);
 
 const safeVerifierSetupStages = new Set([
   'tuf-get-trusted-root', 'trust-material', 'verifier-construction',
