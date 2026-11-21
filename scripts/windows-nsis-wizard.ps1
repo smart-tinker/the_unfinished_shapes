@@ -129,6 +129,67 @@ function Get-NativeDirectoryEditText {
   }
 }
 
+function Set-NativeDirectoryEditWithUIA {
+  param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [IntPtr]$Control, [string]$ExpectedValue, [object[]]$AutomationEdits = @())
+  $uiEdits = @($AutomationEdits | Where-Object {
+    try { [IntPtr]$_.Current.NativeWindowHandle -eq $Control } catch { $false }
+  })
+  if ($uiEdits.Count -ne 1) { return $false }
+  $uiEdit = $uiEdits[0]
+  if ($uiEdit.Current.ProcessId -ne $ProcessId -or
+      [IntPtr]$uiEdit.Current.NativeWindowHandle -ne $Control -or
+      $uiEdit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit -or
+      $uiEdit.Current.IsOffscreen -or -not $uiEdit.Current.IsEnabled) { return $false }
+
+  $mainProcessId = [uint32]0
+  $mainThreadId = [TUSWindowApi]::GetWindowThreadProcessId($MainWindowHandle, [ref]$mainProcessId)
+  $pageProcessId = [uint32]0
+  $pageThreadId = [TUSWindowApi]::GetWindowThreadProcessId($PageHandle, [ref]$pageProcessId)
+  $controlProcessId = [uint32]0
+  $controlThreadId = [TUSWindowApi]::GetWindowThreadProcessId($Control, [ref]$controlProcessId)
+  $pageClass = [System.Text.StringBuilder]::new(128)
+  $controlClass = [System.Text.StringBuilder]::new(128)
+  if ($mainThreadId -eq 0 -or $mainProcessId -ne $ProcessId -or
+      $pageThreadId -eq 0 -or $pageProcessId -ne $ProcessId -or
+      [TUSWindowApi]::GetParent($PageHandle) -ne $MainWindowHandle -or
+      -not [TUSWindowApi]::IsWindowVisible($PageHandle) -or
+      [TUSWindowApi]::GetClassName($PageHandle, $pageClass, $pageClass.Capacity) -le 0 -or
+      $pageClass.ToString() -ne '#32770' -or
+      $controlThreadId -eq 0 -or $controlProcessId -ne $ProcessId -or
+      [TUSWindowApi]::GetParent($Control) -ne $PageHandle -or
+      [TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $Control -or
+      [TUSWindowApi]::GetClassName($Control, $controlClass, $controlClass.Capacity) -le 0 -or
+      $controlClass.ToString() -ne 'Edit' -or
+      -not [TUSWindowApi]::IsWindowVisible($Control) -or
+      -not [TUSWindowApi]::IsWindowEnabled($Control)) { return $false }
+
+  $valuePattern = $uiEdit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+  if ($valuePattern.Current.IsReadOnly) { return $false }
+  $valuePattern.SetValue($ExpectedValue)
+
+  $mainProcessId = [uint32]0
+  $mainThreadId = [TUSWindowApi]::GetWindowThreadProcessId($MainWindowHandle, [ref]$mainProcessId)
+  $pageProcessId = [uint32]0
+  $pageThreadId = [TUSWindowApi]::GetWindowThreadProcessId($PageHandle, [ref]$pageProcessId)
+  $controlProcessId = [uint32]0
+  $controlThreadId = [TUSWindowApi]::GetWindowThreadProcessId($Control, [ref]$controlProcessId)
+  $pageClass = [System.Text.StringBuilder]::new(128)
+  $controlClass = [System.Text.StringBuilder]::new(128)
+  return ($mainThreadId -ne 0 -and $mainProcessId -eq $ProcessId -and
+      $pageThreadId -ne 0 -and $pageProcessId -eq $ProcessId -and
+      [TUSWindowApi]::GetParent($PageHandle) -eq $MainWindowHandle -and
+      [TUSWindowApi]::IsWindowVisible($PageHandle) -and
+      [TUSWindowApi]::GetClassName($PageHandle, $pageClass, $pageClass.Capacity) -gt 0 -and
+      $pageClass.ToString() -eq '#32770' -and
+      $controlThreadId -ne 0 -and $controlProcessId -eq $ProcessId -and
+      [TUSWindowApi]::GetParent($Control) -eq $PageHandle -and
+      [TUSWindowApi]::GetDlgItem($PageHandle, 1019) -eq $Control -and
+      [TUSWindowApi]::GetClassName($Control, $controlClass, $controlClass.Capacity) -gt 0 -and
+      $controlClass.ToString() -eq 'Edit' -and
+      [TUSWindowApi]::IsWindowVisible($Control) -and
+      [TUSWindowApi]::IsWindowEnabled($Control))
+}
+
 function Set-NativeDirectoryEdit {
   param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [string]$ExpectedValue, [object[]]$AutomationEdits = @())
   $result = [ordered]@{ SetStatus = 'unavailable'; SetFailureStage = 'precondition'; SetMethod = 'none'; BeforeReadClass = 'unavailable'; PostSetControlStatus = 'unknown'; Readback = 'unknown'; MismatchClass = 'unknown' }
@@ -193,41 +254,9 @@ function Set-NativeDirectoryEdit {
       [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
     }
     if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) {
-      $uiEdits = @($AutomationEdits | Where-Object {
-        try { [IntPtr]$_.Current.NativeWindowHandle -eq $control } catch { $false }
-      })
-      if ($uiEdits.Count -ne 1) { return [pscustomobject]$result }
-      $uiEdit = $uiEdits[0]
-      if ($uiEdit.Current.ProcessId -ne $ProcessId -or
-          [IntPtr]$uiEdit.Current.NativeWindowHandle -ne $control -or
-          $uiEdit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit -or
-          $uiEdit.Current.IsOffscreen -or -not $uiEdit.Current.IsEnabled) { return [pscustomobject]$result }
-
-      $fallbackMainProcessId = [uint32]0
-      $fallbackMainThreadId = [TUSWindowApi]::GetWindowThreadProcessId($MainWindowHandle, [ref]$fallbackMainProcessId)
-      $fallbackPageProcessId = [uint32]0
-      $fallbackPageThreadId = [TUSWindowApi]::GetWindowThreadProcessId($PageHandle, [ref]$fallbackPageProcessId)
-      $fallbackControlProcessId = [uint32]0
-      $fallbackControlThreadId = [TUSWindowApi]::GetWindowThreadProcessId($control, [ref]$fallbackControlProcessId)
-      $fallbackPageClass = [System.Text.StringBuilder]::new(128)
-      $fallbackControlClass = [System.Text.StringBuilder]::new(128)
-      if ($fallbackMainThreadId -eq 0 -or $fallbackMainProcessId -ne $ProcessId -or
-          $fallbackPageThreadId -eq 0 -or $fallbackPageProcessId -ne $ProcessId -or
-          [TUSWindowApi]::GetParent($PageHandle) -ne $MainWindowHandle -or
-          -not [TUSWindowApi]::IsWindowVisible($PageHandle) -or
-          [TUSWindowApi]::GetClassName($PageHandle, $fallbackPageClass, $fallbackPageClass.Capacity) -le 0 -or
-          $fallbackPageClass.ToString() -ne '#32770' -or
-          $fallbackControlThreadId -eq 0 -or $fallbackControlProcessId -ne $ProcessId -or
-          [TUSWindowApi]::GetParent($control) -ne $PageHandle -or
-          [TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $control -or
-          [TUSWindowApi]::GetClassName($control, $fallbackControlClass, $fallbackControlClass.Capacity) -le 0 -or
-          $fallbackControlClass.ToString() -ne 'Edit' -or
-          -not [TUSWindowApi]::IsWindowVisible($control) -or
-          -not [TUSWindowApi]::IsWindowEnabled($control)) { return [pscustomobject]$result }
-
-      $valuePattern = $uiEdit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-      if ($valuePattern.Current.IsReadOnly) { return [pscustomobject]$result }
-      $valuePattern.SetValue($ExpectedValue)
+      if (-not (Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue -AutomationEdits $AutomationEdits)) {
+        return [pscustomobject]$result
+      }
       $result.SetMethod = 'uia'
     } else {
       $result.SetMethod = 'message'
@@ -254,7 +283,17 @@ function Set-NativeDirectoryEdit {
     $value = Get-NativeDirectoryEditText -Control $control
     if ($null -eq $value) { return [pscustomobject]$result }
     $normalizedValue = [System.IO.Path]::GetFullPath($value).TrimEnd($trimCharacters)
-    if ([String]::Equals($normalizedValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)) {
+    $readbackMatches = [String]::Equals($normalizedValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)
+    if ($result.SetMethod -eq 'message' -and -not $readbackMatches) {
+      if (Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue -AutomationEdits $AutomationEdits) {
+        $result.SetMethod = 'uia'
+        $value = Get-NativeDirectoryEditText -Control $control
+        if ($null -eq $value) { return [pscustomobject]$result }
+        $normalizedValue = [System.IO.Path]::GetFullPath($value).TrimEnd($trimCharacters)
+        $readbackMatches = [String]::Equals($normalizedValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)
+      }
+    }
+    if ($readbackMatches) {
       $result.Readback = 'match'
     } else {
       $result.Readback = 'mismatch'

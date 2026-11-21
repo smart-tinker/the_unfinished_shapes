@@ -651,24 +651,36 @@ test('installer relaunch cleanup failure is distinct and does not expose details
 
 test('NSIS directory UIA fallback is bound to the same writable native Edit and read back', async () => {
   const source = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
-  const setterStart = source.indexOf('function Set-NativeDirectoryEdit {');
+  const fallbackStart = source.indexOf('function Set-NativeDirectoryEditWithUIA {');
+  const fallbackEnd = source.indexOf(String.fromCharCode(10) + 'function Set-NativeDirectoryEdit {', fallbackStart);
+  const fallback = source.slice(fallbackStart, fallbackEnd);
+  const setterStart = fallbackEnd;
   const setterEnd = source.indexOf(String.fromCharCode(10) + 'function Get-NativeRadioSelection', setterStart);
   const setter = source.slice(setterStart, setterEnd);
-  assert.ok(setterStart >= 0 && setterEnd > setterStart);
+  assert.ok(fallbackStart >= 0 && fallbackEnd > fallbackStart && setterEnd > setterStart);
   for (const guard of [
     '[object[]]$AutomationEdits',
-    '[IntPtr]$_.Current.NativeWindowHandle -eq $control',
+    '[IntPtr]$_.Current.NativeWindowHandle -eq $Control',
     '$uiEdit.Current.ProcessId -ne $ProcessId',
     '$uiEdit.Current.IsOffscreen',
     '-not $uiEdit.Current.IsEnabled',
     '$uiEdit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit',
-    '[TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $control',
+    '[TUSWindowApi]::GetDlgItem($PageHandle, 1019) -ne $Control',
     '$valuePattern.Current.IsReadOnly',
-  ]) assert.ok(setter.includes(guard), 'UIA fallback guard exists: ' + guard);
+  ]) assert.ok(fallback.includes(guard), 'UIA fallback guard exists: ' + guard);
 
-  const setValue = setter.indexOf('$valuePattern.SetValue($ExpectedValue)');
-  const readback = setter.indexOf('$value = Get-NativeDirectoryEditText -Control $control', setValue);
-  assert.ok(setValue >= 0 && readback > setValue, 'fallback uses the existing exact native readback');
+  const setValue = fallback.indexOf('$valuePattern.SetValue($ExpectedValue)');
+  assert.ok(setValue >= 0, 'fallback uses ValuePattern on the verified Edit');
+  assert.ok(fallback.indexOf('return ($mainThreadId -ne 0') > setValue, 'fallback rechecks native provenance after setting');
+  assert.ok(fallback.includes('[TUSWindowApi]::GetDlgItem($PageHandle, 1019) -eq $Control'));
+
+  const retryCondition = setter.indexOf("if ($result.SetMethod -eq 'message' -and -not $readbackMatches)");
+  const retryCall = setter.indexOf('Set-NativeDirectoryEditWithUIA', retryCondition);
+  const retryReadback = setter.indexOf('$value = Get-NativeDirectoryEditText -Control $control', retryCall);
+  const finalGate = setter.indexOf('if ($readbackMatches)', retryReadback);
+  assert.ok(retryCondition >= 0 && retryCall > retryCondition && retryReadback > retryCall && finalGate > retryReadback,
+    'a successful message with mismatched readback retries UIA once, then uses native readback');
+  assert.ok(setter.includes('$result.SetMethod = \'uia\''));
 
   const directoryStart = source.indexOf("if ($stage -eq 'directory') {");
   const installStart = source.indexOf("if ($stage -eq 'installing') {", directoryStart);
