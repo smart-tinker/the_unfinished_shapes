@@ -130,12 +130,13 @@ function Get-NativeDirectoryEditText {
 }
 
 function Set-NativeDirectoryEditWithUIA {
-  param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [IntPtr]$Control, [string]$ExpectedValue, [object[]]$AutomationEdits = @())
-  $uiEdits = @($AutomationEdits | Where-Object {
-    try { [IntPtr]$_.Current.NativeWindowHandle -eq $Control } catch { $false }
-  })
-  if ($uiEdits.Count -ne 1) { return $false }
-  $uiEdit = $uiEdits[0]
+  param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [IntPtr]$Control, [string]$ExpectedValue)
+  try {
+    $uiEdit = [System.Windows.Automation.AutomationElement]::FromHandle($Control)
+  } catch {
+    return $false
+  }
+  if ($null -eq $uiEdit) { return $false }
   if ($uiEdit.Current.ProcessId -ne $ProcessId -or
       [IntPtr]$uiEdit.Current.NativeWindowHandle -ne $Control -or
       $uiEdit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit -or
@@ -191,7 +192,7 @@ function Set-NativeDirectoryEditWithUIA {
 }
 
 function Set-NativeDirectoryEdit {
-  param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [string]$ExpectedValue, [object[]]$AutomationEdits = @())
+  param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [string]$ExpectedValue)
   $result = [ordered]@{ SetStatus = 'unavailable'; SetFailureStage = 'precondition'; SetMethod = 'none'; BeforeReadClass = 'unavailable'; PostSetControlStatus = 'unknown'; Readback = 'unknown'; MismatchClass = 'unknown' }
   if (-not $script:nativeWindowApiAvailable -or $MainWindowHandle -eq [IntPtr]::Zero -or
       $PageHandle -eq [IntPtr]::Zero -or [string]::IsNullOrWhiteSpace($ExpectedValue) -or
@@ -254,7 +255,7 @@ function Set-NativeDirectoryEdit {
       [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
     }
     if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) {
-      if (-not (Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue -AutomationEdits $AutomationEdits)) {
+      if (-not (Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue)) {
         return [pscustomobject]$result
       }
       $result.SetMethod = 'uia'
@@ -285,7 +286,7 @@ function Set-NativeDirectoryEdit {
     $normalizedValue = [System.IO.Path]::GetFullPath($value).TrimEnd($trimCharacters)
     $readbackMatches = [String]::Equals($normalizedValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)
     if ($result.SetMethod -eq 'message' -and -not $readbackMatches) {
-      if (Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue -AutomationEdits $AutomationEdits) {
+      if (Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue) {
         $result.SetMethod = 'uia'
         $value = Get-NativeDirectoryEditText -Control $control
         if ($null -eq $value) { return [pscustomobject]$result }
@@ -1053,7 +1054,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
       Start-Sleep -Milliseconds 100
       continue
     }
-    $nativeEdit = Set-NativeDirectoryEdit -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle -PageHandle $nativeWindow.PageHandle -ExpectedValue $expectedInstallDir -AutomationEdits $edits
+    $nativeEdit = Set-NativeDirectoryEdit -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle -PageHandle $nativeWindow.PageHandle -ExpectedValue $expectedInstallDir
     if ($nativeEdit.SetStatus -ne 'sent') {
       $setFailureEvent = switch ($nativeEdit.SetFailureStage) {
         'precondition' { 'destination-set-precondition-unavailable' }

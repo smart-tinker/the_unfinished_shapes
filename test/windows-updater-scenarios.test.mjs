@@ -659,8 +659,8 @@ test('NSIS directory UIA fallback is bound to the same writable native Edit and 
   const setter = source.slice(setterStart, setterEnd);
   assert.ok(fallbackStart >= 0 && fallbackEnd > fallbackStart && setterEnd > setterStart);
   for (const guard of [
-    '[object[]]$AutomationEdits',
-    '[IntPtr]$_.Current.NativeWindowHandle -eq $Control',
+    '[System.Windows.Automation.AutomationElement]::FromHandle($Control)',
+    '[IntPtr]$uiEdit.Current.NativeWindowHandle -ne $Control',
     '$uiEdit.Current.ProcessId -ne $ProcessId',
     '$uiEdit.Current.IsOffscreen',
     '-not $uiEdit.Current.IsEnabled',
@@ -673,6 +673,7 @@ test('NSIS directory UIA fallback is bound to the same writable native Edit and 
   assert.ok(setValue >= 0, 'fallback uses ValuePattern on the verified Edit');
   assert.ok(fallback.indexOf('return ($mainThreadId -ne 0') > setValue, 'fallback rechecks native provenance after setting');
   assert.ok(fallback.includes('[TUSWindowApi]::GetDlgItem($PageHandle, 1019) -eq $Control'));
+  assert.doesNotMatch(fallback, /FindAll|AutomationEdits/);
 
   const retryCondition = setter.indexOf("if ($result.SetMethod -eq 'message' -and -not $readbackMatches)");
   const retryCall = setter.indexOf('Set-NativeDirectoryEditWithUIA', retryCondition);
@@ -685,7 +686,7 @@ test('NSIS directory UIA fallback is bound to the same writable native Edit and 
   const directoryStart = source.indexOf("if ($stage -eq 'directory') {");
   const installStart = source.indexOf("if ($stage -eq 'installing') {", directoryStart);
   const directory = source.slice(directoryStart, installStart);
-  assert.ok(directory.includes('-AutomationEdits $edits'));
+  assert.ok(!directory.includes('-AutomationEdits $edits'));
   assert.ok(directory.includes("$nativeEdit.SetMethod -eq 'uia'"));
 });
 
