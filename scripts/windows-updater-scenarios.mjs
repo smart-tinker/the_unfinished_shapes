@@ -19,7 +19,8 @@ const safeHandoffChecks = new Set(['build-label', 'build-title-sha', 'app-versio
 const safeHandoffCheckResults = new Set(['match', 'mismatch', 'failed']);
 const safeScenarioStages = new Set([
   'source-setup', 'source-identity', 'source-prepare', 'check-download',
-  'extract', 'relaunch', 'wizard', 'target-verify', 'complete',
+  'extract', 'relaunch', 'relaunch-cancel', 'relaunch-approve', 'relaunch-exit',
+  'relaunch-prompt', 'relaunch-request', 'relaunch-target', 'wizard', 'target-verify', 'complete',
 ]);
 const safeScenarioCategories = new Set([
   'none', 'assertion', 'timeout', 'filesystem', 'process-exit',

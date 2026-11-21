@@ -851,10 +851,11 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     assert.equal(extractDiagnostic.outcome, 'verified', 'the selected verified archive reaches a terminal extraction success');
   }
 
-  setDiagnostic('relaunch');
+  setDiagnostic(distribution === 'installer' ? 'relaunch-cancel' : 'relaunch');
   await current.page.locator('#updates-launch').click();
   await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Update launch cancelled.');
   assert.equal(current.instance.process().exitCode, null, 'cancel leaves the game open and the verified update available');
+  setDiagnostic(distribution === 'installer' ? 'relaunch-approve' : 'relaunch');
   await current.instance.evaluate(() => { globalThis.__tusUpdateChoice = 1; });
 
   const closing = current;
@@ -862,13 +863,17 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   const click = closing.page.locator('#updates-launch').click({ timeout: 10000 }).catch(error => {
     if (closing.instance.process().exitCode === null) throw error;
   });
+  setDiagnostic(distribution === 'installer' ? 'relaunch-exit' : 'relaunch');
   await Promise.all([click, closeAfterQuit(closing, exit)]);
 
+  setDiagnostic(distribution === 'installer' ? 'relaunch-prompt' : 'relaunch');
   const prompt = JSON.parse(await readFile(path.join(workDir, 'update-dialog.json'), 'utf8'));
   assert.equal(prompt.title, 'Start verified update');
   assert.deepEqual(prompt.buttons, ['Cancel', 'Quit and launch']);
+  setDiagnostic(distribution === 'installer' ? 'relaunch-request' : 'relaunch');
   const relaunch = JSON.parse(await readFile(path.join(workDir, 'relaunch.json'), 'utf8'));
   assert.deepEqual(relaunch.args, [], 'the update launches without carrying commands or conversation text');
+  setDiagnostic(distribution === 'installer' ? 'relaunch-target' : 'relaunch');
   const targetVersion = manifest.version;
   const expectedExecutable = distribution === 'installer' ? downloadedPath : path.join(
     await realpath(extractDir),
