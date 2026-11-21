@@ -556,3 +556,25 @@ test('NSIS destination setter rechecks same Edit ownership after WM_SETTEXT and 
   assert.deepEqual(sanitized, safeLines);
   assert.equal(JSON.stringify(sanitized).includes('C:/private/path'), false);
 });
+
+test('Windows installer relaunch failures preserve fixed safe stage enums', async () => {
+  const stages = [
+    'relaunch-cancel', 'relaunch-approve', 'relaunch-exit',
+    'relaunch-prompt', 'relaunch-request', 'relaunch-target',
+  ];
+  const diagnosticFor = async stage => {
+    const failure = new Error('C:/private/installer output');
+    failure.tusScenarioDiagnostic = { stage, category: 'other', path: 'C:/private/installer output' };
+    const outcomes = await runWindowsUpdaterScenarios({
+      portable: async () => 'portable result',
+      installer: async () => { throw failure; },
+    });
+    return outcomes.installer.diagnostic;
+  };
+
+  for (const stage of stages) {
+    assert.deepEqual(await diagnosticFor(stage), { stage, category: 'other' });
+  }
+  assert.deepEqual(await diagnosticFor('relaunch-C:/private/path'), { stage: 'unknown', category: 'other' });
+  assert.equal(JSON.stringify(stages).includes('C:/private'), false);
+});
