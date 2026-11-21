@@ -155,7 +155,7 @@ public sealed class TusUiaOutputCapture
     private Stopwatch fromHandleWatch;
     public long FromHandleMilliseconds
     {
-        get { return fromHandleWatch == null ? -1 : fromHandleWatch.ElapsedMilliseconds; }
+        get { return fromHandleWatch == null || fromHandleWatch.IsRunning ? -1 : fromHandleWatch.ElapsedMilliseconds; }
     }
     public readonly ManualResetEvent OutputReadComplete = new ManualResetEvent(false);
     public readonly DataReceivedEventHandler Handler;
