@@ -244,9 +244,10 @@ function Set-NativeDirectoryEdit {
         if ([String]::IsNullOrWhiteSpace($beforeValue)) {
           $beforeReadClass = 'empty'
         } else {
+          $beforeValueRooted = [System.IO.Path]::IsPathRooted($beforeValue)
           try {
             $normalizedBeforeValue = [System.IO.Path]::GetFullPath($beforeValue).TrimEnd($trimCharacters)
-            $beforeReadClass = 'read'
+            if ($beforeValueRooted) { $beforeReadClass = 'read' } else { $beforeReadClass = 'not-rooted' }
           } catch {
             $beforeReadClass = 'invalid'
           }
@@ -291,23 +292,27 @@ function Set-NativeDirectoryEdit {
     if ($result.PostSetControlStatus -ne 'match') { return [pscustomobject]$result }
     $value = Get-NativeDirectoryEditText -Control $control
     if ($null -eq $value) { return [pscustomobject]$result }
+    $valueIsRooted = [System.IO.Path]::IsPathRooted($value)
     $normalizedValue = [System.IO.Path]::GetFullPath($value).TrimEnd($trimCharacters)
-    $readbackMatches = [String]::Equals($normalizedValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)
+    $readbackMatches = $valueIsRooted -and [String]::Equals($normalizedValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)
     if ($result.SetMethod -eq 'message' -and -not $readbackMatches) {
       $result.UiaFallbackStatus = Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue
       if ($result.UiaFallbackStatus -eq 'applied') {
         $result.SetMethod = 'uia'
         $value = Get-NativeDirectoryEditText -Control $control
         if ($null -eq $value) { return [pscustomobject]$result }
+        $valueIsRooted = [System.IO.Path]::IsPathRooted($value)
         $normalizedValue = [System.IO.Path]::GetFullPath($value).TrimEnd($trimCharacters)
-        $readbackMatches = [String]::Equals($normalizedValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)
+        $readbackMatches = $valueIsRooted -and [String]::Equals($normalizedValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)
       }
     }
     if ($readbackMatches) {
       $result.Readback = 'match'
     } else {
       $result.Readback = 'mismatch'
-      if ($beforeReadClass -eq 'read' -and [String]::Equals($normalizedBeforeValue, $normalizedValue, [StringComparison]::OrdinalIgnoreCase)) {
+      if (-not $valueIsRooted) {
+        $result.MismatchClass = 'not-rooted'
+      } elseif ($beforeReadClass -eq 'read' -and [String]::Equals($normalizedBeforeValue, $normalizedValue, [StringComparison]::OrdinalIgnoreCase)) {
         $result.MismatchClass = 'unchanged'
       } else {
         $result.MismatchClass = 'other'
@@ -807,7 +812,7 @@ function Write-WizardEvent {
       'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-postset-edit-match', 'destination-postset-edit-mismatch', 'destination-postset-edit-unknown', 'destination-verified', 'destination-unavailable', 'destination-mismatch', 'destination-edits-ambiguous',
   'destination-set-precondition-unavailable', 'destination-set-provenance-unavailable', 'destination-set-control-unavailable', 'destination-set-message-failed', 'destination-set-uia-fallback', 'destination-set-exception', 'destination-set-unknown',
       'destination-uia-element-unavailable', 'destination-uia-owner-mismatch', 'destination-uia-handle-mismatch', 'destination-uia-pattern-unavailable', 'destination-uia-value-state-unavailable', 'destination-uia-offscreen', 'destination-uia-disabled', 'destination-uia-control-mismatch', 'destination-uia-read-only', 'destination-uia-set-error', 'destination-uia-postset-mismatch', 'destination-uia-unknown',
-      'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-same-root', 'destination-readback-different-root', 'destination-readback-other', 'destination-readback-unchanged', 'destination-before-read-unavailable', 'destination-before-read-empty', 'destination-before-read-invalid',
+      'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-same-root', 'destination-readback-different-root', 'destination-readback-not-rooted', 'destination-readback-other', 'destination-readback-unchanged', 'destination-before-read-unavailable', 'destination-before-read-empty', 'destination-before-read-invalid', 'destination-before-read-not-rooted',
       'next-unavailable', 'install-started', 'finish-clicked', 'installer-exited',
       'installer-exited-early', 'installed-executable-missing', 'completed',
       'timeout', 'uia-unavailable', 'automation-failed'
@@ -1117,6 +1122,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
         'unavailable' { 'destination-before-read-unavailable' }
         'empty' { 'destination-before-read-empty' }
         'invalid' { 'destination-before-read-invalid' }
+        'not-rooted' { 'destination-before-read-not-rooted' }
         default { $null }
       }
       if ($beforeReadEvent) { Write-WizardEvent -Name $beforeReadEvent -ProcessId $script:installerProcessId }
@@ -1126,6 +1132,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
         'same-leaf' { 'destination-readback-same-leaf' }
         'same-root' { 'destination-readback-same-root' }
         'different-root' { 'destination-readback-different-root' }
+        'not-rooted' { 'destination-readback-not-rooted' }
         'unchanged' { 'destination-readback-unchanged' }
         default { 'destination-readback-other' }
       }
