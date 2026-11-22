@@ -869,7 +869,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     try {
       await runWindowsRelaunch({
       child,
-      click: () => closing.page.locator('#updates-launch').click({ timeout: 10000 }).catch(error => {
+      click: () => closing.page.locator('#updates-launch').click({ timeout: 10000, noWaitAfter: true }).catch(error => {
         if (child.exitCode === null) throw error;
       }),
       waitForExit,
