@@ -800,6 +800,202 @@ async function assertDigestMismatchRejected(current, {
   assert.equal(fetchRestored, true, 'the packaged main process removes its one-shot digest control');
 }
 
+async function assertPartialDownloadAbortCleaned(current, {
+  tag, assetName, expectedSize, expectedSha256, downloadsDir, extractDir, relaunchMarker, handoffProfile,
+}) {
+  const assetUrl = 'https://github.com/smart-tinker/the_unfinished_shapes/releases/download/' +
+    encodeURIComponent(tag) + '/' + encodeURIComponent(assetName);
+  const fixtureFingerprint = async () => {
+    const settings = await current.page.evaluate(() => {
+      const value = window.tus.loadSettings();
+      return { threadId: value.threadId, updateChannel: value.updateChannel };
+    });
+    const objects = (await worldObjects(current.page)).map(object => ({
+      type: object.type, position: [object.position?.x, object.position?.y, object.position?.z],
+    }));
+    return createHash('sha256').update(JSON.stringify({ settings, objects })).digest('hex');
+  };
+  const beforeFixture = await fixtureFingerprint();
+  const beforeVersion = await current.instance.evaluate(({ app }) => app.getVersion());
+  await current.page.evaluate(() => { window.__tusProvenanceDiagnostics = []; });
+  const controlInstalled = await current.instance.evaluate((_electron, { assetUrl, tag, assetName, expectedSha256, expectedSize }) => {
+    const boundary = globalThis.__tusUpdaterSmokeBoundary;
+    if (!boundary || typeof globalThis.fetch !== 'function' ||
+        typeof boundary.digestMismatchFetcher === 'function') return false;
+    const originalFetch = globalThis.fetch;
+    const assetUrls = new Set([assetUrl]);
+    const control = {
+      expectedTag: tag, expectedAssetName: assetName, expectedSha256, expectedSize,
+      selectedAssetMatches: null, selectedTagMatches: null, selectedNameMatches: null,
+      selectedDigestMatches: null, selectedSizeMatches: null, fetcherCalls: 0,
+      assetRequests: 0, bodyResponses: 0, firstChunkBytes: 0, responseComplete: false,
+      abortSignalObserved: false, attestationRequests: 0,
+    };
+    boundary.digestMismatchControl = control;
+    boundary.digestMismatchFetch = originalFetch;
+    boundary.digestMismatchFetcher = async (input, init) => {
+      control.fetcherCalls++;
+      const requestUrl = typeof input === 'string' ? input : input?.url;
+      const isAssetRequest = control.selectedAssetMatches === true && assetUrls.has(requestUrl);
+      if (typeof requestUrl === 'string' &&
+          requestUrl.startsWith('https://api.github.com/repos/smart-tinker/the_unfinished_shapes/attestations/sha256:')) {
+        control.attestationRequests++;
+      }
+      const response = await Reflect.apply(originalFetch, globalThis, [input, init]);
+      if (!isAssetRequest) return response;
+      control.assetRequests++;
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get('location');
+        if (location) { try { assetUrls.add(new URL(location, requestUrl).href); } catch {} }
+        return response;
+      }
+      if (!response.ok || !response.body || control.bodyResponses > 0) return response;
+      control.bodyResponses++;
+      const signal = init?.signal;
+      if (!signal || typeof signal.addEventListener !== 'function') throw new Error('Missing download signal.');
+      const body = response.body.pipeThrough(new TransformStream({
+        async transform(chunk, controller) {
+          if (control.firstChunkBytes) return;
+          const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+          control.firstChunkBytes = bytes.byteLength;
+          controller.enqueue(bytes);
+          await new Promise(resolve => {
+            if (signal.aborted) resolve();
+            else signal.addEventListener('abort', resolve, { once: true });
+          });
+          control.abortSignalObserved = signal.aborted;
+          throw new DOMException('Aborted', 'AbortError');
+        },
+        flush() { control.responseComplete = true; },
+      }));
+      return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+    };
+    return true;
+  }, { assetUrl, tag, assetName, expectedSha256, expectedSize });
+  assert.equal(controlInstalled, true, 'the packaged partial-download control is installed');
+
+  let cancelSettled = false;
+  let fetchRestored = false;
+  try {
+    const updateDir = path.join(downloadsDir, 'TheUnfinishedShapes-Updates');
+    await current.page.locator('#updates-download').click({ noWaitAfter: true });
+    let partialFiles = 0, partialBytes = 0;
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline && partialBytes === 0) {
+      const names = await readdir(updateDir).catch(error => error?.code === 'ENOENT' ? [] : Promise.reject(error));
+      const parts = names.filter(name => name.endsWith('.part'));
+      partialFiles = parts.length;
+      for (const name of parts) {
+        const stat = await lstat(path.join(updateDir, name)).catch(error => error?.code === 'ENOENT' ? null : Promise.reject(error));
+        if (stat?.isFile()) partialBytes = Math.max(partialBytes, stat.size);
+      }
+      if (partialBytes === 0) await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    const partialBodyWritten = partialFiles === 1 && partialBytes > 0 && partialBytes < expectedSize;
+    await current.page.locator('#updates-cancel').click({ noWaitAfter: true });
+    await current.page.waitForFunction(() => {
+      const status = document.querySelector('#updates-status');
+      return status?.textContent === 'Download cancelled. You can try again.' &&
+        status.dataset.updateInvokeStatus === 'fulfilled';
+    }, null, { timeout: 15000 });
+    cancelSettled = true;
+
+    const [renderer, main, control, verifierStarted] = await Promise.all([
+      current.page.evaluate(() => {
+        const status = document.querySelector('#updates-status');
+        return {
+          cancelled: status?.textContent === 'Download cancelled. You can try again.',
+          invoke: status?.dataset.updateInvokeStatus || 'not-started',
+          failed: status?.dataset.updateFailure === 'true',
+        };
+      }),
+      current.instance.evaluate(() => {
+        const value = globalThis.__tusUpdaterSmokeBoundary;
+        return value ? {
+          moduleImport: value.moduleImport, download: value.downloadVerifiedAsset,
+          extractArchive: value.extractArchive, extractCall: value.extractCall,
+        } : null;
+      }),
+      current.instance.evaluate(() => {
+        const value = globalThis.__tusUpdaterSmokeBoundary?.digestMismatchControl;
+        return value ? {
+          assetMatched: value.assetRequests > 0 && value.bodyResponses === 1,
+          selectedAssetMatches: value.selectedAssetMatches === true,
+          fetcherCalled: value.fetcherCalls > 0,
+          firstChunkDelivered: value.firstChunkBytes > 0,
+          abortSignalObserved: value.abortSignalObserved,
+          responseComplete: value.responseComplete,
+          attestationRequests: value.attestationRequests,
+        } : null;
+      }),
+      current.page.evaluate(() => (window.__tusProvenanceDiagnostics || []).some(item =>
+        typeof item?.stage === 'string' && (item.stage.startsWith('verify-') || item.stage.startsWith('verifier-')))),
+    ]);
+    const downloadEntries = await readdir(updateDir).catch(error => error?.code === 'ENOENT' ? [] : Promise.reject(error));
+    const extractionEntries = await readdir(extractDir);
+    const relaunchRequested = await lstat(relaunchMarker).then(() => true, error => error?.code === 'ENOENT' ? false : Promise.reject(error));
+    const afterVersion = await current.instance.evaluate(({ app }) => app.getVersion());
+    const afterFixture = await fixtureFingerprint();
+    let sourceIdentityUnchanged = null;
+    if (handoffProfile) {
+      const identity = await current.instance.evaluate(({ app }) => ({ executable: process.execPath, userData: app.getPath('userData') }));
+      sourceIdentityUnchanged =
+        path.resolve(identity.executable).toLowerCase() === path.resolve(handoffProfile.installedExe).toLowerCase() &&
+        path.resolve(identity.userData).toLowerCase() === path.resolve(handoffProfile.userData).toLowerCase();
+    }
+    const actual = {
+      assetMatched: control?.assetMatched === true,
+      selectedAssetMatches: control?.selectedAssetMatches === true,
+      fetcherCalled: control?.fetcherCalled === true,
+      firstChunkDelivered: control?.firstChunkDelivered === true,
+      partialBodyWritten,
+      abortSignalObserved: control?.abortSignalObserved === true,
+      responseComplete: control?.responseComplete === true,
+      attestationRequests: control?.attestationRequests ?? null,
+      rendererCancelled: renderer?.cancelled === true && renderer?.failed !== true,
+      rendererInvoke: renderer?.invoke ?? 'unknown',
+      moduleImport: main?.moduleImport ?? 'unknown',
+      mainDownload: main?.download ?? 'unknown',
+      verifierStarted,
+      extractArchive: main?.extractArchive ?? 'unknown',
+      extractCall: main?.extractCall ?? 'unknown',
+      downloadDirectoryEmpty: downloadEntries.length === 0,
+      extractionDirectoryEmpty: extractionEntries.length === 0,
+      relaunchRequested,
+      sourceVersionUnchanged: afterVersion === beforeVersion,
+      sourceIdentityUnchanged,
+      sourceFixtureUnchanged: afterFixture === beforeFixture,
+    };
+    console.log('TUS_UPDATE_PARTIAL_ABORT ' + JSON.stringify(actual));
+    assert.deepEqual(actual, {
+      assetMatched: true, selectedAssetMatches: true, fetcherCalled: true,
+      firstChunkDelivered: true, partialBodyWritten: true, abortSignalObserved: true,
+      responseComplete: false, attestationRequests: 0, rendererCancelled: true,
+      rendererInvoke: 'fulfilled', moduleImport: 'fulfilled', mainDownload: 'fulfilled',
+      verifierStarted: false, extractArchive: 'not-started', extractCall: 'not-started',
+      downloadDirectoryEmpty: true, extractionDirectoryEmpty: true, relaunchRequested: false,
+      sourceVersionUnchanged: true, sourceIdentityUnchanged: handoffProfile ? true : null,
+      sourceFixtureUnchanged: true,
+    }, 'a mid-body cancel removes the partial package and preserves the source for retry');
+  } finally {
+    if (!cancelSettled) {
+      await current.page.locator('#updates-cancel').click({ noWaitAfter: true }).catch(() => {});
+      await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Download cancelled. You can try again.', null, { timeout: 5000 }).catch(() => {});
+    }
+    fetchRestored = await current.instance.evaluate(() => {
+      const boundary = globalThis.__tusUpdaterSmokeBoundary;
+      const originalFetch = boundary?.digestMismatchFetch;
+      if (typeof originalFetch !== 'function') return false;
+      const controlRemoved = typeof boundary.digestMismatchFetcher === 'function';
+      delete boundary.digestMismatchFetcher;
+      delete boundary.digestMismatchFetch;
+      delete boundary.digestMismatchControl;
+      return controlRemoved && globalThis.fetch === originalFetch;
+    }).catch(() => false);
+  }
+  assert.equal(fetchRestored, true, 'the packaged process removes its one-shot partial-download control');
+}
+
 async function updateOnce(distribution, setDiagnostic = () => {}) {
   const workDir = await mkdtemp(path.join(testRoot, 'package-'));
   workDirs.push(workDir);
@@ -896,6 +1092,10 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   });
   setDiagnostic('check-download');
   await assertDigestMismatchRejected(current, {
+    tag, assetName, expectedSize: manifestFile.size, expectedSha256: manifestFile.sha256,
+    downloadsDir, extractDir, relaunchMarker, handoffProfile,
+  });
+  await assertPartialDownloadAbortCleaned(current, {
     tag, assetName, expectedSize: manifestFile.size, expectedSha256: manifestFile.sha256,
     downloadsDir, extractDir, relaunchMarker, handoffProfile,
   });
@@ -1003,6 +1203,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   assert.ok(downloadName, 'the verified package is saved in the isolated Downloads directory');
   const downloadedPath = path.join(updateDir, downloadName);
   assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'downloaded bytes match the published release manifest');
+  console.log('TUS_UPDATE_ABORT_RETRY status=verified package=' + distribution);
   if (distribution === 'installer') {
     assert.ok(handoffProfile, 'the exact installer handoff has an isolated source profile');
     pendingWindowsInstallerCleanup = {
