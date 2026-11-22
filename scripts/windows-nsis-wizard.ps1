@@ -260,21 +260,27 @@ function Set-NativeDirectoryEdit {
       }
     } catch {}
     $result.BeforeReadClass = $beforeReadClass
-    $expectedPointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($ExpectedValue)
-    $result.SetFailureStage = 'message'
-    $setSent = [IntPtr]::Zero
-    $setResult = [IntPtr]::Zero
-    try {
-      $setSent = [TUSWindowApi]::SendMessageTimeout($control, 0x000C, [IntPtr]::Zero, $expectedPointer, 0x0002, 500, [ref]$setResult)
-    } finally {
-      [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
-    }
-    if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) {
-      $result.UiaFallbackStatus = Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue
-      if ($result.UiaFallbackStatus -ne 'applied') { return [pscustomobject]$result }
-      $result.SetMethod = 'uia'
+    $alreadyMatchesExpected = $beforeReadClass -eq 'read' -and
+      [String]::Equals($normalizedBeforeValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)
+    if (-not $alreadyMatchesExpected) {
+      $expectedPointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($ExpectedValue)
+      $result.SetFailureStage = 'message'
+      $setSent = [IntPtr]::Zero
+      $setResult = [IntPtr]::Zero
+      try {
+        $setSent = [TUSWindowApi]::SendMessageTimeout($control, 0x000C, [IntPtr]::Zero, $expectedPointer, 0x0002, 500, [ref]$setResult)
+      } finally {
+        [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
+      }
+      if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) {
+        $result.UiaFallbackStatus = Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue
+        if ($result.UiaFallbackStatus -ne 'applied') { return [pscustomobject]$result }
+        $result.SetMethod = 'uia'
+      } else {
+        $result.SetMethod = 'message'
+      }
     } else {
-      $result.SetMethod = 'message'
+      $result.SetMethod = 'readback'
     }
     $result.SetStatus = 'sent'
     $result.SetFailureStage = 'none'
