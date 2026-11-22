@@ -265,7 +265,7 @@ test('NSIS snapshot maps the production writer fields and rejects private option
 
 test('NSIS directory target uses native Edit 1019 and exact readback before install', async () => {
   const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
-  assert.match(script, /\[DllImport\("user32\\.dll", CharSet = CharSet\\.Unicode, SetLastError = true\)\] public static extern IntPtr SendMessageTimeout/);
+  assert.ok(script.includes('[DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern IntPtr SendMessageTimeout'), 'native Edit text uses Unicode for the UTF-16 message buffer');
   const readerStart = script.indexOf('function Get-NativeDirectoryEditText');
   const setterStart = script.indexOf('function Set-NativeDirectoryEdit');
   const setterEnd = script.indexOf('function Get-NativeRadioSelection', setterStart);
