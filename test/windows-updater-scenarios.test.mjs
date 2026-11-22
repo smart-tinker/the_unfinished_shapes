@@ -894,18 +894,55 @@ test('NSIS readback classifies unrooted text before normalization without exposi
 });
 
 
-test('Windows NSIS native Edit helper round-trips rooted text through its production Win32 messages', { skip: process.platform !== 'win32' }, async () => {
+
+test('Windows NSIS native Edit helper round-trips text across processes', { skip: process.platform !== 'win32' }, async t => {
+  const script = 'scripts/windows-nsis-wizard.ps1';
+  const fixedInstallDir = 'C:\\TUS\\NativeEditInterop\\TheUnfinishedShapes';
+  const host = spawn('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-Sta', '-ExecutionPolicy', 'Bypass',
+    '-File', script,
+    '-InstallerPath', process.execPath,
+    '-ExpectedInstallDir', fixedInstallDir,
+    '-NativeEditInteropHost',
+  ], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(async () => {
+    if (!host.pid || host.exitCode !== null) return;
+    host.kill();
+    await waitForExit(host, 5000).catch(async () => {
+      await execFileAsync('taskkill.exe', ['/PID', String(host.pid), '/T', '/F'], { timeout: 5000, windowsHide: true }).catch(() => {});
+      await waitForExit(host, 5000).catch(() => {});
+    });
+  });
+
+  let hostOutput;
+  try {
+    await once(host, 'spawn');
+    let timer;
+    const [chunk] = await Promise.race([
+      once(host.stdout, 'data'),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('host-timeout')), 5000); }),
+    ]).finally(() => clearTimeout(timer));
+    hostOutput = String(chunk).trim();
+  } catch {
+    assert.fail('native Edit host did not become ready');
+  }
+  const hostMatch = hostOutput.match(/^TUS_NSIS_WIZARD event=native-edit-host-ready hwnd=(\d+)$/);
+  assert.ok(hostMatch, 'native Edit host reported a bounded ready event');
+  assert.ok(host.pid > 0);
+
   let result;
   try {
     result = await execFileAsync('powershell.exe', [
       '-NoLogo', '-NoProfile', '-NonInteractive', '-Sta', '-ExecutionPolicy', 'Bypass',
-      '-File', 'scripts/windows-nsis-wizard.ps1',
+      '-File', script,
       '-InstallerPath', process.execPath,
-      '-ExpectedInstallDir', 'C:\\TUS\\NativeEditInterop\\TheUnfinishedShapes',
+      '-ExpectedInstallDir', fixedInstallDir,
       '-NativeEditInteropCheck',
+      '-NativeEditInteropHwnd', hostMatch[1],
+      '-NativeEditInteropPid', String(host.pid),
     ], { timeout: 10000, maxBuffer: 65536, windowsHide: true });
   } catch {
-    assert.fail('native Edit text round-trip failed');
+    assert.fail('bounded cross-process native Edit helper failed');
   }
 
   assert.equal(result.stdout.trim(), 'TUS_NSIS_WIZARD event=native-edit-interop-passed');
