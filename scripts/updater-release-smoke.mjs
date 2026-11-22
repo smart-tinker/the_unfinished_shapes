@@ -601,7 +601,7 @@ async function assertDigestMismatchRejected(current, {
   };
   const beforeFixture = await fixtureFingerprint();
   const beforeVersion = await current.instance.evaluate(({ app }) => app.getVersion());
-  const controlInstalled = await current.instance.evaluate(({ assetUrl, attestationUrl, tag, assetName, expectedSha256, expectedSize }) => {
+  const controlInstalled = await current.instance.evaluate((_electron, { assetUrl, attestationUrl, tag, assetName, expectedSha256, expectedSize }) => {
     const boundary = globalThis.__tusUpdaterSmokeBoundary;
     if (!boundary || typeof globalThis.fetch !== 'function') return false;
     const originalFetch = globalThis.fetch;
