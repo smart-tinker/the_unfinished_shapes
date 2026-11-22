@@ -260,9 +260,6 @@ function Set-NativeDirectoryEdit {
       }
     } catch {}
     $result.BeforeReadClass = $beforeReadClass
-    $alreadyMatchesExpected = $beforeReadClass -eq 'read' -and
-      [String]::Equals($normalizedBeforeValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)
-    if (-not $alreadyMatchesExpected) {
       $expectedPointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($ExpectedValue)
       $result.SetFailureStage = 'message'
       $setSent = [IntPtr]::Zero
@@ -273,15 +270,28 @@ function Set-NativeDirectoryEdit {
         [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
       }
       if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) {
-        $result.UiaFallbackStatus = Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue
-        if ($result.UiaFallbackStatus -ne 'applied') { return [pscustomobject]$result }
-        $result.SetMethod = 'uia'
+        $afterSetValueIsRooted = $false
+        $normalizedAfterSetValue = $null
+        try {
+          $afterSetValue = Get-NativeDirectoryEditText -Control $control
+          if ($null -ne $afterSetValue) {
+            $afterSetValueIsRooted = [System.IO.Path]::IsPathRooted($afterSetValue)
+            if ($afterSetValueIsRooted) {
+              $normalizedAfterSetValue = [System.IO.Path]::GetFullPath($afterSetValue).TrimEnd($trimCharacters)
+            }
+          }
+        } catch {}
+        if ($afterSetValueIsRooted -and
+            [String]::Equals($normalizedAfterSetValue, $normalizedExpected, [StringComparison]::OrdinalIgnoreCase)) {
+          $result.SetMethod = 'readback'
+        } else {
+          $result.UiaFallbackStatus = Set-NativeDirectoryEditWithUIA -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle -PageHandle $PageHandle -Control $control -ExpectedValue $ExpectedValue
+          if ($result.UiaFallbackStatus -ne 'applied') { return [pscustomobject]$result }
+          $result.SetMethod = 'uia'
+        }
       } else {
         $result.SetMethod = 'message'
       }
-    } else {
-      $result.SetMethod = 'readback'
-    }
     $result.SetStatus = 'sent'
     $result.SetFailureStage = 'none'
     try {
