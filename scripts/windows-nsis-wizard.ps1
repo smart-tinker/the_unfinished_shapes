@@ -207,7 +207,7 @@ function Set-NativeDirectoryEditWithUIA {
 
 function Set-NativeDirectoryEdit {
   param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle, [string]$ExpectedValue)
-  $result = [ordered]@{ SetStatus = 'unavailable'; SetFailureStage = 'precondition'; SetMethod = 'none'; UiaFallbackStatus = 'not-attempted'; BeforeReadClass = 'unavailable'; PostSetControlStatus = 'unknown'; Readback = 'unknown'; MismatchClass = 'unknown' }
+  $result = [ordered]@{ SetStatus = 'unavailable'; SetFailureStage = 'precondition'; SetMessageOutcome = 'unknown'; SetMethod = 'none'; UiaFallbackStatus = 'not-attempted'; BeforeReadClass = 'unavailable'; PostSetControlStatus = 'unknown'; Readback = 'unknown'; MismatchClass = 'unknown' }
   if (-not $script:nativeWindowApiAvailable -or $MainWindowHandle -eq [IntPtr]::Zero -or
       $PageHandle -eq [IntPtr]::Zero -or [string]::IsNullOrWhiteSpace($ExpectedValue) -or
       $ExpectedValue.Length -ge 32768) { return [pscustomobject]$result }
@@ -268,6 +268,13 @@ function Set-NativeDirectoryEdit {
         $setSent = [TUSWindowApi]::SendMessageTimeout($control, 0x000C, [IntPtr]::Zero, $expectedPointer, 0x0002, 500, [ref]$setResult)
       } finally {
         [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
+      }
+      if ($setSent -eq [IntPtr]::Zero) {
+        $result.SetMessageOutcome = 'dispatch-failed'
+      } elseif ($setResult.ToInt64() -eq 0) {
+        $result.SetMessageOutcome = 'message-rejected'
+      } else {
+        $result.SetMessageOutcome = 'accepted'
       }
       if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) {
         $afterSetValueIsRooted = $false
@@ -1303,6 +1310,14 @@ while ([DateTime]::UtcNow -lt $deadline) {
         default { 'destination-set-unknown' }
       }
       Write-WizardEvent -Name $setFailureEvent -ProcessId $script:installerProcessId
+      if ($nativeEdit.SetFailureStage -eq 'message') {
+        $messageOutcomeEvent = switch ($nativeEdit.SetMessageOutcome) {
+          'dispatch-failed' { 'destination-set-dispatch-failed' }
+          'message-rejected' { 'destination-set-message-rejected' }
+          default { $null }
+        }
+        if ($messageOutcomeEvent) { Write-WizardEvent -Name $messageOutcomeEvent -ProcessId $script:installerProcessId }
+      }
       Write-WizardStateSnapshot -Snapshot $snapshot -WindowSummary $nativeWindow -ProcessId $script:installerProcessId
       Write-WizardEvent -Name 'destination-unavailable' -ProcessId $script:installerProcessId
       exit 2

@@ -1138,7 +1138,7 @@ test('NSIS directory setter checks exact native readback after WM_SETTEXT reject
     'the normal final native readback remains after control provenance checks');
 });
 
-test('NSIS directory-set result enums are sanitized without raw path or error details', () => {
+test('NSIS directory-set result enums are sanitized and mapped from the native producer', async () => {
   const safe = [
     'TUS_NSIS_WIZARD event=destination-set-dispatch-failed pid=4321',
     'TUS_NSIS_WIZARD event=destination-set-message-rejected pid=4321',
@@ -1146,12 +1146,27 @@ test('NSIS directory-set result enums are sanitized without raw path or error de
   const output = [
     ...safe,
     ...safe.map(line => line + ' value=C:/private/path detail=raw error'),
-    'TUS_NSIS_WIZARD event=destination-set-unknown pid=4321',
+    'TUS_NSIS_WIZARD event=destination-set-message-rejected-extra pid=4321',
     'raw setter error C:/private/path',
   ].join(String.fromCharCode(10));
   const events = safeNsisWizardEvents(output);
-
   assert.deepEqual(events, safe);
   assert.equal(JSON.stringify(events).includes('C:/private/path'), false);
   assert.equal(JSON.stringify(events).includes('raw error'), false);
+
+  const source = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const setterStart = source.indexOf('function Set-NativeDirectoryEdit {');
+  const setterEnd = source.indexOf(String.fromCharCode(10) + 'function Get-NativeRadioSelection', setterStart);
+  const setter = source.slice(setterStart, setterEnd);
+  const dispatchAt = setter.indexOf("$result.SetMessageOutcome = 'dispatch-failed'");
+  const rejectedAt = setter.indexOf("$result.SetMessageOutcome = 'message-rejected'");
+  const acceptedAt = setter.indexOf("$result.SetMessageOutcome = 'accepted'");
+  assert.ok(dispatchAt >= 0 && rejectedAt > dispatchAt && acceptedAt > rejectedAt);
+  assert.ok(setter.slice(0, dispatchAt).includes('if ($setSent -eq [IntPtr]::Zero)'));
+  assert.ok(setter.slice(dispatchAt, rejectedAt).includes('elseif ($setResult.ToInt64() -eq 0)'));
+
+  const dispatchMapping = source.indexOf("'dispatch-failed' { 'destination-set-dispatch-failed' }");
+  const rejectedMapping = source.indexOf("'message-rejected' { 'destination-set-message-rejected' }");
+  const emitted = source.indexOf('Write-WizardEvent -Name $messageOutcomeEvent');
+  assert.ok(dispatchMapping >= 0 && rejectedMapping > dispatchMapping && emitted > rejectedMapping);
 });
