@@ -1,4 +1,11 @@
-import { safeArchiveExtractionOperation, safeArchiveExtractionStage, safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType } from '../src/update-package.mjs';
+import { createWriteStream } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { Writable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import yauzl from 'yauzl';
+import { createZipWriteBatcher, openZipReadStream, safeArchiveExtractionOperation, safeArchiveExtractionStage, safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, zipReadChunkBytes } from '../src/update-package.mjs';
 import { safeUpdaterModuleName } from '../src/update-release.mjs';
 
 export const updaterZipStreamSampleOffsetsMs = Object.freeze([15_000, 35_000, 55_000, 75_000, 95_000, 110_000]);
@@ -85,6 +92,210 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
     decodedBytesPerSecond: rate(decodedBytes, previous?.decodedBytes),
     writtenBytesPerSecond: rate(sinkBytesWritten, previous?.sinkBytesWritten),
   };
+}
+
+const zipSinkEntrySequence = 12;
+const zipSinkEntryCompressedSize = 111_522_616;
+const zipSinkEntryUncompressedSize = 249_832_448;
+const zipSinkArmTimeoutMs = 15_000;
+const zipSinkWriteHighWaterMarkBytes = 16 * 1024;
+const safeZipSinkOutcomes = new Set(['completed', 'time-limit', 'failed', 'unknown']);
+
+function safeZipSinkMetric(value, limit) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= limit ? value : null;
+}
+
+export function safeZipSinkComparison(value) {
+  const entrySequence = Number.isSafeInteger(value?.entrySequence) && value.entrySequence >= 1 && value.entrySequence <= 20_000
+    ? value.entrySequence : null;
+  const compression = ['stored', 'deflate'].includes(value?.compression) ? value.compression : 'unknown';
+  const entryCompressedSize = safeZipSinkMetric(value?.entryCompressedSize, 500_000_000);
+  const entryUncompressedSize = safeZipSinkMetric(value?.entryUncompressedSize, 1_073_741_824);
+  const entryNonAsar = value?.entryNonAsar === true;
+  const arms = Array.isArray(value?.arms) ? value.arms : [];
+  const safeArm = (name, arm) => {
+    const decodedBytes = safeZipSinkMetric(arm?.decodedBytes, 1_073_741_824);
+    const sinkBytesWritten = safeZipSinkMetric(arm?.sinkBytesWritten, 1_073_741_824);
+    return {
+      sink: name,
+      outcome: safeZipSinkOutcomes.has(arm?.outcome) ? arm.outcome : 'unknown',
+      wallMs: safeZipSinkMetric(arm?.wallMs, 60_000),
+      cpuUserMs: safeZipSinkMetric(arm?.cpuUserMs, 120_000),
+      cpuSystemMs: safeZipSinkMetric(arm?.cpuSystemMs, 120_000),
+      compressedBytesRead: safeZipSinkMetric(arm?.compressedBytesRead, 500_000_000),
+      decodedBytes,
+      sinkBytesWritten,
+      countersMatch: decodedBytes !== null && sinkBytesWritten !== null ? decodedBytes === sinkBytesWritten : null,
+      sourceReadableEnded: arm?.sourceReadableEnded === true,
+      sinkWritableFinished: arm?.sinkWritableFinished === true,
+      sinkClosed: arm?.sinkClosed === true,
+    };
+  };
+  const entryMatches = value?.entryMatches === true && entrySequence === zipSinkEntrySequence &&
+    compression === 'deflate' && entryCompressedSize === zipSinkEntryCompressedSize &&
+    entryUncompressedSize === zipSinkEntryUncompressedSize && entryNonAsar;
+  return {
+    assetMatches: value?.assetMatches === true,
+    entrySequence,
+    compression,
+    entryCompressedSize,
+    entryUncompressedSize,
+    entryNonAsar,
+    entryMatches,
+    armOrder: ['count-discard', 'file-sink'],
+    cacheCaveat: 'file-sink-second-may-read-warm-source-cache',
+    measurementScope: 'pipeline-only',
+    arms: [safeArm('count-discard', arms[0]), safeArm('file-sink', arms[1])],
+  };
+}
+
+function readZipEntryAt(zip, wantedSequence) {
+  return new Promise((resolve, reject) => {
+    let sequence = 0;
+    const cleanup = () => {
+      zip.off('entry', onEntry);
+      zip.off('end', onEnd);
+      zip.off('error', onError);
+    };
+    const onEntry = entry => {
+      sequence++;
+      if (sequence === wantedSequence) {
+        cleanup();
+        resolve({ entry, sequence });
+        return;
+      }
+      try { zip.readEntry(); }
+      catch (error) { cleanup(); reject(error); }
+    };
+    const onEnd = () => { cleanup(); resolve(null); };
+    const onError = error => { cleanup(); reject(error); };
+    zip.on('entry', onEntry);
+    zip.once('end', onEnd);
+    zip.once('error', onError);
+    try { zip.readEntry(); }
+    catch (error) { cleanup(); reject(error); }
+  });
+}
+
+function streamPositionBytes(stream) {
+  return Number.isSafeInteger(stream?.start) && Number.isSafeInteger(stream?.pos) && stream.pos >= stream.start
+    ? stream.pos - stream.start : null;
+}
+
+async function measureZipSinkArm(archivePath, sinkName) {
+  const entryInfo = {
+    entrySequence: null, compression: 'unknown',
+    entryCompressedSize: null, entryUncompressedSize: null,
+    entryNonAsar: false, entryMatches: false,
+  };
+  const arm = {
+    outcome: 'failed', wallMs: null, cpuUserMs: null, cpuSystemMs: null,
+    compressedBytesRead: null, decodedBytes: null, sinkBytesWritten: null,
+    sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
+  };
+  let zip, source, compressedReadStream, sink, tempDir, timer, timedOut = false;
+  try {
+    if (sinkName === 'file-sink') {
+      tempDir = await mkdtemp(path.join(os.tmpdir(), 'tus-zip-sink-'));
+      sink = createWriteStream(path.join(tempDir, 'entry.bin'), {
+        flags: 'wx', mode: 0o600, highWaterMark: zipSinkWriteHighWaterMarkBytes,
+      });
+    } else {
+      sink = new Writable({
+        highWaterMark: zipSinkWriteHighWaterMarkBytes,
+        write(chunk, _encoding, callback) {
+          this.bytesWritten += chunk.length;
+          callback();
+        },
+      });
+      sink.bytesWritten = 0;
+    }
+
+    zip = await yauzl.openPromise(archivePath, { strictFileNames: true, validateEntrySizes: true });
+    const selected = await readZipEntryAt(zip, zipSinkEntrySequence);
+    if (!selected) return { entryInfo, arm };
+    const { entry, sequence } = selected;
+    const compression = entry.compressionMethod === 8 ? 'deflate' : entry.compressionMethod === 0 ? 'stored' : 'unknown';
+    const entryNonAsar = typeof entry.fileName === 'string' && !entry.fileName.toLowerCase().endsWith('.asar');
+    Object.assign(entryInfo, {
+      entrySequence: sequence,
+      compression,
+      entryCompressedSize: entry.compressedSize,
+      entryUncompressedSize: entry.uncompressedSize,
+      entryNonAsar,
+    });
+    entryInfo.entryMatches = sequence === zipSinkEntrySequence && compression === 'deflate' &&
+      entry.compressedSize === zipSinkEntryCompressedSize &&
+      entry.uncompressedSize === zipSinkEntryUncompressedSize && entryNonAsar;
+    if (!entryInfo.entryMatches) return { entryInfo, arm };
+
+    const opened = await openZipReadStream(zip, entry, true, zipReadChunkBytes);
+    source = opened.stream;
+    compressedReadStream = opened.compressedReadStream;
+    const controller = new AbortController();
+    const cpuStart = process.cpuUsage();
+    const startedAt = performance.now();
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, zipSinkArmTimeoutMs);
+    try {
+      await pipeline(source, createZipWriteBatcher(), sink, { signal: controller.signal });
+      arm.outcome = 'completed';
+    } catch {
+      arm.outcome = timedOut ? 'time-limit' : 'failed';
+    } finally {
+      clearTimeout(timer);
+      timer = null;
+      arm.wallMs = Math.round(performance.now() - startedAt);
+      const cpu = process.cpuUsage(cpuStart);
+      arm.cpuUserMs = Math.round(cpu.user / 1000);
+      arm.cpuSystemMs = Math.round(cpu.system / 1000);
+      arm.compressedBytesRead = streamPositionBytes(compressedReadStream);
+      arm.decodedBytes = Number.isSafeInteger(source?.actualByteCount)
+        ? source.actualByteCount : streamPositionBytes(source);
+      arm.sinkBytesWritten = Number.isSafeInteger(sink?.bytesWritten) ? sink.bytesWritten : null;
+      arm.sourceReadableEnded = source?.readableEnded === true;
+      arm.sinkWritableFinished = sink?.writableFinished === true;
+      arm.sinkClosed = sink?.closed === true;
+    }
+  } catch {
+    arm.outcome = timedOut ? 'time-limit' : 'failed';
+  } finally {
+    clearTimeout(timer);
+    source?.destroy();
+    compressedReadStream?.destroy();
+    try { zip?.close(); } catch {}
+    if (tempDir) {
+      try { await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+      catch { arm.outcome = 'failed'; }
+    }
+  }
+  return { entryInfo, arm };
+}
+
+export async function compareVerifiedWindowsZipEntrySinks(archivePath, assetMatches) {
+  if (assetMatches !== true) return safeZipSinkComparison({ assetMatches: false });
+  const first = await measureZipSinkArm(archivePath, 'count-discard');
+  if (!first.entryInfo.entryMatches) {
+    return safeZipSinkComparison({
+      assetMatches: true,
+      ...first.entryInfo,
+      arms: [first.arm],
+    });
+  }
+  const second = await measureZipSinkArm(archivePath, 'file-sink');
+  const sameEntry = second.entryInfo.entrySequence === first.entryInfo.entrySequence &&
+    second.entryInfo.compression === first.entryInfo.compression &&
+    second.entryInfo.entryCompressedSize === first.entryInfo.entryCompressedSize &&
+    second.entryInfo.entryUncompressedSize === first.entryInfo.entryUncompressedSize &&
+    second.entryInfo.entryNonAsar === first.entryInfo.entryNonAsar;
+  return safeZipSinkComparison({
+    assetMatches: true,
+    ...first.entryInfo,
+    entryMatches: first.entryInfo.entryMatches && second.entryInfo.entryMatches && sameEntry,
+    arms: [first.arm, second.arm],
+  });
 }
 
 export function safeMainDiagnostics(live, manifestFile, assetName, tag) {

@@ -9,6 +9,8 @@ test('safe ZIP sink comparison reports bounded counters for both sinks without p
     compression: 'deflate',
     entryCompressedSize: 111_522_616,
     entryUncompressedSize: 249_832_448,
+    entryNonAsar: true,
+    entryMatches: true,
     arms: [
       {
         outcome: 'completed',
@@ -52,6 +54,7 @@ test('safe ZIP sink comparison reports bounded counters for both sinks without p
     compression: 'deflate',
     entryCompressedSize: 111_522_616,
     entryUncompressedSize: 249_832_448,
+    entryNonAsar: true,
     entryMatches: true,
     armOrder: ['count-discard', 'file-sink'],
     cacheCaveat: 'file-sink-second-may-read-warm-source-cache',

@@ -11,7 +11,7 @@ import { compareReleaseVersions } from '../src/update-release.mjs';
 import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, verifyReleaseAttestation } from '../src/update-package.mjs';
 import { closeSmokeApp, observeGraphics, waitForExit, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
-import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
+import { safeMainDiagnostics, safeZipSinkComparison, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
 import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory, windowsInstallerHandoffInstallDir, windowsRelaunchRequestStatus } from './windows-updater-scenarios.mjs';
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
@@ -1204,6 +1204,15 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   const downloadedPath = path.join(updateDir, downloadName);
   assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'downloaded bytes match the published release manifest');
   console.log('TUS_UPDATE_ABORT_RETRY status=verified package=' + distribution);
+  let zipSinkComparison = null;
+  if (process.platform === 'win32' && distribution === 'portable') {
+    const rawComparison = await current.instance.evaluate(async expected => {
+      const compare = globalThis.__tusUpdaterSmokeBoundary?.compareZipSinkModes;
+      return typeof compare === 'function' ? compare(expected) : null;
+    }, { tag, assetName, size: manifestFile.size, sha256: manifestFile.sha256 }).catch(() => null);
+    zipSinkComparison = safeZipSinkComparison(rawComparison);
+    console.log('TUS_UPDATE_ZIP_SINK_COMPARISON ' + JSON.stringify(zipSinkComparison));
+  }
   if (distribution === 'installer') {
     assert.ok(handoffProfile, 'the exact installer handoff has an isolated source profile');
     pendingWindowsInstallerCleanup = {
@@ -1397,6 +1406,24 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     await closeActive('updated package close');
   }
 
+  if (zipSinkComparison) {
+    assert.equal(zipSinkComparison.assetMatches, true, 'the paired control uses the exact published RC11 portable asset');
+    assert.equal(zipSinkComparison.entryMatches, true, 'both arms read the exact non-ASAR Deflate entry 12');
+    assert.equal(zipSinkComparison.measurementScope, 'pipeline-only');
+    assert.deepEqual(zipSinkComparison.armOrder, ['count-discard', 'file-sink']);
+    for (const arm of zipSinkComparison.arms) {
+      assert.ok(['completed', 'time-limit', 'failed'].includes(arm.outcome), 'each sink arm reports a fixed outcome');
+      for (const key of ['wallMs', 'cpuUserMs', 'cpuSystemMs', 'compressedBytesRead', 'decodedBytes', 'sinkBytesWritten']) {
+        assert.ok(Number.isSafeInteger(arm[key]) && arm[key] >= 0, 'each sink arm reports bounded ' + key);
+      }
+      if (arm.outcome === 'completed') {
+        assert.equal(arm.compressedBytesRead, zipSinkComparison.entryCompressedSize);
+        assert.equal(arm.decodedBytes, zipSinkComparison.entryUncompressedSize);
+        assert.equal(arm.sinkBytesWritten, zipSinkComparison.entryUncompressedSize);
+        assert.equal(arm.countersMatch, true);
+      }
+    }
+  }
   console.log('Updater E2E passed: ' + platform + ' ' + distribution + ' -> ' + tag + ' (' + assetName + '), exact published digest and provenance, explicit cancel/launch, isolated world persistence.');
   return { workDir, downloadedPath, assetName, tag, manifest, targetExecutable };
 }
