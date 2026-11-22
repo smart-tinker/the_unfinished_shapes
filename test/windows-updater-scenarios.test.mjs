@@ -641,6 +641,36 @@ test('installer click rejection is separate and cleanup receives the exact start
   assert.doesNotMatch(JSON.stringify(outcomes.installer.diagnostic), /C:\/private/);
 });
 
+test('relaunch request validation failure cleans the exact Setup after source exit', async () => {
+  const child = { exitCode: 0 };
+  const completed = new Set();
+  const validationFailure = new Error('private relaunch marker mismatch');
+  let cleanupChild;
+  let cleanupFailure;
+  const result = await runWindowsRelaunch({
+    child,
+    click: async () => { completed.add('click'); },
+    waitForExit: async observedChild => {
+      assert.equal(observedChild, child);
+      completed.add('exit');
+    },
+    validateRequest: async () => {
+      assert.deepEqual([...completed].sort(), ['click', 'exit'], 'request validation waits for click and source exit');
+      throw validationFailure;
+    },
+    cleanup: async (observedChild, failure) => {
+      cleanupChild = observedChild;
+      cleanupFailure = failure;
+    },
+  }).then(value => ({ value }), error => ({ error }));
+
+  assert.equal(result.error, validationFailure);
+  assert.equal(cleanupChild, child, 'cleanup uses the exact started updater child');
+  assert.equal(cleanupFailure, validationFailure, 'cleanup receives the request validation failure');
+  assert.deepEqual(validationFailure.tusScenarioDiagnostic, { stage: 'relaunch-request', category: 'other' });
+  assert.equal(JSON.stringify(validationFailure.tusScenarioDiagnostic).includes('private'), false);
+});
+
 test('installer bounded source exit timeout is distinct and cleans its exact child', async () => {
   const child = new EventEmitter();
   child.exitCode = null;
