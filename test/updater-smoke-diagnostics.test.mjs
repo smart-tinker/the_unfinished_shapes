@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Writable } from 'node:stream';
+import * as updatePackage from '../src/update-package.mjs';
 import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from '../scripts/updater-smoke-diagnostics.mjs';
 
 test('TUS main diagnostic preserves only safe verifier setup stages at the log boundary', () => {
@@ -326,4 +328,82 @@ test('TUS ZIP stream sampler takes one late sample before the unchanged extracti
   assert.deepEqual(updaterZipStreamSampleOffsetsMs, [
     15_000, 35_000, 55_000, 75_000, 95_000, 110_000,
   ]);
+});
+
+test('TUS live ZIP sink callback snapshot reports bounded pending writes without private data', async () => {
+  const trackWriteCallback = updatePackage.trackZipWriteCallback;
+  assert.equal(typeof trackWriteCallback, 'function', 'the ZIP extraction smoke snapshot tracks its sink callback');
+
+  const assetName = 'candidate.zip';
+  const tag = 'v0.1.0-rc11';
+  const manifestFile = { sha256: 'a'.repeat(64) };
+  const exercise = async expectedState => {
+    let completeWrite;
+    const options = {
+      write(_chunk, _encoding, callback) {
+        if (expectedState === 'write') completeWrite = callback;
+        else callback();
+      },
+    };
+    if (expectedState === 'writev') options.writev = (_chunks, callback) => { completeWrite = callback; };
+    const sink = new Writable(options);
+    const readWriteCallback = trackWriteCallback(sink);
+    if (expectedState === 'write') sink.write(Buffer.from('fixture'));
+    else {
+      sink.cork();
+      sink.write(Buffer.from('first'));
+      sink.write(Buffer.from('second'));
+      sink.uncork();
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(typeof completeWrite, 'function', 'the writable reached the selected callback');
+    const snapshot = updatePackage.safeZipExtractionStreamSnapshot(
+      { readableEnded: false, actualByteCount: 7 },
+      sink,
+      12,
+      { compressionMethod: 8, compressedSize: 3, uncompressedSize: 7 },
+      null,
+      readWriteCallback(),
+    );
+    const [diagnostic] = safeMainDiagnostics([{
+      stage: 'extract-archive',
+      extractStreamSnapshot: snapshot,
+    }], manifestFile, assetName, tag);
+    assert.equal(diagnostic.streamSnapshot.writeCallbackState, expectedState);
+    assert.ok(Number.isSafeInteger(diagnostic.streamSnapshot.writeCallbackAgeMs));
+    assert.ok(diagnostic.streamSnapshot.writeCallbackAgeMs >= 0);
+    assert.ok(diagnostic.streamSnapshot.writeCallbackAgeMs <= 120_000);
+    completeWrite();
+    await new Promise(resolve => sink.end(resolve));
+    assert.deepEqual(readWriteCallback(), { state: 'idle', ageMs: null });
+  };
+
+  await exercise('write');
+  await exercise('writev');
+  assert.deepEqual(trackWriteCallback({})(), { state: 'unknown', ageMs: null });
+
+  const [unsafe] = safeMainDiagnostics([{
+    stage: 'extract-archive',
+    extractStreamSnapshot: {
+      entrySequence: 12,
+      compression: 'deflate',
+      entryCompressedSize: 3,
+      entryUncompressedSize: 7,
+      compressedBytesRead: 2,
+      decodedBytes: 5,
+      sourceReadableEnded: false,
+      sinkWritableFinished: false,
+      sinkClosed: false,
+      sinkBytesWritten: 4,
+      sinkWritableLength: 1,
+      writeCallbackState: 'C:/private/path',
+      writeCallbackAgeMs: 120_001,
+      privateError: 'raw filesystem error',
+    },
+  }], manifestFile, assetName, tag);
+  assert.equal(unsafe.streamSnapshot.writeCallbackState, 'unknown');
+  assert.equal(unsafe.streamSnapshot.writeCallbackAgeMs, null);
+  const serialized = JSON.stringify(unsafe);
+  assert.equal(serialized.includes('C:/private/path'), false);
+  assert.equal(serialized.includes('raw filesystem error'), false);
 });
