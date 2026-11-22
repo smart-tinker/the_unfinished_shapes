@@ -1206,7 +1206,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   console.log('TUS_UPDATE_ABORT_RETRY status=verified package=' + distribution);
   let zipSinkComparison = null;
   if (process.platform === 'win32' && distribution === 'portable') {
-    const rawComparison = await current.instance.evaluate(async expected => {
+    const rawComparison = await current.instance.evaluate(async (_electron, expected) => {
       const compare = globalThis.__tusUpdaterSmokeZipSinkCompare;
       return typeof compare === 'function' ? compare(expected) : null;
     }, { tag, assetName, size: manifestFile.size, sha256: manifestFile.sha256 }).catch(() => null);
