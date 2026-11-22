@@ -18,7 +18,7 @@ const safeHandoffStages = new Set([
   'source-setup-started', 'source-setup-complete', 'source-identity-verified', 'source-fixture-verified',
   'target-identity-verified', 'target-fixture-verified',
 ]);
-const safeHandoffChecks = new Set(['build-label', 'build-title-sha', 'app-version', 'user-data', 'startup-health', 'other']);
+const safeHandoffChecks = new Set(['build-label', 'build-title-sha', 'app-version', 'user-data', 'startup-health', 'relaunch-request', 'other']);
 const safeHandoffCheckResults = new Set(['match', 'mismatch', 'failed']);
 const safeScenarioStages = new Set([
   'source-setup', 'source-identity', 'source-prepare', 'check-download',
@@ -33,6 +33,20 @@ const safeScenarioCategories = new Set([
 ]);
 
 const safeWizardSnapshotPattern = /^TUS_NSIS_WIZARD snapshot stage=(entry|install-mode|directory|installing|finish|unknown) process=path-match window=pid-match page-window=(present|missing|ambiguous|unknown) page-parent=(match|mismatch|unknown) page-process=(match|mismatch|unknown) page-visible=(visible|hidden|unknown) page-class=(native-dialog|other|unknown) option-page=(install-options|other|unknown) option-radio-count=(none|one|two|many|unknown) option-radio-style=(match|mismatch|unknown) current-user-preset=(match|mismatch|unknown) all-users-preset=(match|mismatch|unknown) current-user-selected=(selected|unselected|unknown) all-users-selected=(selected|unselected|unknown) option-next=(match|missing|disabled|hidden|wrong-class|owner-mismatch|unknown) title=(product-match|product-missing|unknown) mode=(present|absent|unknown) current-user=(selected|unselected|unknown) radios=(none|one|two|many) edits=(none|one|many) next=(match|missing) install=(match|missing) finish=(match|missing) destination=(match|mismatch|unknown) native-page=(directory|install-files|other|unknown) uia-page=(install-mode|directory|install-files|finish|other|unknown) directory-edit=(match|missing|wrong-class|unknown) directory-browse=(match|missing|wrong-class|unknown) directory-text=(match|missing|wrong-class|unknown) install-progress=(match|missing|wrong-class|unknown) uia-top-level=(none|one|two|many|unknown) main-window=(present|absent|unknown) wizard-window=(main|other|ambiguous|none|unknown) foreground=(installer|other|none|unknown) window-class=(native-dialog|other|unknown) native-title=(error-like|other|empty|unknown) uia-provider=(empty|available|error|unknown) uia-descendants=(none|one|two|many|unknown) win32-children=(none|one|two|many|unknown) win32-buttons=(none|one|two|many|unknown) win32-static=(none|one|two|many|unknown) session=(match|mismatch|unknown) desktop=(default-interactive|other|unknown) visible=(visible|hidden|unknown) pid=(\d{1,10})$/;
+
+export function windowsRelaunchRequestStatus(marker, expectedInstallerPath) {
+  let options;
+  try { options = JSON.parse(marker); } catch { return 'failed'; }
+  if (!options || typeof options !== 'object' ||
+      typeof options.execPath !== 'string' ||
+      typeof expectedInstallerPath !== 'string' ||
+      !Array.isArray(options.args)) return 'failed';
+  try {
+    const exactPath = path.win32.resolve(options.execPath).toLowerCase() ===
+      path.win32.resolve(expectedInstallerPath).toLowerCase();
+    return exactPath && options.args.length === 0 ? 'match' : 'mismatch';
+  } catch { return 'failed'; }
+}
 
 export function windowsInstallerHandoffInstallDir(localData) {
   return path.join(localData, 'Programs', 'TheUnfinishedShapes');

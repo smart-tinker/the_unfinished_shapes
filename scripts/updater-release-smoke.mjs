@@ -12,7 +12,7 @@ import { safeVerifierCode, safeVerifierErrorType, verifyReleaseAttestation } fro
 import { closeSmokeApp, observeGraphics, waitForExit, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
-import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory, windowsInstallerHandoffInstallDir } from './windows-updater-scenarios.mjs';
+import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory, windowsInstallerHandoffInstallDir, windowsRelaunchRequestStatus } from './windows-updater-scenarios.mjs';
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
 const updateHttpStatusPattern = /\bHTTP (\d{3})\b/;
@@ -865,7 +865,9 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   if (distribution === 'installer') {
     const child = closing.instance.process();
     setDiagnostic('relaunch-click');
-    await runWindowsRelaunch({
+    let relaunchFailure;
+    try {
+      await runWindowsRelaunch({
       child,
       click: () => closing.page.locator('#updates-launch').click({ timeout: 10000 }).catch(error => {
         if (child.exitCode === null) throw error;
@@ -882,7 +884,19 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
           await closeAfterQuit(closing, Promise.resolve());
         }
       },
-    });
+
+      });
+    } catch (error) { relaunchFailure = error; }
+    const relaunchStatus = windowsRelaunchRequestStatus(
+      await readFile(relaunchMarker, 'utf8').catch(() => ''),
+      downloadedPath,
+    );
+    console.log(safeInstallerHandoffEvents(
+      'TUS_INSTALLER_HANDOFF check=relaunch-request:' + relaunchStatus,
+    ).join(String.fromCharCode(10)));
+    if (relaunchFailure) throw relaunchFailure;
+    setDiagnostic('relaunch-request');
+    assert.equal(relaunchStatus, 'match', 'production relaunch requests the exact verified Setup with no arguments');
   } else {
     const exit = waitForExit(closing.instance.process());
     const click = closing.page.locator('#updates-launch').click({ timeout: 10000 }).catch(error => {

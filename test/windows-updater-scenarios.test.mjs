@@ -9,7 +9,7 @@ import os from 'node:os';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
-import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory } from '../scripts/windows-updater-scenarios.mjs';
+import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory, windowsRelaunchRequestStatus } from '../scripts/windows-updater-scenarios.mjs';
 
 test('Windows installer acceptance still runs when portable acceptance fails', async () => {
   const calls = [];
@@ -113,6 +113,20 @@ test('installer relaunch request emits only a fixed path-free outcome', () => {
     'TUS_INSTALLER_HANDOFF check=relaunch-request:failed',
   ]);
   assert.equal(JSON.stringify(events).includes('/private/path'), false);
+});
+
+test('Windows relaunch request requires exact Setup path and empty arguments', () => {
+  const expected = 'C:/ci/downloads/TheUnfinishedShapes-Setup.exe';
+  const outcomes = [
+    windowsRelaunchRequestStatus(JSON.stringify({ execPath: expected, args: [] }), expected),
+    windowsRelaunchRequestStatus(JSON.stringify({ execPath: expected.replace('TheUnfinishedShapes', 'THEUNFINISHEDSHAPES'), args: [] }), expected),
+    windowsRelaunchRequestStatus(JSON.stringify({ execPath: 'C:/ci/downloads/other.exe', args: [] }), expected),
+    windowsRelaunchRequestStatus(JSON.stringify({ execPath: expected, args: ['/S'] }), expected),
+    windowsRelaunchRequestStatus('{invalid', expected),
+  ];
+
+  assert.deepEqual(outcomes, ['match', 'match', 'mismatch', 'mismatch', 'failed']);
+  assert.equal(JSON.stringify(outcomes).includes(expected), false);
 });
 
 test('NSIS wizard snapshot preserves bounded page facts without UIA names or paths', () => {
