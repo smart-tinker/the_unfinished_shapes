@@ -607,15 +607,21 @@ async function assertDigestMismatchRejected(current, {
     const originalFetch = globalThis.fetch;
     const assetUrls = new Set([assetUrl]);
     const control = {
+      expectedTag: tag, expectedAssetName: assetName, expectedSha256,
+      selectedAssetMatches: null, fetcherCalls: 0,
       assetRequests: 0, bodyResponses: 0, bytesFlipped: 0, bytesRead: 0,
       responseComplete: false, attestationRequests: 0,
     };
     boundary.digestMismatchControl = control;
     boundary.digestMismatchFetch = originalFetch;
     boundary.digestMismatchFetcher = async (input, init) => {
+      control.fetcherCalls++;
       const requestUrl = typeof input === 'string' ? input : input?.url;
-      const isAssetRequest = assetUrls.has(requestUrl);
-      if (requestUrl === attestationUrl) control.attestationRequests++;
+      const isAssetRequest = control.selectedAssetMatches === true && assetUrls.has(requestUrl);
+      if (typeof requestUrl === 'string' &&
+          requestUrl.startsWith('https://api.github.com/repos/smart-tinker/the_unfinished_shapes/attestations/sha256:')) {
+        control.attestationRequests++;
+      }
       const response = await Reflect.apply(originalFetch, globalThis, [input, init]);
       if (!isAssetRequest) return response;
       control.assetRequests++;
@@ -683,6 +689,8 @@ async function assertDigestMismatchRejected(current, {
         const value = globalThis.__tusUpdaterSmokeBoundary?.digestMismatchControl;
         return value ? {
           assetMatched: value.assetRequests > 0 && value.bodyResponses === 1,
+          assetSelectionMatches: value.selectedAssetMatches === true,
+          fetcherCalled: value.fetcherCalls > 0,
           bytesFlipped: value.bytesFlipped,
           bytesRead: value.bytesRead,
           responseComplete: value.responseComplete,
@@ -714,6 +722,8 @@ async function assertDigestMismatchRejected(current, {
     }
     const actual = {
       assetMatched: control?.assetMatched === true,
+      assetSelectionMatches: control?.assetSelectionMatches === true,
+      fetcherCalled: control?.fetcherCalled === true,
       bytesFlipped: control?.bytesFlipped ?? 0,
       bytesRead: control?.bytesRead ?? 0,
       responseComplete: control?.responseComplete === true,
@@ -739,6 +749,8 @@ async function assertDigestMismatchRejected(current, {
     console.log('TUS_UPDATE_DIGEST_NEGATIVE ' + JSON.stringify(actual));
     assert.deepEqual(actual, {
       assetMatched: true,
+      assetSelectionMatches: true,
+      fetcherCalled: true,
       bytesFlipped: 1,
       bytesRead: expectedSize,
       responseComplete: true,

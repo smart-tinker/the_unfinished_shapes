@@ -167,6 +167,13 @@ app.whenReady().then(async()=>{
       await reportDiagnostic({ stage: 'updater-module-import', status: 'ready' });
       await reportDiagnostic({ stage: 'download-verified-asset', status: 'starting' });
       if (updaterSmokeBoundary) updaterSmokeBoundary.downloadVerifiedAsset = 'pending';
+      const digestMismatchControl = diagnosticEnabled ? updaterSmokeBoundary?.digestMismatchControl : null;
+      if (digestMismatchControl) {
+        digestMismatchControl.selectedAssetMatches =
+          availableUpdate.release?.tag_name === digestMismatchControl.expectedTag &&
+          availableUpdate.asset?.name === digestMismatchControl.expectedAssetName &&
+          availableUpdate.asset?.digest === 'sha256:' + digestMismatchControl.expectedSha256;
+      }
       const result = await downloadVerifiedAsset({
         ...availableUpdate,
         tag: availableUpdate.release.tag_name,
