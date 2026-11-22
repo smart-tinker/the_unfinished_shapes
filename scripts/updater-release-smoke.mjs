@@ -156,6 +156,16 @@ async function fixtureFingerprint(current) {
   return createHash('sha256').update(JSON.stringify({ settings, objects })).digest('hex');
 }
 
+async function focusByKeyboard(page, selector) {
+  // shortcut: 64 tab stops, increase if Settings gains more focusable controls.
+  const target = page.locator(selector);
+  for (let index = 0; index < 64; index++) {
+    if (await target.evaluate(element => element === document.activeElement)) return;
+    await page.keyboard.press('Tab');
+  }
+  assert.fail('Keyboard tab order did not reach ' + selector);
+}
+
 async function assertInstalledSourceIdentity(current, profile) {
   if (!profile) return;
   const identity = await current.instance.evaluate(({ app }) => ({
@@ -883,7 +893,9 @@ async function assertPartialDownloadAbortCleaned(current, {
       if (partialBytes === 0) await new Promise(resolve => setTimeout(resolve, 25));
     }
     const partialBodyWritten = partialFiles === 1 && partialBytes > 0 && partialBytes < expectedSize;
-    await current.page.locator('#updates-cancel').click({ noWaitAfter: true });
+    await current.page.waitForFunction(() => !document.querySelector('#updates-cancel')?.disabled, null, { timeout: 5000 });
+    await focusByKeyboard(current.page, '#updates-cancel');
+    await current.page.keyboard.press('Enter');
     await current.page.waitForFunction(() => {
       const status = document.querySelector('#updates-status');
       return status?.textContent === 'Download cancelled. You can try again.' &&
@@ -1121,11 +1133,39 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   } else {
     await addWorldFixture(current.page);
   }
-  await current.page.locator('#settings-open').click();
-  await current.page.locator('#update-channel').selectOption('prerelease');
+  await focusByKeyboard(current.page, '#settings-open');
+  await current.page.keyboard.press('Enter');
+  await current.page.locator('#settings').waitFor({ state: 'visible', timeout: 5000 });
+  await focusByKeyboard(current.page, '#update-channel');
+  await current.page.keyboard.press('ArrowDown');
+  await current.page.keyboard.press('Enter');
+  assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'keyboard selection changes the channel');
+  await focusByKeyboard(current.page, '#settings-close');
+  await current.page.keyboard.press('Enter');
+  await current.page.locator('#settings').waitFor({ state: 'hidden', timeout: 5000 });
+  assert.equal(
+    await current.page.evaluate(async () => (await window.tus.loadSettings()).updateChannel),
+    'stable',
+    'keyboard cancel discards the unsaved channel selection',
+  );
+
+  await focusByKeyboard(current.page, '#settings-open');
+  await current.page.keyboard.press('Enter');
+  await current.page.locator('#settings').waitFor({ state: 'visible', timeout: 5000 });
+  assert.equal(await current.page.locator('#update-channel').inputValue(), 'stable', 'reopening restores the saved channel');
+  await focusByKeyboard(current.page, '#update-channel');
+  await current.page.keyboard.press('ArrowDown');
+  await current.page.keyboard.press('Enter');
+  assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'keyboard can select the prerelease channel again');
   if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
-  await current.page.locator('#updates-save').click();
+  await focusByKeyboard(current.page, '#updates-save');
+  await current.page.keyboard.press('Enter');
   await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Update preference saved.');
+  assert.equal(
+    await current.page.evaluate(async () => (await window.tus.loadSettings()).updateChannel),
+    'prerelease',
+    'keyboard activation saves the selected channel',
+  );
   const firstProcess = current.instance.process();
   const firstExit = waitForExit(firstProcess);
   await current.instance.evaluate(({ app }) => app.quit());
@@ -1135,8 +1175,10 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   current = await start(sourceExecutable, 'updater preference restart ' + distribution, dataDir, true, sourceEnv);
   await assertInstalledSourceIdentity(current, handoffProfile);
   setDiagnostic('check-download');
-  await current.page.locator('#settings-open').click();
-  assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'the selected update channel survives restart');
+  await focusByKeyboard(current.page, '#settings-open');
+  await current.page.keyboard.press('Enter');
+  await current.page.locator('#settings').waitFor({ state: 'visible', timeout: 5000 });
+  assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'the keyboard-selected channel survives restart and reopening');
   if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
   await current.page.waitForFunction(() => !document.querySelector('#updates-notice')?.hidden, null, { timeout: 30000 });
   const startupNotice = await current.page.locator('#updates-notice').getAttribute('title');
