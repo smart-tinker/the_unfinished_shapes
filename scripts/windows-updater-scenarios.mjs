@@ -110,7 +110,7 @@ export function safeWindowsScenarioFailureCategory(error) {
   return 'other';
 }
 
-export async function runWindowsRelaunch({ child, click, waitForExit, cleanup }) {
+export async function runWindowsRelaunch({ child, click, waitForExit, cleanup, validateRequest }) {
   let order = 0;
   const capture = (stage, operation) => Promise.resolve().then(operation).then(() => null, error => {
     const failure = error instanceof Error ? error : new Error('Windows updater relaunch failed.');
@@ -121,7 +121,12 @@ export async function runWindowsRelaunch({ child, click, waitForExit, cleanup })
     capture('relaunch-click', click),
     capture('relaunch-source-exit', () => waitForExit(child)),
   ]);
-  const failures = [clickFailure, exitFailure].filter(Boolean).sort((left, right) => left.order - right.order);
+  const failures = [clickFailure, exitFailure].filter(Boolean);
+  if (validateRequest) {
+    const requestFailure = await capture('relaunch-request', validateRequest);
+    if (requestFailure) failures.push(requestFailure);
+  }
+  failures.sort((left, right) => left.order - right.order);
   const primary = failures[0]?.error;
   let cleanupFailure = null;
   try { await cleanup(child, primary); } catch (error) {
@@ -146,12 +151,13 @@ function safeScenarioDiagnostic(error) {
   };
 }
 
-export async function runWindowsUpdaterScenarios({ portable, installer }) {
+export async function runWindowsUpdaterScenarios({ portable, installer, cleanupInstaller }) {
   const outcomes = {};
   for (const [name, run] of [['portable', portable], ['installer', installer]]) {
     try {
       outcomes[name] = { status: 'fulfilled', value: await run(), diagnostic: { stage: 'complete', category: 'none' } };
     } catch (error) {
+      if (name === 'installer' && cleanupInstaller) await cleanupInstaller(error);
       outcomes[name] = { status: 'rejected', error, diagnostic: safeScenarioDiagnostic(error) };
     }
   }

@@ -40,6 +40,7 @@ const projectPackageOriginal = await readFile(projectPackagePath, 'utf8');
 const testRoot = await mkdtemp(path.join(os.tmpdir(), 'tus-update-e2e-'));
 const workDirs = [];
 let active = null;
+let pendingWindowsInstallerCleanup = null;
 const platform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
 const runnerFlags = process.platform === 'linux' || process.platform === 'win32'
   ? ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader'] : [];
@@ -546,6 +547,21 @@ async function cleanupWindowsNsisInstaller(installerPath, expectedInstallDir) {
   throw new Error('The exact verified installer cleanup did not complete.');
 }
 
+async function cleanupPendingWindowsInstaller() {
+  if (!pendingWindowsInstallerCleanup) return true;
+  try {
+    await cleanupWindowsNsisInstaller(
+      pendingWindowsInstallerCleanup.installerPath,
+      pendingWindowsInstallerCleanup.installDir,
+    );
+    pendingWindowsInstallerCleanup = null;
+    return true;
+  } catch {
+    console.log('TUS_NSIS_WIZARD event=cleanup-failed');
+    return false;
+  }
+}
+
 async function runIndependentWindowsScenario(distribution) {
   let diagnostic = {
     stage: distribution === 'installer' ? 'source-setup' : 'source-identity',
@@ -764,6 +780,13 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   assert.ok(downloadName, 'the verified package is saved in the isolated Downloads directory');
   const downloadedPath = path.join(updateDir, downloadName);
   assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'downloaded bytes match the published release manifest');
+  if (distribution === 'installer') {
+    assert.ok(handoffProfile, 'the exact installer handoff has an isolated source profile');
+    pendingWindowsInstallerCleanup = {
+      installerPath: downloadedPath,
+      installDir: handoffProfile.installDir,
+    };
+  }
 
   if (distribution !== 'installer') {
     setDiagnostic('extract');
@@ -878,25 +901,26 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
         if (failure) {
           let closeFailure;
           try { await closeActive('failed installer relaunch'); } catch (error) { closeFailure = error; }
-          await cleanupWindowsNsisInstaller(downloadedPath, handoffProfile.installDir);
+          await cleanupPendingWindowsInstaller();
           if (closeFailure) throw closeFailure;
         } else {
           await closeAfterQuit(closing, Promise.resolve());
         }
       },
-
+      validateRequest: async () => {
+        setDiagnostic('relaunch-request');
+        const relaunchStatus = windowsRelaunchRequestStatus(
+          await readFile(relaunchMarker, 'utf8').catch(() => ''),
+          downloadedPath,
+        );
+        console.log(safeInstallerHandoffEvents(
+          'TUS_INSTALLER_HANDOFF check=relaunch-request:' + relaunchStatus,
+        ).join(String.fromCharCode(10)));
+        assert.equal(relaunchStatus, 'match', 'production relaunch requests the exact verified Setup with no arguments');
+      },
       });
     } catch (error) { relaunchFailure = error; }
-    const relaunchStatus = windowsRelaunchRequestStatus(
-      await readFile(relaunchMarker, 'utf8').catch(() => ''),
-      downloadedPath,
-    );
-    console.log(safeInstallerHandoffEvents(
-      'TUS_INSTALLER_HANDOFF check=relaunch-request:' + relaunchStatus,
-    ).join(String.fromCharCode(10)));
     if (relaunchFailure) throw relaunchFailure;
-    setDiagnostic('relaunch-request');
-    assert.equal(relaunchStatus, 'match', 'production relaunch requests the exact verified Setup with no arguments');
   } else {
     const exit = waitForExit(closing.instance.process());
     const click = closing.page.locator('#updates-launch').click({ timeout: 10000 }).catch(error => {
@@ -935,6 +959,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
       sourceSha: manifest.sourceSha,
     });
     targetExecutable = handoffProfile.installedExe;
+    assert.equal(await cleanupPendingWindowsInstaller(), true, 'the exact verified Setup exits after target verification');
   } else {
     setDiagnostic('target-verify');
     current = await start(relaunch.execPath, 'published update launch ' + distribution, dataDir);
@@ -957,6 +982,7 @@ try {
     const outcomes = await runWindowsUpdaterScenarios({
       portable: () => runIndependentWindowsScenario('portable'),
       installer: () => runIndependentWindowsScenario('installer'),
+      cleanupInstaller: cleanupPendingWindowsInstaller,
     });
     for (const [scenario, outcome] of Object.entries(outcomes)) {
       console.log('TUS_WINDOWS_UPDATER_RESULT ' + JSON.stringify({
@@ -976,6 +1002,9 @@ try {
   }
 } finally {
   await closeActive('updater test cleanup').catch(() => {});
-  for (const workDir of workDirs) await rm(workDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
-  await rm(testRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  if (await cleanupPendingWindowsInstaller()) {
+    for (const workDir of workDirs) await rm(workDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    await rm(testRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  }
+  // shortcut: retain the isolated tree only if bounded Setup cleanup fails; GitHub runner teardown clears it.
 }
