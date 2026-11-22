@@ -660,11 +660,12 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   const manifestFile = manifest.files.find(file => file.name === assetName);
   assert.ok(manifestFile, 'the exact platform and distribution package appears in the published manifest');
 
+  const relaunchMarker = path.join(workDir, 'relaunch.json');
   await configureUpdateDialogs(current.instance, {
     downloadsDir, extractDir,
     dialogMarker: path.join(workDir, 'update-dialog.json'),
     extractMarker: path.join(workDir, 'extract-folder-chooser.json'),
-    relaunchMarker: path.join(workDir, 'relaunch.json'),
+    relaunchMarker,
     executeRelaunch: Boolean(handoffProfile),
   });
   await current.page.evaluate(() => {
