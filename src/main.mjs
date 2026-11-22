@@ -176,6 +176,8 @@ app.whenReady().then(async()=>{
           if (progress?.state === 'failed') failureReported = true;
           win?.webContents.send('updates:progress', { state: 'downloading', ...progress });
         },
+        ...(diagnosticEnabled && typeof updaterSmokeBoundary?.digestMismatchFetcher === 'function'
+          ? { fetcher: updaterSmokeBoundary.digestMismatchFetcher } : {}),
       });
       if (updaterSmokeBoundary) updaterSmokeBoundary.downloadVerifiedAsset = 'fulfilled';
       if (result?.cancelled === true) return result;

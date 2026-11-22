@@ -612,7 +612,7 @@ async function assertDigestMismatchRejected(current, {
     };
     boundary.digestMismatchControl = control;
     boundary.digestMismatchFetch = originalFetch;
-    globalThis.fetch = async (input, init) => {
+    boundary.digestMismatchFetcher = async (input, init) => {
       const requestUrl = typeof input === 'string' ? input : input?.url;
       const isAssetRequest = assetUrls.has(requestUrl);
       if (requestUrl === attestationUrl) control.attestationRequests++;
@@ -645,7 +645,7 @@ async function assertDigestMismatchRejected(current, {
         status: response.status, statusText: response.statusText, headers: response.headers,
       });
     };
-    return globalThis.fetch !== originalFetch;
+    return typeof boundary.digestMismatchFetcher === 'function';
   }, { assetUrl, attestationUrl });
   assert.equal(controlInstalled, true, 'the packaged main-process asset control is installed');
 
@@ -765,13 +765,14 @@ async function assertDigestMismatchRejected(current, {
       const boundary = globalThis.__tusUpdaterSmokeBoundary;
       const originalFetch = boundary?.digestMismatchFetch;
       if (typeof originalFetch !== 'function') return false;
-      globalThis.fetch = originalFetch;
+      const controlRemoved = typeof boundary.digestMismatchFetcher === 'function';
+      delete boundary.digestMismatchFetcher;
       delete boundary.digestMismatchFetch;
       delete boundary.digestMismatchControl;
-      return globalThis.fetch === originalFetch;
+      return controlRemoved && globalThis.fetch === originalFetch;
     }).catch(() => false);
   }
-  assert.equal(fetchRestored, true, 'the packaged main process restores its original fetch');
+  assert.equal(fetchRestored, true, 'the packaged main process removes its one-shot digest control');
 }
 
 async function updateOnce(distribution, setDiagnostic = () => {}) {
