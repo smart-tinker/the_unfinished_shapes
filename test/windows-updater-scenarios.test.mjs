@@ -844,3 +844,51 @@ test('Windows relaunch failure cleanup stops only the exact verified Setup path'
   await waitForExit(exact, 5000);
   assert.equal(other.exitCode, null, 'cleanup leaves a different executable path untouched');
 });
+
+
+test('NSIS readback classifies unrooted text before normalization without exposing it', async () => {
+  const safe = [
+    'TUS_NSIS_WIZARD event=destination-before-read-not-rooted pid=4321',
+    'TUS_NSIS_WIZARD event=destination-readback-not-rooted pid=4321',
+  ];
+  const events = safeNsisWizardEvents([
+    ...safe,
+    ...safe.map(line => line + ' value=C:/private/path'),
+    'raw destination /private/user',
+  ].join(String.fromCharCode(10)));
+  assert.deepEqual(events, safe);
+  assert.equal(JSON.stringify(events).includes('C:/private'), false);
+
+  const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const setterStart = script.indexOf('function Set-NativeDirectoryEdit');
+  const setterEnd = script.indexOf(String.fromCharCode(10) + 'function Get-NativeRadioSelection', setterStart);
+  const setter = script.slice(setterStart, setterEnd);
+  const beforeReadAt = setter.indexOf('$beforeValue = Get-NativeDirectoryEditText -Control $control');
+  const beforeRootedAt = setter.indexOf('$beforeValueRooted = [System.IO.Path]::IsPathRooted($beforeValue)', beforeReadAt);
+  const beforeFullPathAt = setter.indexOf('GetFullPath($beforeValue)', beforeReadAt);
+  assert.ok(beforeReadAt >= 0 && beforeRootedAt > beforeReadAt && beforeFullPathAt > beforeRootedAt);
+  assert.ok(setter.includes("$beforeReadClass = 'not-rooted'"));
+
+  let readbackAt = 0;
+  let readbackSites = 0;
+  while ((readbackAt = setter.indexOf('$value = Get-NativeDirectoryEditText -Control $control', readbackAt)) >= 0) {
+    const rootedAt = setter.indexOf('$valueIsRooted = [System.IO.Path]::IsPathRooted($value)', readbackAt);
+    const fullPathAt = setter.indexOf('GetFullPath($value)', readbackAt);
+    assert.ok(rootedAt > readbackAt && fullPathAt > rootedAt, 'each post-set read checks the original text before normalization');
+    readbackSites++;
+    readbackAt += 10;
+  }
+  assert.equal(readbackSites, 2);
+  assert.ok(setter.includes("$result.MismatchClass = 'not-rooted'"));
+
+  const directoryStart = script.indexOf("if ($stage -eq 'directory') {");
+  const installStart = script.indexOf("if ($stage -eq 'installing') {", directoryStart);
+  const directory = script.slice(directoryStart, installStart);
+  assert.ok(directory.includes("'not-rooted' { 'destination-before-read-not-rooted' }"));
+  assert.ok(directory.includes("'not-rooted' { 'destination-readback-not-rooted' }"));
+
+  const writerStart = script.indexOf('function Write-WizardEvent {');
+  const writerEnd = script.indexOf(String.fromCharCode(10) + 'trap {', writerStart);
+  const validateSet = script.slice(writerStart, writerEnd).split('[ValidateSet(')[1]?.split(')]')[0] ?? '';
+  for (const line of safe) assert.ok(validateSet.includes("'" + line.match(/event=([a-z-]+)/)[1] + "'"));
+});
