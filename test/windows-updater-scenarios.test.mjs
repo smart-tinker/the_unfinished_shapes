@@ -1064,6 +1064,28 @@ test('NSIS InstallFiles and Finish pages require pinned native signatures', asyn
     'the sanitizer accepts the fixed Finish enum');
 });
 
+test('NSIS native-only Finish fallback requires pinned ID1 after destination verification', async () => {
+  const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const helperStart = script.indexOf('function Get-NativeFinishControl');
+  const helperEnd = script.indexOf('function Get-NsisPageSummary', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, 'native Finish control reader is present');
+  const helper = script.slice(helperStart, helperEnd);
+  assert.ok(helper.includes('Get-MuiNextControl'));
+  assert.ok(helper.includes('GetWindowText'));
+  assert.ok(helper.includes("'&Finish'") || helper.includes("'Finish'"));
+  assert.ok(helper.includes('GetParent') && helper.includes('ProcessId'));
+
+  const finishStart = script.indexOf("if ($stage -eq 'installing') {");
+  const finishEnd = script.indexOf("\n  Start-Sleep -Milliseconds 100", finishStart);
+  assert.ok(finishStart >= 0 && finishEnd > finishStart, 'installing branch is bounded');
+  const finishFlow = script.slice(finishStart, finishEnd);
+  assert.ok(finishFlow.includes("$finish.Count -eq 0"), 'native fallback applies only when UIA has no Finish button');
+  assert.ok(finishFlow.includes("$nativeWindow.NativePage -eq 'finish'"));
+  assert.ok(finishFlow.includes('$destinationVerified') && finishFlow.includes("$destinationStatus -eq 'match'"));
+  assert.ok(finishFlow.includes('Get-NativeFinishControl'));
+  assert.ok(finishFlow.includes('0x00F5'), 'native action is limited to the verified NSIS ID1 button');
+});
+ 
 test('NSIS install mode identifies AllUsers and checks radio visibility before native Next', async () => {
   const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
   const modeStart = script.indexOf("if ($nativeWindow.OptionPage -eq 'install-options') {");
