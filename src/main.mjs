@@ -22,7 +22,7 @@ const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagn
   : null;
 if (updaterSmokeBoundary) {
   globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
-  updaterSmokeBoundary.compareZipSinkModes = async expected => {
+  globalThis.__tusUpdaterSmokeZipSinkCompare = async expected => {
     const update = downloadedUpdate;
     const assetMatches = process.platform === 'win32' &&
       updaterSmokeBoundary.downloadVerifiedAsset === 'fulfilled' &&

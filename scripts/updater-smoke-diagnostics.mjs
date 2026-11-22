@@ -195,8 +195,32 @@ async function measureZipSinkArm(archivePath, sinkName) {
   };
   let zip, source, compressedReadStream, sink, tempDir, timer, timedOut = false;
   try {
+    zip = await yauzl.openPromise(archivePath, { strictFileNames: true, validateEntrySizes: true });
+    const selected = await readZipEntryAt(zip, zipSinkEntrySequence);
+    if (!selected) return { entryInfo, arm };
+    const { entry, sequence } = selected;
+    const compression = entry.compressionMethod === 8 ? 'deflate' : entry.compressionMethod === 0 ? 'stored' : 'unknown';
+    const entryType = (entry.externalFileAttributes >>> 16) & 0o170000;
+    const entryNonAsar = typeof entry.fileName === 'string' &&
+      !entry.fileName.split('/').some(part => part.toLowerCase().endsWith('.asar')) &&
+      !entry.fileName.endsWith('/') && (entryType === 0 || entryType === 0o100000);
+    Object.assign(entryInfo, {
+      entrySequence: sequence,
+      compression,
+      entryCompressedSize: entry.compressedSize,
+      entryUncompressedSize: entry.uncompressedSize,
+      entryNonAsar,
+    });
+    entryInfo.entryMatches = sequence === zipSinkEntrySequence && compression === 'deflate' &&
+      entry.compressedSize === zipSinkEntryCompressedSize &&
+      entry.uncompressedSize === zipSinkEntryUncompressedSize && entryNonAsar;
+    if (!entryInfo.entryMatches) return { entryInfo, arm };
+    if (sinkName === 'file-sink') tempDir = await mkdtemp(path.join(os.tmpdir(), 'tus-zip-sink-'));
+
+    const opened = await openZipReadStream(zip, entry, true, zipReadChunkBytes);
+    source = opened.stream;
+    compressedReadStream = opened.compressedReadStream;
     if (sinkName === 'file-sink') {
-      tempDir = await mkdtemp(path.join(os.tmpdir(), 'tus-zip-sink-'));
       sink = createWriteStream(path.join(tempDir, 'entry.bin'), {
         flags: 'wx', mode: 0o600, highWaterMark: zipSinkWriteHighWaterMarkBytes,
       });
@@ -210,28 +234,6 @@ async function measureZipSinkArm(archivePath, sinkName) {
       });
       sink.bytesWritten = 0;
     }
-
-    zip = await yauzl.openPromise(archivePath, { strictFileNames: true, validateEntrySizes: true });
-    const selected = await readZipEntryAt(zip, zipSinkEntrySequence);
-    if (!selected) return { entryInfo, arm };
-    const { entry, sequence } = selected;
-    const compression = entry.compressionMethod === 8 ? 'deflate' : entry.compressionMethod === 0 ? 'stored' : 'unknown';
-    const entryNonAsar = typeof entry.fileName === 'string' && !entry.fileName.toLowerCase().endsWith('.asar');
-    Object.assign(entryInfo, {
-      entrySequence: sequence,
-      compression,
-      entryCompressedSize: entry.compressedSize,
-      entryUncompressedSize: entry.uncompressedSize,
-      entryNonAsar,
-    });
-    entryInfo.entryMatches = sequence === zipSinkEntrySequence && compression === 'deflate' &&
-      entry.compressedSize === zipSinkEntryCompressedSize &&
-      entry.uncompressedSize === zipSinkEntryUncompressedSize && entryNonAsar;
-    if (!entryInfo.entryMatches) return { entryInfo, arm };
-
-    const opened = await openZipReadStream(zip, entry, true, zipReadChunkBytes);
-    source = opened.stream;
-    compressedReadStream = opened.compressedReadStream;
     const controller = new AbortController();
     const cpuStart = process.cpuUsage();
     const startedAt = performance.now();

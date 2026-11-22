@@ -58,6 +58,7 @@ test('safe ZIP sink comparison reports bounded counters for both sinks without p
     entryMatches: true,
     armOrder: ['count-discard', 'file-sink'],
     cacheCaveat: 'file-sink-second-may-read-warm-source-cache',
+    measurementScope: 'pipeline-only',
     arms: [
       {
         sink: 'count-discard',

@@ -1207,7 +1207,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   let zipSinkComparison = null;
   if (process.platform === 'win32' && distribution === 'portable') {
     const rawComparison = await current.instance.evaluate(async expected => {
-      const compare = globalThis.__tusUpdaterSmokeBoundary?.compareZipSinkModes;
+      const compare = globalThis.__tusUpdaterSmokeZipSinkCompare;
       return typeof compare === 'function' ? compare(expected) : null;
     }, { tag, assetName, size: manifestFile.size, sha256: manifestFile.sha256 }).catch(() => null);
     zipSinkComparison = safeZipSinkComparison(rawComparison);
