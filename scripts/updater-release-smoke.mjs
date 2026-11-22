@@ -144,6 +144,18 @@ async function worldObjects(page) {
   });
 }
 
+async function fixtureFingerprint(current) {
+  const settings = await current.page.evaluate(async () => {
+    const value = await window.tus.loadSettings();
+    return { threadId: value.threadId, updateChannel: value.updateChannel };
+  });
+  const objects = (await worldObjects(current.page)).map(object => ({
+    type: object.type,
+    position: [object.position?.x, object.position?.y, object.position?.z],
+  }));
+  return createHash('sha256').update(JSON.stringify({ settings, objects })).digest('hex');
+}
+
 async function assertInstalledSourceIdentity(current, profile) {
   if (!profile) return;
   const identity = await current.instance.evaluate(({ app }) => ({
@@ -588,18 +600,7 @@ async function assertDigestMismatchRejected(current, {
   const assetUrl = 'https://github.com/smart-tinker/the_unfinished_shapes/releases/download/' +
     encodeURIComponent(tag) + '/' + encodeURIComponent(assetName);
   const attestationUrl = 'https://api.github.com/repos/smart-tinker/the_unfinished_shapes/attestations/sha256:' + expectedSha256;
-  const fixtureFingerprint = async () => {
-    const settings = await current.page.evaluate(() => {
-      const value = window.tus.loadSettings();
-      return { threadId: value.threadId, updateChannel: value.updateChannel };
-    });
-    const objects = (await worldObjects(current.page)).map(object => ({
-      type: object.type,
-      position: [object.position?.x, object.position?.y, object.position?.z],
-    }));
-    return createHash('sha256').update(JSON.stringify({ settings, objects })).digest('hex');
-  };
-  const beforeFixture = await fixtureFingerprint();
+  const beforeFixture = await fixtureFingerprint(current);
   const beforeVersion = await current.instance.evaluate(({ app }) => app.getVersion());
   const controlInstalled = await current.instance.evaluate((_electron, { assetUrl, attestationUrl, tag, assetName, expectedSha256, expectedSize }) => {
     const boundary = globalThis.__tusUpdaterSmokeBoundary;
@@ -714,7 +715,7 @@ async function assertDigestMismatchRejected(current, {
       throw error;
     });
     const afterVersion = await current.instance.evaluate(({ app }) => app.getVersion());
-    const afterFixture = await fixtureFingerprint();
+    const afterFixture = await fixtureFingerprint(current);
     let sourceIdentityUnchanged = null;
     if (handoffProfile) {
       const identity = await current.instance.evaluate(({ app }) => ({
@@ -805,17 +806,7 @@ async function assertPartialDownloadAbortCleaned(current, {
 }) {
   const assetUrl = 'https://github.com/smart-tinker/the_unfinished_shapes/releases/download/' +
     encodeURIComponent(tag) + '/' + encodeURIComponent(assetName);
-  const fixtureFingerprint = async () => {
-    const settings = await current.page.evaluate(() => {
-      const value = window.tus.loadSettings();
-      return { threadId: value.threadId, updateChannel: value.updateChannel };
-    });
-    const objects = (await worldObjects(current.page)).map(object => ({
-      type: object.type, position: [object.position?.x, object.position?.y, object.position?.z],
-    }));
-    return createHash('sha256').update(JSON.stringify({ settings, objects })).digest('hex');
-  };
-  const beforeFixture = await fixtureFingerprint();
+  const beforeFixture = await fixtureFingerprint(current);
   const beforeVersion = await current.instance.evaluate(({ app }) => app.getVersion());
   await current.page.evaluate(() => { window.__tusProvenanceDiagnostics = []; });
   const controlInstalled = await current.instance.evaluate((_electron, { assetUrl, tag, assetName, expectedSha256, expectedSize }) => {
@@ -935,7 +926,7 @@ async function assertPartialDownloadAbortCleaned(current, {
     const extractionEntries = await readdir(extractDir);
     const relaunchRequested = await lstat(relaunchMarker).then(() => true, error => error?.code === 'ENOENT' ? false : Promise.reject(error));
     const afterVersion = await current.instance.evaluate(({ app }) => app.getVersion());
-    const afterFixture = await fixtureFingerprint();
+    const afterFixture = await fixtureFingerprint(current);
     let sourceIdentityUnchanged = null;
     if (handoffProfile) {
       const identity = await current.instance.evaluate(({ app }) => ({ executable: process.execPath, userData: app.getPath('userData') }));
@@ -994,6 +985,107 @@ async function assertPartialDownloadAbortCleaned(current, {
     }).catch(() => false);
   }
   assert.equal(fetchRestored, true, 'the packaged process removes its one-shot partial-download control');
+}
+
+async function assertArchiveWriteFailureCleaned(current, {
+  downloadedPath, manifestFile, manifestVersion, assetName, tag, downloadsDir, extractDir, relaunchMarker,
+}) {
+  const beforeFixture = await fixtureFingerprint(current);
+  const beforeIdentity = await current.instance.evaluate(({ app }) => ({
+    version: app.getVersion(), executable: process.execPath, userData: app.getPath('userData'),
+  }));
+  assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'the official asset digest is valid before extraction');
+
+  const controlInstalled = await current.instance.evaluate(() => {
+    const boundary = globalThis.__tusUpdaterSmokeBoundary;
+    if (!boundary || boundary.downloadVerifiedAsset !== 'fulfilled' || boundary.writeFailureControl) return false;
+    boundary.writeFailureControl = { state: 'armed', firstChunkWritten: false };
+    return true;
+  });
+  assert.equal(controlInstalled, true, 'the write failure is armed only after the packaged verifier accepted the download');
+
+  try {
+    await current.page.locator('#updates-extract').click({ noWaitAfter: true });
+    await current.page.waitForFunction(() => {
+      const status = document.querySelector('#updates-status');
+      return status?.dataset.updateExtractInvokeStatus === 'rejected' &&
+        status.dataset.updateExtractFailureCode === 'FILESYSTEM_SPACE' &&
+        status.dataset.updateExtractStage === 'write';
+    }, null, { timeout: 120000 });
+
+    const runtime = await extractRuntimeBoundary(current, extractDir, manifestVersion, manifestFile, assetName, tag);
+    const control = await current.instance.evaluate(() => {
+      const value = globalThis.__tusUpdaterSmokeBoundary?.writeFailureControl;
+      return value ? { state: value.state, firstChunkWritten: value.firstChunkWritten === true } : null;
+    });
+    const [downloadEntries, extractionEntries] = await Promise.all([
+      readdir(downloadsDir),
+      readdir(extractDir),
+    ]);
+    const [assetSha256, afterFixture, afterIdentity] = await Promise.all([
+      fileDigest(downloadedPath),
+      fixtureFingerprint(current),
+      current.instance.evaluate(({ app }) => ({
+        version: app.getVersion(), executable: process.execPath, userData: app.getPath('userData'),
+      })),
+    ]);
+    const relaunchRequested = await lstat(relaunchMarker).then(() => true, error => {
+      if (error?.code === 'ENOENT') return false;
+      throw error;
+    });
+    const appAsarRemoved = runtime.fileFlags?.appAsarExists === false &&
+      runtime.fileFlags?.appAsarFile === false && runtime.fileFlags?.stagedAsarExists === false;
+    const targetRemoved = runtime.fileFlags?.targetExists === false &&
+      runtime.fileFlags?.executableExists === false && appAsarRemoved && extractionEntries.length === 0;
+    const sourceIdentityUnchanged = beforeIdentity.version === afterIdentity.version &&
+      path.resolve(beforeIdentity.executable).toLowerCase() === path.resolve(afterIdentity.executable).toLowerCase() &&
+      path.resolve(beforeIdentity.userData).toLowerCase() === path.resolve(afterIdentity.userData).toLowerCase();
+    const actual = {
+      mainStatus: runtime.mainStatus,
+      extractModuleImport: runtime.extractModuleImport,
+      extractCall: runtime.extractCall,
+      rendererInvokeStatus: runtime.rendererInvokeStatus,
+      failureCode: runtime.failureCode,
+      extractStage: runtime.extractStage,
+      controlState: control?.state ?? 'missing',
+      firstChunkWritten: control?.firstChunkWritten === true,
+      targetRemoved,
+      downloadRetained: downloadEntries.length === 1 && downloadEntries[0] === path.basename(downloadedPath),
+      downloadDigestMatches: assetSha256 === manifestFile.sha256,
+      relaunchRequested,
+      sourceProcessAlive: current.instance.process().exitCode === null,
+      sourceVersionUnchanged: beforeIdentity.version === afterIdentity.version,
+      sourceIdentityUnchanged,
+      sourceFixtureUnchanged: afterFixture === beforeFixture,
+    };
+    console.log('TUS_UPDATE_WRITE_FAILURE ' + JSON.stringify(actual));
+    assert.deepEqual(actual, {
+      mainStatus: 'rejected',
+      extractModuleImport: 'fulfilled',
+      extractCall: 'rejected',
+      rendererInvokeStatus: 'rejected',
+      failureCode: 'FILESYSTEM_SPACE',
+      extractStage: 'write',
+      controlState: 'injected',
+      firstChunkWritten: true,
+      targetRemoved: true,
+      downloadRetained: true,
+      downloadDigestMatches: true,
+      relaunchRequested: false,
+      sourceProcessAlive: true,
+      sourceVersionUnchanged: true,
+      sourceIdentityUnchanged: true,
+      sourceFixtureUnchanged: true,
+    }, 'a post-write ENOSPC removes the partial target without relaunch and preserves the source for a same-asset retry');
+  } finally {
+    await current.instance.evaluate(() => {
+      const boundary = globalThis.__tusUpdaterSmokeBoundary;
+      if (boundary?.writeFailureControl) {
+        boundary.writeFailureControl.state = 'disabled';
+        delete boundary.writeFailureControl;
+      }
+    }).catch(() => {});
+  }
 }
 
 async function updateOnce(distribution, setDiagnostic = () => {}) {
@@ -1223,6 +1315,11 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
 
   if (distribution !== 'installer') {
     setDiagnostic('extract');
+    await assertArchiveWriteFailureCleaned(current, {
+      downloadedPath, manifestFile, manifestVersion: manifest.version, assetName, tag,
+      downloadsDir: path.join(downloadsDir, 'TheUnfinishedShapes-Updates'),
+      extractDir, relaunchMarker,
+    });
     const pendingStatus = 'Choose a destination folder…';
     const successStatus = 'Verified archive extracted. You can now launch the new copy.';
     await current.page.locator('#updates-extract').click();
@@ -1308,6 +1405,8 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     }
     console.log('TUS_UPDATE_EXTRACT_DIAGNOSTIC ' + JSON.stringify(extractDiagnostic));
     assert.equal(extractDiagnostic.outcome, 'verified', 'the selected verified archive reaches a terminal extraction success');
+    assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'the same published asset remains intact for the positive retry');
+    assert.deepEqual(await readdir(path.dirname(downloadedPath)), [path.basename(downloadedPath)], 'the retry reuses the retained download');
   }
 
   setDiagnostic(distribution === 'installer' ? 'relaunch-cancel' : 'relaunch');

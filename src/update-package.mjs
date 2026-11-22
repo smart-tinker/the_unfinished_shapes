@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { constants, createReadStream, createWriteStream } from 'node:fs';
+import nodeFs, { constants, createReadStream, createWriteStream } from 'node:fs';
 import { access, lstat, mkdir, rm, symlink, realpath, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { Transform } from 'node:stream';
@@ -618,6 +618,83 @@ function isWithin(root, destination) {
   return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
 }
 
+function installSmokeArchiveWriteFailure(target, boundary, onlyFile = null) {
+  const control = boundary?.writeFailureControl;
+  if (boundary?.downloadVerifiedAsset !== 'fulfilled' || control?.state !== 'armed' ||
+      control.firstChunkWritten !== false) return () => {};
+  const root = path.resolve(target);
+  const exactFile = onlyFile ? path.resolve(onlyFile) : null;
+  const fileDescriptors = new Set();
+  const restore = [];
+  let restored = false;
+  const restorePatches = () => {
+    if (restored) return;
+    restored = true;
+    for (const restorePatch of restore.reverse()) restorePatch();
+  };
+  const patch = (fsModule, name, createWrapper) => {
+    const descriptor = Object.getOwnPropertyDescriptor(fsModule, name);
+    const original = fsModule[name];
+    if (typeof original !== 'function' || !descriptor) return;
+    restore.push(() => Object.defineProperty(fsModule, name, descriptor));
+    Object.defineProperty(fsModule, name, { ...descriptor, value: createWrapper(original) });
+  };
+
+  try {
+    for (const fsModule of new Set([nodeFs, electronFs].filter(Boolean))) {
+      patch(fsModule, 'open', original => function (file, ...args) {
+        const output = typeof file === 'string' ? path.resolve(file) : null;
+        const callbackIndex = args.length - 1;
+        const callback = args[callbackIndex];
+        if (!output || output === root || !isWithin(root, output) ||
+            (exactFile && output !== exactFile) || typeof callback !== 'function') {
+          return Reflect.apply(original, this, [file, ...args]);
+        }
+        args[callbackIndex] = function (error, fd, ...rest) {
+          if (!error && Number.isInteger(fd)) fileDescriptors.add(fd);
+          return Reflect.apply(callback, this, [error, fd, ...rest]);
+        };
+        return Reflect.apply(original, this, [file, ...args]);
+      });
+      patch(fsModule, 'close', original => function (fd, ...args) {
+        const callbackIndex = args.length - 1;
+        const callback = args[callbackIndex];
+        if (!fileDescriptors.has(fd) || typeof callback !== 'function') {
+          return Reflect.apply(original, this, [fd, ...args]);
+        }
+        args[callbackIndex] = function (...values) {
+          fileDescriptors.delete(fd);
+          return Reflect.apply(callback, this, values);
+        };
+        return Reflect.apply(original, this, [fd, ...args]);
+      });
+      for (const method of ['write', 'writev']) {
+        patch(fsModule, method, original => function (fd, ...args) {
+          const callbackIndex = args.length - 1;
+          const callback = args[callbackIndex];
+          if (!fileDescriptors.has(fd) || control.state !== 'armed' || typeof callback !== 'function') {
+            return Reflect.apply(original, this, [fd, ...args]);
+          }
+          args[callbackIndex] = function (error, bytesWritten, ...rest) {
+            if (!error && Number.isSafeInteger(bytesWritten) && bytesWritten > 0 && control.state === 'armed') {
+              control.state = 'injected';
+              control.firstChunkWritten = true;
+              const failure = Object.assign(new Error('No space left on device.'), { code: 'ENOSPC' });
+              return Reflect.apply(callback, this, [failure]);
+            }
+            return Reflect.apply(callback, this, [error, bytesWritten, ...rest]);
+          };
+          return Reflect.apply(original, this, [fd, ...args]);
+        });
+      }
+    }
+  } catch (error) {
+    restorePatches();
+    throw error;
+  }
+  return restorePatches;
+}
+
 export function safeArchiveEntryPath(name, archiveRoot) {
   if (typeof name !== 'string' || !name || name.length > 4096 || name.includes('\\') ||
       /[\0-\x1f\x7f]/.test(name) || name.startsWith('/') || /^[A-Za-z]:/.test(name)) {
@@ -680,7 +757,7 @@ export async function openZipReadStream(zip, entry, trackCompressedRead, readHig
   }
 }
 
-async function extractZip(filePath, destination, spec, extraction, appAsarPath, platform) {
+async function extractZip(filePath, destination, spec, extraction, appAsarPath, platform, smokeBoundary) {
   const appAsarRelative = path.relative(destination, appAsarPath).split(path.sep).join('/');
   extraction.value = 'zip-open';
   const zip = await yauzl.openPromise(filePath, { strictFileNames: true, validateEntrySizes: true });
@@ -755,7 +832,9 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
     extraction.appAsarEntry = false;
     const fileMode = ((entry.externalFileAttributes >>> 16) & 0o777) || 0o600;
     let writeStream;
+    let restoreSmokeWriteFailure = () => {};
     try {
+      restoreSmokeWriteFailure = installSmokeArchiveWriteFailure(destination, smokeBoundary, output);
       extraction.substage = 'pipeline';
       extraction.appAsarEntry = isAppAsar;
       writeStream = isAppAsar && electronFs
@@ -779,6 +858,7 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
       }
       throw error;
     } finally {
+      restoreSmokeWriteFailure();
       extraction.streamSnapshot = null;
     }
     extraction.value = 'entry';
@@ -833,7 +913,7 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
     extraction.value = 'preflight';
     await mkdir(target, { recursive: false, mode: 0o700 });
     targetCreated = true;
-    if (spec.zip) await extractZip(filePath, target, spec, extraction, appAsarPath, platform);
+    if (spec.zip) await extractZip(filePath, target, spec, extraction, appAsarPath, platform, smokeBoundary);
     else {
       let count = 0, extractedBytes = 0;
       const appAsarRelative = path.relative(target, appAsarPath).split(path.sep).join('/');
@@ -842,51 +922,56 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
       let appAsarStaged = false;
       const paths = new Set();
       extraction.value = 'entry';
-      await extractTar({
-        file: filePath, cwd: target, strip: 1, strict: true, preservePaths: false, preserveOwner: false,
-        filter: (entryPath, entry) => {
-          extraction.value = 'entry';
-          count++;
-          if (count > maxArchiveEntries || !Number.isSafeInteger(entry.size) || entry.size < 0 ||
-              (extractedBytes += entry.size) > maxExtractedBytes) throw new Error('Update archive exceeds extraction limits.');
-          const relative = safeArchiveEntryPath(entryPath, spec.root);
-          if (!relative) return false;
-          if (relative === stagedAsarRelative || relative.startsWith(stagedAsarRelative + '/')) {
-            throw new Error('Update archive contains duplicate paths.');
-          }
-          if (relative.startsWith(appAsarRelative + '/')) throw new Error('Update archive contains an unsupported file type.');
-          if (paths.has(relative)) throw new Error('Update archive contains duplicate paths.');
-          paths.add(relative);
-          const output = path.resolve(target, ...relative.split('/'));
-          if (!isWithin(target, output)) throw new Error('Update archive path escapes its destination.');
-          if (entry.type === 'SymbolicLink') {
-            extraction.value = 'symlink';
-            safeArchiveLinkTarget(entry.linkpath, path.dirname(output), target);
-          }
-          if (entry.type === 'Link') {
-            extraction.value = 'symlink';
-            safeArchiveLinkTarget(entry.linkpath, target, target);
-            const linkRelative = path.posix.normalize(entry.linkpath.split('/').slice(1).join('/'));
-            if (linkRelative === stagedAsarRelative) throw new Error('Update archive contains duplicate paths.');
-            if (linkRelative.startsWith(appAsarRelative + '/')) throw new Error('Update archive contains an unsupported file type.');
-            if (linkRelative === appAsarRelative) {
-              if (relative === appAsarRelative) throw new Error('Update archive contains an unsupported file type.');
-              entry.linkpath = spec.root + '/' + stagedAsarRelative;
+      const restoreSmokeWriteFailure = installSmokeArchiveWriteFailure(target, smokeBoundary);
+      try {
+        await extractTar({
+          file: filePath, cwd: target, strip: 1, strict: true, preservePaths: false, preserveOwner: false,
+          filter: (entryPath, entry) => {
+            extraction.value = 'entry';
+            count++;
+            if (count > maxArchiveEntries || !Number.isSafeInteger(entry.size) || entry.size < 0 ||
+                (extractedBytes += entry.size) > maxExtractedBytes) throw new Error('Update archive exceeds extraction limits.');
+            const relative = safeArchiveEntryPath(entryPath, spec.root);
+            if (!relative) return false;
+            if (relative === stagedAsarRelative || relative.startsWith(stagedAsarRelative + '/')) {
+              throw new Error('Update archive contains duplicate paths.');
             }
-          }
-          if (relative === appAsarRelative) {
-            if (!['File', 'OldFile', 'ContiguousFile', 'Link'].includes(entry.type)) {
-              throw new Error('Update archive contains an unsupported file type.');
+            if (relative.startsWith(appAsarRelative + '/')) throw new Error('Update archive contains an unsupported file type.');
+            if (paths.has(relative)) throw new Error('Update archive contains duplicate paths.');
+            paths.add(relative);
+            const output = path.resolve(target, ...relative.split('/'));
+            if (!isWithin(target, output)) throw new Error('Update archive path escapes its destination.');
+            if (entry.type === 'SymbolicLink') {
+              extraction.value = 'symlink';
+              safeArchiveLinkTarget(entry.linkpath, path.dirname(output), target);
             }
-            if (paths.has(stagedAsarRelative)) throw new Error('Update archive contains duplicate paths.');
-            paths.add(stagedAsarRelative);
-            entry.path = spec.root + '/' + stagedAsarRelative;
-            appAsarStaged = true;
-          }
-          extraction.value = 'write';
-          return true;
-        },
-      });
+            if (entry.type === 'Link') {
+              extraction.value = 'symlink';
+              safeArchiveLinkTarget(entry.linkpath, target, target);
+              const linkRelative = path.posix.normalize(entry.linkpath.split('/').slice(1).join('/'));
+              if (linkRelative === stagedAsarRelative) throw new Error('Update archive contains duplicate paths.');
+              if (linkRelative.startsWith(appAsarRelative + '/')) throw new Error('Update archive contains an unsupported file type.');
+              if (linkRelative === appAsarRelative) {
+                if (relative === appAsarRelative) throw new Error('Update archive contains an unsupported file type.');
+                entry.linkpath = spec.root + '/' + stagedAsarRelative;
+              }
+            }
+            if (relative === appAsarRelative) {
+              if (!['File', 'OldFile', 'ContiguousFile', 'Link'].includes(entry.type)) {
+                throw new Error('Update archive contains an unsupported file type.');
+              }
+              if (paths.has(stagedAsarRelative)) throw new Error('Update archive contains duplicate paths.');
+              paths.add(stagedAsarRelative);
+              entry.path = spec.root + '/' + stagedAsarRelative;
+              appAsarStaged = true;
+            }
+            extraction.value = 'write';
+            return true;
+          },
+        });
+      } finally {
+        restoreSmokeWriteFailure();
+      }
       if (appAsarStaged) {
         extraction.value = 'write';
         await (electronFs?.promises?.rename ?? rename)(stagedAsarPath, appAsarPath);

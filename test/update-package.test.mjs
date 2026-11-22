@@ -920,3 +920,84 @@ test('Windows ZIP extraction uses bounded larger compressed reads', async () => 
     await rm(parent, { recursive: true, force: true });
   }
 });
+
+
+test('smoke-only ENOSPC after one completed target write cleans extraction and permits same-asset retry', async () => {
+  const electronExecutable = createRequire(import.meta.url)('electron');
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-enospc-'));
+  const archive = path.join(parent, 'windows.zip');
+  const archiveRoot = 'TheUnfinishedShapes-win32-x64';
+  const target = path.join(parent, 'TheUnfinishedShapes-0.1.0-rc.11');
+  const payload = Buffer.alloc(1024 * 1024, 0x5a);
+  const executable = Buffer.from('verified executable fixture');
+  const request = {
+    filePath: archive,
+    directory: parent,
+    tag,
+    assetName: 'TheUnfinishedShapes-0.1.0-rc.11-win32-x64.zip',
+    sha256: '',
+    platform: 'win32',
+  };
+
+  try {
+    await writeFile(archive, zipFixture([
+      { name: archiveRoot + '/resources/app.asar', contents: payload, mode: 0o100644 },
+      { name: archiveRoot + '/TheUnfinishedShapes.exe', contents: executable, mode: 0o100755 },
+    ]));
+    request.sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+    const childSource = [
+      "process.argv.push('--tus-smoke-provenance-diagnostic');",
+      "const control = { state: 'armed', firstChunkWritten: false };",
+      "globalThis.__tusUpdaterSmokeBoundary = { downloadVerifiedAsset: 'fulfilled', writeFailureControl: control };",
+      "const [moduleUrl, requestJSON] = process.argv.slice(1);",
+      "const request = JSON.parse(requestJSON);",
+      "const target = path.join(request.directory, 'TheUnfinishedShapes-0.1.0-rc.11');",
+      "const updater = await import(moduleUrl);",
+      "let failure;",
+      "try { await updater.extractVerifiedArchive(request); } catch (error) { failure = error; }",
+      "const targetRemoved = await lstat(target).then(() => false, error => error.code === 'ENOENT');",
+      "let retrySucceeded = false;",
+      "if (failure && control.state === 'injected' && targetRemoved) {",
+      "  control.state = 'disabled';",
+      "  const retry = await updater.extractVerifiedArchive(request);",
+      "  retrySucceeded = (await readFile(retry.executablePath)).equals(Buffer.from('verified executable fixture'));",
+      "}",
+      "process.stdout.write(JSON.stringify({",
+      "  status: failure ? 'rejected' : 'fulfilled',",
+      "  failureCode: failure ? updater.safeArchiveExtractionFailureCode(failure) : null,",
+      "  extractStage: failure ? updater.safeArchiveExtractionStage(failure) : null,",
+      "  controlState: control.state,",
+      "  firstChunkWritten: control.firstChunkWritten,",
+      "  targetRemoved,",
+      "  retrySucceeded,",
+      "}));",
+    ].join(String.fromCharCode(10));
+    const child = spawnSync(electronExecutable, [
+      '--input-type=module', '-e',
+      "import path from 'node:path'; import { lstat, readFile } from 'node:fs/promises';\n" + childSource,
+      new URL('../src/update-package.mjs', import.meta.url).href,
+      JSON.stringify(request),
+    ], {
+      encoding: 'utf8',
+      windowsHide: true,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    });
+
+    assert.equal(child.status, 0, 'the Electron extraction probe completed');
+    assert.deepEqual(JSON.parse(child.stdout), {
+      status: 'rejected',
+      failureCode: 'FILESYSTEM_SPACE',
+      extractStage: 'write',
+      controlState: 'disabled',
+      firstChunkWritten: true,
+      targetRemoved: true,
+      retrySucceeded: true,
+    }, 'a one-shot post-write ENOSPC removes the partial target and allows retry of the same verified archive');
+    assert.deepEqual(await readFile(path.join(target, 'resources', 'app.asar')), payload);
+    assert.deepEqual(await readFile(path.join(target, 'TheUnfinishedShapes.exe')), executable);
+    assert.equal(createHash('sha256').update(await readFile(archive)).digest('hex'), request.sha256);
+    assert.deepEqual((await readdir(parent)).sort(), ['TheUnfinishedShapes-0.1.0-rc.11', 'windows.zip']);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
