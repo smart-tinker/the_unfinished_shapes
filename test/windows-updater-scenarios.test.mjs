@@ -185,12 +185,15 @@ test('NSIS snapshot distinguishes an empty main HWND from another process-owned 
 
 test('NSIS timeout snapshot classifies the exact HWND without exposing native text or names', async () => {
   const safe = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match page-window=unknown page-parent=unknown page-process=unknown page-visible=unknown page-class=unknown page-controls=unknown page-buttons=unknown page-edits=unknown page-static=unknown page-progress=unknown page-dialogs=unknown page-other=unknown option-page=unknown option-radio-count=unknown option-radio-style=unknown current-user-preset=unknown all-users-preset=unknown current-user-selected=unknown all-users-selected=unknown option-next=unknown title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown native-page=unknown uia-page=other directory-edit=unknown directory-browse=unknown directory-text=unknown install-progress=unknown uia-top-level=one main-window=present wizard-window=none foreground=installer window-class=native-dialog native-title=error-like uia-provider=empty uia-descendants=none win32-children=two win32-buttons=one win32-static=one session=match desktop=default-interactive visible=visible pid=4321';
+  const finish = safe.replace('stage=entry', 'stage=finish')
+    .replace('native-page=unknown', 'native-page=finish')
+    .replace('uia-page=other', 'uia-page=finish');
   const unsafe = safe.replace('window-class=native-dialog', 'window-class=C:/private/window')
     .replace('native-title=error-like', 'native-title=C:/private/title')
     .replace('desktop=default-interactive', 'desktop=Default/user');
-  const events = safeNsisWizardEvents([safe, unsafe, 'raw window title C:/private/path'].join(String.fromCharCode(10)));
+  const events = safeNsisWizardEvents([safe, finish, unsafe, 'raw window title C:/private/path'].join(String.fromCharCode(10)));
 
-  assert.deepEqual(events, [safe]);
+  assert.deepEqual(events, [safe, finish]);
   assert.equal(JSON.stringify(events).includes('C:/private'), false);
 
   const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
@@ -1030,7 +1033,13 @@ test('NSIS InstallFiles and Finish pages require pinned native signatures', asyn
   const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
   const scenarioSource = await readFile(new URL('../scripts/windows-updater-scenarios.mjs', import.meta.url), 'utf8');
   const pageReader = script.slice(script.indexOf('function Get-NsisPageSummary'), script.indexOf('function Get-Win32WindowSummary'));
-  const uiaLoop = script.slice(script.indexOf('$finish = @('), script.indexOf('$titleStatus ='));
+  const loopStart = script.indexOf('$script:mainWindowHandle = $handle');
+  const finishStart = script.indexOf('$finish = @(', loopStart);
+  const snapshotStart = script.indexOf('$snapshot = [ordered]@{', finishStart);
+  const uiaLoop = script.slice(finishStart, snapshotStart);
+  assert.ok(loopStart >= 0 && finishStart > loopStart && snapshotStart > finishStart);
+  const snapshotWriter = script.slice(script.indexOf('function Write-WizardSnapshot'), script.indexOf('function Write-WizardStateSnapshot'));
+  const stateWriter = script.slice(script.indexOf('function Write-WizardStateSnapshot'), script.indexOf('function Write-WizardEvent'));
 
   assert.ok(pageReader.includes("Get-NativeControlStatus -Window $pageHandle -ControlId 1006 -ExpectedClass 'Static'"));
   assert.ok(pageReader.includes("Get-NativeControlStatus -Window $pageHandle -ControlId 1004 -ExpectedClass 'msctls_progress32'"));
@@ -1047,6 +1056,10 @@ test('NSIS InstallFiles and Finish pages require pinned native signatures', asyn
     'a generic Finish-named control alone does not identify the pinned Finish page');
   assert.ok(uiaLoop.includes('$finishButtonHandle -eq $finishNext.Handle'),
     'the Finish action maps to NSIS main-button ID 1 on the matched Setup window');
+  assert.ok(snapshotWriter.includes('native-page=$NativePage') && snapshotWriter.includes('uia-page=$UiaPage'),
+    'the producer writes the fixed page enums into the snapshot');
+  assert.ok(stateWriter.includes('-NativePage $WindowSummary.NativePage') && stateWriter.includes('-UiaPage $Snapshot.UiPage'),
+    'the timeout snapshot maps actual producer fields rather than synthetic page values');
   assert.ok(scenarioSource.includes('native-page=(directory|install-files|finish|other|unknown)'),
     'the sanitizer accepts the fixed Finish enum');
 });

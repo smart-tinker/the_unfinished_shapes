@@ -101,11 +101,16 @@ function Get-SafeControlCount {
   return 'many'
 }
 function Get-NativeControlStatus {
-  param([IntPtr]$Window, [int]$ControlId, [string]$ExpectedClass)
+  param([IntPtr]$Window, [int]$ControlId, [string]$ExpectedClass, [int]$ProcessId = 0)
   if (-not $script:nativeWindowApiAvailable -or $Window -eq [IntPtr]::Zero) { return 'unknown' }
   try {
     $control = [TUSWindowApi]::GetDlgItem($Window, $ControlId)
     if ($control -eq [IntPtr]::Zero) { return 'missing' }
+    if ([TUSWindowApi]::GetParent($control) -ne $Window) { return 'unknown' }
+    $controlProcessId = [uint32]0
+    $threadId = [TUSWindowApi]::GetWindowThreadProcessId($control, [ref]$controlProcessId)
+    if ($threadId -eq 0 -or ($ProcessId -gt 0 -and $controlProcessId -ne $ProcessId)) { return 'unknown' }
+    if (-not [TUSWindowApi]::IsWindowVisible($control)) { return 'unknown' }
     $className = [System.Text.StringBuilder]::new(128)
     if ([TUSWindowApi]::GetClassName($control, $className, $className.Capacity) -le 0) { return 'unknown' }
     if ($className.ToString() -eq $ExpectedClass) { return 'match' }
@@ -337,12 +342,14 @@ function Set-NativeDirectoryEdit {
 }
 
 function Get-NativeRadioSelection {
-  param([IntPtr]$Handle, [int]$ProcessId, [IntPtr]$PageHandle)
+  param([IntPtr]$Handle, [int]$ProcessId, [IntPtr]$PageHandle, [switch]$RequireEnabled)
   if (-not $script:nativeWindowApiAvailable -or $Handle -eq [IntPtr]::Zero -or $PageHandle -eq [IntPtr]::Zero) { return 'unknown' }
   try {
     $controlProcessId = [uint32]0
     $threadId = [TUSWindowApi]::GetWindowThreadProcessId($Handle, [ref]$controlProcessId)
     if ($threadId -eq 0 -or [TUSWindowApi]::GetParent($Handle) -ne $PageHandle -or $controlProcessId -ne $ProcessId) { return 'unknown' }
+    if (-not [TUSWindowApi]::IsWindowVisible($Handle)) { return 'unknown' }
+    if ($RequireEnabled -and -not [TUSWindowApi]::IsWindowEnabled($Handle)) { return 'unknown' }
     $className = [System.Text.StringBuilder]::new(128)
     if ([TUSWindowApi]::GetClassName($Handle, $className, $className.Capacity) -le 0 -or $className.ToString() -ne 'Button') { return 'unknown' }
     if (([TUSWindowApi]::GetWindowLong($Handle, -16) -band 0x0f) -ne 9) { return 'unknown' }
@@ -403,6 +410,7 @@ function Get-NsisPageSummary {
     OptionPage = 'unknown'; OptionRadioCount = 'unknown'; OptionRadioStyle = 'unknown'; OptionNext = 'unknown'
     OptionNextHandle = [IntPtr]::Zero; CurrentUserRadioHandle = [IntPtr]::Zero; AllUsersRadioHandle = [IntPtr]::Zero
     CurrentUserPreset = 'unknown'; AllUsersPreset = 'unknown'
+    CurrentUserVisible = 'unknown'; CurrentUserEnabled = 'unknown'; AllUsersVisible = 'unknown'
     CurrentUserSelected = 'unknown'; AllUsersSelected = 'unknown'
   }
   if (-not $script:nativeWindowApiAvailable -or $MainWindowHandle -eq [IntPtr]::Zero) { return [pscustomobject]$result }
@@ -455,10 +463,10 @@ function Get-NsisPageSummary {
     }
 
     $pageHandle = $result.Handle
-    $result.DirectoryEdit = Get-NativeControlStatus -Window $pageHandle -ControlId 1019 -ExpectedClass 'Edit'
-    $result.DirectoryBrowse = Get-NativeControlStatus -Window $pageHandle -ControlId 1001 -ExpectedClass 'Button'
-    $result.DirectoryText = Get-NativeControlStatus -Window $pageHandle -ControlId 1006 -ExpectedClass 'Static'
-    $result.InstallProgress = Get-NativeControlStatus -Window $pageHandle -ControlId 1004 -ExpectedClass 'msctls_progress32'
+    $result.DirectoryEdit = Get-NativeControlStatus -Window $pageHandle -ControlId 1019 -ExpectedClass 'Edit' -ProcessId $ProcessId
+    $result.DirectoryBrowse = Get-NativeControlStatus -Window $pageHandle -ControlId 1001 -ExpectedClass 'Button' -ProcessId $ProcessId
+    $result.DirectoryText = Get-NativeControlStatus -Window $pageHandle -ControlId 1006 -ExpectedClass 'Static' -ProcessId $ProcessId
+    $result.InstallProgress = Get-NativeControlStatus -Window $pageHandle -ControlId 1004 -ExpectedClass 'msctls_progress32' -ProcessId $ProcessId
     $controls = @()
     $pageControlsCount = 0; $pageButtonsCount = 0; $pageEditsCount = 0; $pageStaticCount = 0
     $pageProgressCount = 0; $pageDialogsCount = 0; $pageOtherCount = 0
@@ -491,7 +499,11 @@ function Get-NsisPageSummary {
           }
           $caption = $captionBuffer.ToString()
         }
-        $controls += [pscustomobject]@{ Handle = $control; Style = $style; Caption = $caption }
+        $controls += [pscustomobject]@{
+          Handle = $control; Style = $style; Caption = $caption
+          Visible = [TUSWindowApi]::IsWindowVisible($control)
+          Enabled = [TUSWindowApi]::IsWindowEnabled($control)
+        }
       } elseif ($controlClass -eq 'Edit') {
         $pageEditsCount++
       } elseif ($controlClass -eq 'Static') {
@@ -520,23 +532,31 @@ function Get-NsisPageSummary {
         $result.OptionRadioStyle = 'match'
         $userSuffix = '(' + [Environment]::UserName + ')'
         $currentUserRadios = @($radioControls | Where-Object {
-          $_.Caption.EndsWith($userSuffix, [StringComparison]::OrdinalIgnoreCase)
+          $caption = [string]$_.Caption
+          $_.Visible -and $_.Enabled -and $caption.EndsWith($userSuffix, [StringComparison]::OrdinalIgnoreCase) -and
+            ($caption.StartsWith('Only for &me (', [StringComparison]::OrdinalIgnoreCase) -or
+             $caption.StartsWith('Only for me (', [StringComparison]::OrdinalIgnoreCase))
         })
-        if ($currentUserRadios.Count -eq 1) {
-          $otherRadio = @($radioControls | Where-Object { $_.Handle -ne $currentUserRadios[0].Handle })[0]
-          if ($otherRadio.Caption.Length -gt 0 -and
-              -not $otherRadio.Caption.EndsWith($userSuffix, [StringComparison]::OrdinalIgnoreCase)) {
-            $result.CurrentUserPreset = 'match'
-            # The pinned template has only two presets; the other labeled radio is the all-users option.
-            $result.AllUsersPreset = 'match'
-            $result.CurrentUserRadioHandle = $currentUserRadios[0].Handle
-            $result.AllUsersRadioHandle = $otherRadio.Handle
-            $result.CurrentUserSelected = Get-NativeRadioSelection -Handle $currentUserRadios[0].Handle -ProcessId $ProcessId -PageHandle $pageHandle
-            $result.AllUsersSelected = Get-NativeRadioSelection -Handle $otherRadio.Handle -ProcessId $ProcessId -PageHandle $pageHandle
-          } else {
-            $result.CurrentUserPreset = 'mismatch'
-            $result.AllUsersPreset = 'mismatch'
-          }
+        $allUsersRadios = @($radioControls | Where-Object {
+          $caption = [string]$_.Caption
+          $_.Visible -and (
+            [String]::Equals($caption, 'Anyone who uses this computer (&all users)', [StringComparison]::Ordinal) -or
+            [String]::Equals($caption, 'Anyone who uses this computer (&all users) (must run as admin)', [StringComparison]::Ordinal)
+          )
+        })
+        if ($currentUserRadios.Count -eq 1 -and $allUsersRadios.Count -eq 1 -and
+            $currentUserRadios[0].Handle -ne $allUsersRadios[0].Handle) {
+          $currentUserRadio = $currentUserRadios[0]
+          $allUsersRadio = $allUsersRadios[0]
+          $result.CurrentUserPreset = 'match'
+          $result.AllUsersPreset = 'match'
+          $result.CurrentUserRadioHandle = $currentUserRadio.Handle
+          $result.AllUsersRadioHandle = $allUsersRadio.Handle
+          $result.CurrentUserVisible = if ($currentUserRadio.Visible) { 'visible' } else { 'unknown' }
+          $result.CurrentUserEnabled = if ($currentUserRadio.Enabled) { 'enabled' } else { 'disabled' }
+          $result.AllUsersVisible = if ($allUsersRadio.Visible) { 'visible' } else { 'unknown' }
+          $result.CurrentUserSelected = Get-NativeRadioSelection -Handle $currentUserRadio.Handle -ProcessId $ProcessId -PageHandle $pageHandle -RequireEnabled
+          $result.AllUsersSelected = Get-NativeRadioSelection -Handle $allUsersRadio.Handle -ProcessId $ProcessId -PageHandle $pageHandle
         } else {
           $result.CurrentUserPreset = 'mismatch'
           $result.AllUsersPreset = 'mismatch'
@@ -547,7 +567,9 @@ function Get-NsisPageSummary {
         $result.AllUsersPreset = 'mismatch'
       }
       if ($result.OptionRadioCount -eq 'two' -and $result.OptionRadioStyle -eq 'match' -and
-          $result.CurrentUserPreset -eq 'match' -and $result.AllUsersPreset -eq 'match') {
+          $result.CurrentUserPreset -eq 'match' -and $result.AllUsersPreset -eq 'match' -and
+          $result.CurrentUserVisible -eq 'visible' -and $result.CurrentUserEnabled -eq 'enabled' -and
+          $result.AllUsersVisible -eq 'visible') {
         $result.OptionPage = 'install-options'
       } else {
         $result.OptionPage = 'other'
@@ -563,6 +585,12 @@ function Get-NsisPageSummary {
     } elseif ($result.DirectoryText -eq 'match' -and $result.InstallProgress -eq 'match' -and
         $result.DirectoryEdit -eq 'missing' -and $result.DirectoryBrowse -eq 'missing') {
       $result.NativePage = 'install-files'
+    } elseif ($optionEnumerationComplete -and -not $optionEnumerationFailed -and
+        $pageControlsCount -eq 3 -and $pageStaticCount -eq 3 -and
+        $pageButtonsCount -eq 0 -and $pageEditsCount -eq 0 -and $pageProgressCount -eq 0 -and
+        $pageDialogsCount -eq 0 -and $pageOtherCount -eq 0) {
+      # The pinned no-run/no-reboot MUI Finish page contains only its bitmap and two labels.
+      $result.NativePage = 'finish'
     } elseif ($result.DirectoryEdit -ne 'unknown' -and $result.DirectoryBrowse -ne 'unknown' -and
         $result.DirectoryText -ne 'unknown' -and $result.InstallProgress -ne 'unknown') {
       $result.NativePage = 'other'
@@ -582,6 +610,7 @@ function Get-Win32WindowSummary {
     OptionPage = 'unknown'; OptionRadioCount = 'unknown'; OptionRadioStyle = 'unknown'; OptionNext = 'unknown'
     OptionNextHandle = [IntPtr]::Zero; CurrentUserRadioHandle = [IntPtr]::Zero; AllUsersRadioHandle = [IntPtr]::Zero
     CurrentUserPreset = 'unknown'; AllUsersPreset = 'unknown'
+    CurrentUserVisible = 'unknown'; CurrentUserEnabled = 'unknown'; AllUsersVisible = 'unknown'
     CurrentUserSelected = 'unknown'; AllUsersSelected = 'unknown'
     UiaProvider = 'unknown'; UiaDescendants = 'unknown'; Children = 'unknown'
     Buttons = 'unknown'; Static = 'unknown'; Session = 'unknown'
@@ -609,6 +638,8 @@ function Get-Win32WindowSummary {
     $result.OptionNextHandle = $page.OptionNextHandle
     $result.CurrentUserRadioHandle = $page.CurrentUserRadioHandle; $result.AllUsersRadioHandle = $page.AllUsersRadioHandle
     $result.CurrentUserPreset = $page.CurrentUserPreset; $result.AllUsersPreset = $page.AllUsersPreset
+    $result.CurrentUserVisible = $page.CurrentUserVisible; $result.CurrentUserEnabled = $page.CurrentUserEnabled
+    $result.AllUsersVisible = $page.AllUsersVisible
     $result.CurrentUserSelected = $page.CurrentUserSelected; $result.AllUsersSelected = $page.AllUsersSelected
 
     $className = [System.Text.StringBuilder]::new(128)
@@ -797,7 +828,7 @@ function Write-WizardSnapshot {
     [ValidateSet('match', 'missing')][string]$Install,
     [ValidateSet('match', 'missing')][string]$Finish,
     [ValidateSet('match', 'mismatch', 'unknown')][string]$Destination,
-    [ValidateSet('directory', 'install-files', 'other', 'unknown')][string]$NativePage,
+    [ValidateSet('directory', 'install-files', 'finish', 'other', 'unknown')][string]$NativePage,
     [ValidateSet('present', 'missing', 'ambiguous', 'unknown')][string]$PageWindow,
     [ValidateSet('match', 'mismatch', 'unknown')][string]$PageParent,
     [ValidateSet('match', 'mismatch', 'unknown')][string]$PageProcess,
@@ -858,7 +889,7 @@ function Write-WizardEvent {
     [ValidateSet(
       'process-found', 'process-ambiguous', 'process-not-found',
       'window-found', 'window-not-found', 'window-mismatch',
-      'install-mode-verified', 'install-mode-unavailable', 'directory-advanced', 'destination-entered', 'destination-postset-edit-match', 'destination-postset-edit-mismatch', 'destination-postset-edit-unknown', 'destination-verified', 'destination-unavailable', 'destination-mismatch', 'destination-edits-ambiguous',
+      'install-mode-verified', 'install-mode-unavailable', 'install-mode-path-uia', 'install-mode-path-native', 'install-mode-path-unknown', 'directory-advanced', 'destination-entered', 'destination-postset-edit-match', 'destination-postset-edit-mismatch', 'destination-postset-edit-unknown', 'destination-verified', 'destination-unavailable', 'destination-mismatch', 'destination-edits-ambiguous',
   'destination-set-precondition-unavailable', 'destination-set-provenance-unavailable', 'destination-set-control-unavailable', 'destination-set-message-failed', 'destination-set-uia-fallback', 'destination-set-exception', 'destination-set-unknown',
       'destination-uia-element-unavailable', 'destination-uia-owner-mismatch', 'destination-uia-handle-mismatch', 'destination-uia-pattern-unavailable', 'destination-uia-value-state-unavailable', 'destination-uia-offscreen', 'destination-uia-disabled', 'destination-uia-control-mismatch', 'destination-uia-read-only', 'destination-uia-set-error', 'destination-uia-postset-mismatch', 'destination-uia-unknown',
       'destination-readback-product-leaf-appended', 'destination-readback-same-parent', 'destination-readback-same-leaf', 'destination-readback-same-root', 'destination-readback-different-root', 'destination-readback-not-rooted', 'destination-readback-other', 'destination-readback-unchanged', 'destination-before-read-unavailable', 'destination-before-read-empty', 'destination-before-read-invalid', 'destination-before-read-not-rooted',
@@ -909,6 +940,7 @@ if (-not $process) {
 $script:installerProcessId = $process.Id
 Write-WizardEvent -Name 'process-found' -ProcessId $script:installerProcessId
 $stage = 'entry'
+$modePathReported = $false
 $windowReported = $false
 $finished = $false
 $destinationVerified = $false
@@ -974,47 +1006,70 @@ while ([DateTime]::UtcNow -lt $deadline) {
     $radios = @($pageWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $radioCondition))
     $progressBars = @($pageWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $progressCondition))
   }
-  $next = @($buttons | Where-Object { $_.Current.Name -eq 'Next >' -and $_.Current.IsEnabled })
-  $install = @($buttons | Where-Object { $_.Current.Name -eq 'Install' -and $_.Current.IsEnabled })
-  $finish = @($buttons | Where-Object { ($_.Current.Name -eq 'Finish' -or $_.Current.Name -eq 'Close') -and $_.Current.IsEnabled })
+  $next = @($buttons | Where-Object { $_.Current.Name -eq 'Next >' -and $_.Current.IsEnabled -and -not $_.Current.IsOffscreen -and $_.Current.ProcessId -eq $script:installerProcessId })
+  $install = @($buttons | Where-Object { $_.Current.Name -eq 'Install' -and $_.Current.IsEnabled -and -not $_.Current.IsOffscreen -and $_.Current.ProcessId -eq $script:installerProcessId })
+  $finish = @($buttons | Where-Object { $_.Current.Name -eq 'Finish' -and $_.Current.IsEnabled -and -not $_.Current.IsOffscreen -and $_.Current.ProcessId -eq $script:installerProcessId })
+  $finishButtonHandle = [IntPtr]::Zero
+  $finishNext = [pscustomobject]@{ Handle = [IntPtr]::Zero; Status = 'unknown' }
+  if ($finish.Count -eq 1) {
+    $finishButtonHandle = [IntPtr]$finish[0].Current.NativeWindowHandle
+    $finishNext = Get-MuiNextControl -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle
+  }
+  $finishPageMatch = $finish.Count -eq 1 -and $nativeWindow.NativePage -eq 'finish' -and
+    $finishNext.Status -eq 'match' -and $finishButtonHandle -ne [IntPtr]::Zero -and
+    $finishButtonHandle -eq $finishNext.Handle
+  $nextControl = [pscustomobject]@{ Handle = [IntPtr]::Zero; Status = 'unknown' }
+  $nextStatus = 'missing'
+  if ($next.Count -eq 1) {
+    $nextControl = Get-MuiNextControl -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle
+    $nextHandle = [IntPtr]$next[0].Current.NativeWindowHandle
+    if ($nextControl.Status -eq 'match' -and $nextHandle -ne [IntPtr]::Zero -and $nextHandle -eq $nextControl.Handle) {
+      $nextStatus = 'match'
+    }
+  }
+  $installStatus = 'missing'
+  if ($install.Count -eq 1 -and (Get-MuiNextControl -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle).Status -eq 'match') { $installStatus = 'match' }
+  $finishStatus = if ($finishPageMatch) { 'match' } else { 'missing' }
   $titleStatus = 'unknown'
   try {
     if ([String]::Equals([string]$window.Current.Name, 'The Unfinished Shapes', [StringComparison]::OrdinalIgnoreCase)) { $titleStatus = 'product-match' }
     else { $titleStatus = 'product-missing' }
   } catch {}
-  $userSuffix = '(' + [Environment]::UserName + ')'
-  $currentUserRadios = @($radios | Where-Object {
-    ([string]$_.Current.Name).EndsWith($userSuffix, [StringComparison]::OrdinalIgnoreCase)
-  })
+  $currentUserRadios = @()
+  $allUsersRadios = @()
+  if ($nativeWindow.OptionPage -eq 'install-options') {
+    $currentUserRadios = @($radios | Where-Object {
+      $_.Current.ProcessId -eq $script:installerProcessId -and
+        ([IntPtr]$_.Current.NativeWindowHandle) -eq $nativeWindow.CurrentUserRadioHandle -and
+        -not $_.Current.IsOffscreen -and $_.Current.IsEnabled
+    })
+    $allUsersRadios = @($radios | Where-Object {
+      $_.Current.ProcessId -eq $script:installerProcessId -and
+        ([IntPtr]$_.Current.NativeWindowHandle) -eq $nativeWindow.AllUsersRadioHandle -and
+        -not $_.Current.IsOffscreen
+    })
+  }
   $modeStatus = 'unknown'
   if ($radios.Count -eq 0) { $modeStatus = 'absent' }
-  elseif ($radios.Count -ge 2 -and $currentUserRadios.Count -eq 1) { $modeStatus = 'present' }
-  $currentUserStatus = 'unknown'
-  if ($currentUserRadios.Count -eq 1) {
-    try {
-      $selection = $currentUserRadios[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-      if ($selection.IsSelected) { $currentUserStatus = 'selected' } else { $currentUserStatus = 'unselected' }
-    } catch {}
-  }
-  $nextStatus = 'missing'
-  $installStatus = 'missing'
-  $finishStatus = 'missing'
-  if ($next.Count -eq 1) { $nextStatus = 'match' }
-  if ($install.Count -eq 1) { $installStatus = 'match' }
-  if ($finish.Count -eq 1) { $finishStatus = 'match' }
+  elseif ($nativeWindow.OptionPage -eq 'install-options' -and $radios.Count -eq 2 -and
+      $currentUserRadios.Count -eq 1 -and $allUsersRadios.Count -eq 1) { $modeStatus = 'present' }
+  $currentUserStatus = $nativeWindow.CurrentUserSelected
   $radioCountStatus = Get-SafeControlCount -Count $radios.Count
   $editCountStatus = Get-SafeControlCount -Count $edits.Count
   $uiaPageStatus = 'other'
   if ($radios.Count -gt 0) {
-    if ($modeStatus -eq 'present' -and $currentUserRadios.Count -eq 1 -and $next.Count -eq 1) { $uiaPageStatus = 'install-mode' }
+    if ($modeStatus -eq 'present' -and $nextStatus -eq 'match') { $uiaPageStatus = 'install-mode' }
     else { $uiaPageStatus = 'unknown' }
   } elseif ($edits.Count -gt 0) {
-    if ($edits.Count -eq 1 -and (($next.Count -eq 1 -and $install.Count -eq 0) -or ($install.Count -eq 1 -and $next.Count -eq 0))) { $uiaPageStatus = 'directory' }
-    else { $uiaPageStatus = 'unknown' }
+    if ($edits.Count -eq 1 -and $nativeWindow.NativePage -eq 'directory' -and
+        (($nextStatus -eq 'match' -and $install.Count -eq 0) -or ($install.Count -eq 1 -and $next.Count -eq 0))) {
+      $uiaPageStatus = 'directory'
+    } else { $uiaPageStatus = 'unknown' }
   } elseif ($finish.Count -gt 0) {
-    if ($finish.Count -eq 1) { $uiaPageStatus = 'finish' } else { $uiaPageStatus = 'unknown' }
+    if ($finishPageMatch) { $uiaPageStatus = 'finish' } else { $uiaPageStatus = 'unknown' }
   } elseif ($progressBars.Count -gt 0) {
-    if ($progressBars.Count -eq 1) { $uiaPageStatus = 'install-files' } else { $uiaPageStatus = 'unknown' }
+    if ($progressBars.Count -eq 1 -and $nativeWindow.NativePage -eq 'install-files') { $uiaPageStatus = 'install-files' }
+    else { $uiaPageStatus = 'unknown' }
   }
   $snapshot = [ordered]@{
     Stage = $stage; Title = $titleStatus; Mode = $modeStatus; CurrentUser = $currentUserStatus; UiPage = $uiaPageStatus
@@ -1039,7 +1094,15 @@ while ([DateTime]::UtcNow -lt $deadline) {
     if ($modeStatus -eq 'present' -and $uiaPageStatus -eq 'install-mode') {
       $stage = 'install-mode'
       $snapshot.Stage = $stage
-      if ($currentUserRadios.Count -ne 1) {
+      if (-not $modePathReported) {
+        Write-WizardEvent -Name 'install-mode-path-uia' -ProcessId $script:installerProcessId
+        $modePathReported = $true
+      }
+      if ($nativeWindow.CurrentUserPreset -ne 'match' -or $nativeWindow.AllUsersPreset -ne 'match' -or
+          $nativeWindow.CurrentUserVisible -ne 'visible' -or $nativeWindow.CurrentUserEnabled -ne 'enabled' -or
+          $nativeWindow.AllUsersVisible -ne 'visible' -or $nativeWindow.CurrentUserSelected -eq 'unknown' -or
+          $nativeWindow.AllUsersSelected -eq 'unknown' -or $currentUserRadios.Count -ne 1 -or
+          $allUsersRadios.Count -ne 1) {
         Write-WizardEvent -Name 'install-mode-unavailable' -ProcessId $script:installerProcessId
         exit 2
       }
@@ -1047,16 +1110,27 @@ while ([DateTime]::UtcNow -lt $deadline) {
         $selection = $currentUserRadios[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
         if (-not $selection.IsSelected) { $selection.Select() }
         $currentUserSelected = $currentUserRadios[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).IsSelected
+        $allUsersSelection = $allUsersRadios[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+        $allUsersSelected = $allUsersSelection.IsSelected
       } catch {
         Write-WizardEvent -Name 'install-mode-unavailable' -ProcessId $script:installerProcessId
         exit 2
       }
-      if (-not $currentUserSelected) {
+      if (-not $currentUserSelected -or $allUsersSelected) {
         Write-WizardEvent -Name 'install-mode-unavailable' -ProcessId $script:installerProcessId
         exit 2
       }
-      $snapshot.CurrentUser = 'selected'
-      if ($next.Count -ne 1) { Write-WizardEvent -Name 'next-unavailable' -ProcessId $script:installerProcessId; exit 2 }
+      $currentNativeSelection = Get-NativeRadioSelection -Handle $nativeWindow.CurrentUserRadioHandle -ProcessId $script:installerProcessId -PageHandle $nativeWindow.PageHandle -RequireEnabled
+      $allUsersNativeSelection = Get-NativeRadioSelection -Handle $nativeWindow.AllUsersRadioHandle -ProcessId $script:installerProcessId -PageHandle $nativeWindow.PageHandle
+      if ($currentNativeSelection -ne 'selected' -or $allUsersNativeSelection -ne 'unselected') {
+        Write-WizardEvent -Name 'install-mode-unavailable' -ProcessId $script:installerProcessId
+        exit 2
+      }
+      if ($next.Count -ne 1 -or $nextControl.Status -ne 'match' -or
+          ([IntPtr]$next[0].Current.NativeWindowHandle) -ne $nextControl.Handle) {
+        Write-WizardEvent -Name 'next-unavailable' -ProcessId $script:installerProcessId
+        exit 2
+      }
       $next[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
       Write-WizardEvent -Name 'install-mode-verified' -ProcessId $script:installerProcessId
       $stage = 'directory'
@@ -1065,17 +1139,23 @@ while ([DateTime]::UtcNow -lt $deadline) {
     }
     if ($nativeWindow.OptionPage -eq 'install-options') {
       $stage = 'install-mode'; $snapshot.Stage = $stage
+      if (-not $modePathReported) {
+        Write-WizardEvent -Name 'install-mode-path-native' -ProcessId $script:installerProcessId
+        $modePathReported = $true
+      }
       if ($modeStatus -ne 'absent' -or $uiaPageStatus -ne 'other' -or $nativeWindow.NativePage -ne 'other' -or
           $nativeWindow.PageWindow -ne 'present' -or $nativeWindow.PageParent -ne 'match' -or
           $nativeWindow.PageProcess -ne 'match' -or $nativeWindow.PageVisible -ne 'visible' -or
           $nativeWindow.PageClass -ne 'native-dialog' -or $nativeWindow.OptionRadioCount -ne 'two' -or
           $nativeWindow.OptionRadioStyle -ne 'match' -or $nativeWindow.CurrentUserPreset -ne 'match' -or
-          $nativeWindow.AllUsersPreset -ne 'match' -or $nativeWindow.CurrentUserSelected -ne 'selected' -or
+          $nativeWindow.AllUsersPreset -ne 'match' -or $nativeWindow.CurrentUserVisible -ne 'visible' -or
+          $nativeWindow.CurrentUserEnabled -ne 'enabled' -or $nativeWindow.AllUsersVisible -ne 'visible' -or
+          $nativeWindow.CurrentUserSelected -ne 'selected' -or
           $nativeWindow.AllUsersSelected -ne 'unselected') {
         Write-WizardEvent -Name 'install-mode-unavailable' -ProcessId $script:installerProcessId
         exit 2
       }
-      $currentUserSelection = Get-NativeRadioSelection -Handle $nativeWindow.CurrentUserRadioHandle -ProcessId $script:installerProcessId -PageHandle $nativeWindow.PageHandle
+      $currentUserSelection = Get-NativeRadioSelection -Handle $nativeWindow.CurrentUserRadioHandle -ProcessId $script:installerProcessId -PageHandle $nativeWindow.PageHandle -RequireEnabled
       $allUsersSelection = Get-NativeRadioSelection -Handle $nativeWindow.AllUsersRadioHandle -ProcessId $script:installerProcessId -PageHandle $nativeWindow.PageHandle
       if ($currentUserSelection -ne 'selected' -or $allUsersSelection -ne 'unselected') {
         Write-WizardEvent -Name 'install-mode-unavailable' -ProcessId $script:installerProcessId
@@ -1101,8 +1181,18 @@ while ([DateTime]::UtcNow -lt $deadline) {
     }
     if ($modeStatus -eq 'unknown') { Start-Sleep -Milliseconds 100; continue }
     if ($nativeDirectoryPage) {
+      if (-not $modePathReported) {
+        Write-WizardEvent -Name 'install-mode-path-unknown' -ProcessId $script:installerProcessId
+        Write-WizardEvent -Name 'install-mode-unavailable' -ProcessId $script:installerProcessId
+        exit 2
+      }
       $stage = 'directory'; $snapshot.Stage = $stage
     } elseif ($edits.Count -eq 1 -and $uiaPageStatus -eq 'directory' -and $nativeWindow.NativePage -eq 'directory') {
+      if (-not $modePathReported) {
+        Write-WizardEvent -Name 'install-mode-path-unknown' -ProcessId $script:installerProcessId
+        Write-WizardEvent -Name 'install-mode-unavailable' -ProcessId $script:installerProcessId
+        exit 2
+      }
       $stage = 'directory'; $snapshot.Stage = $stage
     } elseif ($edits.Count -gt 1) {
       Write-WizardEvent -Name 'destination-edits-ambiguous' -ProcessId $script:installerProcessId
@@ -1212,7 +1302,9 @@ while ([DateTime]::UtcNow -lt $deadline) {
   }
 
   if ($stage -eq 'installing') {
-    if ($finish.Count -eq 1 -and $uiaPageStatus -eq 'finish') {
+    if ($finish.Count -eq 1 -and $uiaPageStatus -eq 'finish' -and
+        $nativeWindow.NativePage -eq 'finish' -and $finishButtonHandle -ne [IntPtr]::Zero -and
+        $finishButtonHandle -eq $finishNext.Handle -and $finishNext.Status -eq 'match') {
       $finish[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
       Write-WizardEvent -Name 'finish-clicked' -ProcessId $script:installerProcessId
       $stage = 'finish'
@@ -1223,6 +1315,10 @@ while ([DateTime]::UtcNow -lt $deadline) {
   Start-Sleep -Milliseconds 100
 }
 if (-not $finished) {
+  if (-not $modePathReported) {
+    Write-WizardEvent -Name 'install-mode-path-unknown' -ProcessId $script:installerProcessId
+    $modePathReported = $true
+  }
   if (-not $windowReported) { Write-WizardEvent -Name 'window-not-found' -ProcessId $script:installerProcessId }
   $windowSummary = Get-WizardWindowSummary -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle
   Write-WizardSnapshot -Stage $snapshot.Stage -Title $snapshot.Title -Mode $snapshot.Mode -CurrentUser $snapshot.CurrentUser -Radios $snapshot.Radios -Edits $snapshot.Edits -Next $snapshot.Next -Install $snapshot.Install -Finish $snapshot.Finish -Destination $snapshot.Destination -NativePage $windowSummary.NativePage -PageWindow $windowSummary.PageWindow -PageParent $windowSummary.PageParent -PageProcess $windowSummary.PageProcess -PageVisible $windowSummary.PageVisible -PageClass $windowSummary.PageClass -PageControls $windowSummary.PageControls -PageButtons $windowSummary.PageButtons -PageEdits $windowSummary.PageEdits -PageStatic $windowSummary.PageStatic -PageProgress $windowSummary.PageProgress -PageDialogs $windowSummary.PageDialogs -PageOther $windowSummary.PageOther -OptionPage $windowSummary.OptionPage -OptionRadioCount $windowSummary.OptionRadioCount -OptionRadioStyle $windowSummary.OptionRadioStyle -CurrentUserPreset $windowSummary.CurrentUserPreset -AllUsersPreset $windowSummary.AllUsersPreset -CurrentUserSelected $windowSummary.CurrentUserSelected -AllUsersSelected $windowSummary.AllUsersSelected -OptionNext $windowSummary.OptionNext -UiaPage $snapshot.UiPage -DirectoryEdit $windowSummary.DirectoryEdit -DirectoryBrowse $windowSummary.DirectoryBrowse -DirectoryText $windowSummary.DirectoryText -InstallProgress $windowSummary.InstallProgress -UiaTopLevel $windowSummary.UiaTopLevel -MainWindow $windowSummary.MainWindow -WizardWindow $windowSummary.WizardWindow -Foreground $windowSummary.Foreground -WindowClass $windowSummary.WindowClass -NativeTitle $windowSummary.NativeTitle -UiaProvider $windowSummary.UiaProvider -UiaDescendants $windowSummary.UiaDescendants -Win32Children $windowSummary.Win32Children -Win32Buttons $windowSummary.Win32Buttons -Win32Static $windowSummary.Win32Static -Session $windowSummary.Session -Desktop $windowSummary.Desktop -Visible $windowSummary.Visible -ProcessId $script:installerProcessId
