@@ -582,6 +582,198 @@ async function runIndependentWindowsScenario(distribution) {
   }
 }
 
+async function assertDigestMismatchRejected(current, {
+  tag, assetName, expectedSize, expectedSha256, downloadsDir, extractDir, relaunchMarker, handoffProfile,
+}) {
+  const assetUrl = 'https://github.com/smart-tinker/the_unfinished_shapes/releases/download/' +
+    encodeURIComponent(tag) + '/' + encodeURIComponent(assetName);
+  const attestationUrl = 'https://api.github.com/repos/smart-tinker/the_unfinished_shapes/attestations/sha256:' + expectedSha256;
+  const fixtureFingerprint = async () => {
+    const settings = await current.page.evaluate(() => {
+      const value = window.tus.loadSettings();
+      return { threadId: value.threadId, updateChannel: value.updateChannel };
+    });
+    const objects = (await worldObjects(current.page)).map(object => ({
+      type: object.type,
+      position: [object.position?.x, object.position?.y, object.position?.z],
+    }));
+    return createHash('sha256').update(JSON.stringify({ settings, objects })).digest('hex');
+  };
+  const beforeFixture = await fixtureFingerprint();
+  const beforeVersion = await current.instance.evaluate(({ app }) => app.getVersion());
+  const controlInstalled = await current.instance.evaluate(({ assetUrl, attestationUrl }) => {
+    const boundary = globalThis.__tusUpdaterSmokeBoundary;
+    if (!boundary || typeof globalThis.fetch !== 'function') return false;
+    const originalFetch = globalThis.fetch;
+    const assetUrls = new Set([assetUrl]);
+    const control = {
+      assetRequests: 0, bodyResponses: 0, bytesFlipped: 0, bytesRead: 0,
+      responseComplete: false, attestationRequests: 0,
+    };
+    boundary.digestMismatchControl = control;
+    boundary.digestMismatchFetch = originalFetch;
+    globalThis.fetch = async (input, init) => {
+      const requestUrl = typeof input === 'string' ? input : input?.url;
+      const isAssetRequest = assetUrls.has(requestUrl);
+      if (requestUrl === attestationUrl) control.attestationRequests++;
+      const response = await Reflect.apply(originalFetch, globalThis, [input, init]);
+      if (!isAssetRequest) return response;
+      control.assetRequests++;
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get('location');
+        if (location) {
+          try { assetUrls.add(new URL(location, requestUrl).href); } catch {}
+        }
+        return response;
+      }
+      if (!response.ok || !response.body || control.bodyResponses > 0) return response;
+      control.bodyResponses++;
+      const body = response.body.pipeThrough(new TransformStream({
+        transform(chunk, controller) {
+          const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+          control.bytesRead += bytes.byteLength;
+          if (control.bytesFlipped === 0 && bytes.byteLength > 0) {
+            const changed = bytes.slice();
+            changed[0] ^= 1;
+            control.bytesFlipped++;
+            controller.enqueue(changed);
+          } else controller.enqueue(bytes);
+        },
+        flush() { control.responseComplete = true; },
+      }));
+      return new Response(body, {
+        status: response.status, statusText: response.statusText, headers: response.headers,
+      });
+    };
+    return globalThis.fetch !== originalFetch;
+  }, { assetUrl, attestationUrl });
+  assert.equal(controlInstalled, true, 'the packaged main-process asset control is installed');
+
+  let fetchRestored = false;
+  try {
+    await current.page.locator('#updates-download').click({ noWaitAfter: true });
+    await current.page.waitForFunction(() => {
+      const status = document.querySelector('#updates-status');
+      return (status?.dataset.updateFailure === 'true' && status.dataset.updateInvokeStatus === 'rejected') ||
+        status?.textContent.startsWith('Verified ');
+    }, null, { timeout: 180000 });
+
+    const [renderer, main, control, diagnostics] = await Promise.all([
+      current.page.evaluate(() => {
+        const status = document.querySelector('#updates-status');
+        return {
+          state: status?.dataset.updateFailure === 'true' ? 'failed'
+            : status?.textContent?.startsWith('Verified ') ? 'verified' : 'other',
+          phase: ['download', 'provenance'].includes(status?.dataset.updatePhase) ? status.dataset.updatePhase : 'unknown',
+          failureCode: status?.dataset.updateFailureCode || 'OTHER',
+          invokeStatus: status?.dataset.updateInvokeStatus || 'not-started',
+        };
+      }),
+      current.instance.evaluate(() => {
+        const boundary = globalThis.__tusUpdaterSmokeBoundary;
+        return boundary ? {
+          moduleImport: boundary.moduleImport,
+          download: boundary.downloadVerifiedAsset,
+          extractArchive: boundary.extractArchive,
+          extractCall: boundary.extractCall,
+          extractPhase: boundary.extractPhase,
+        } : null;
+      }),
+      current.instance.evaluate(() => {
+        const value = globalThis.__tusUpdaterSmokeBoundary?.digestMismatchControl;
+        return value ? {
+          assetMatched: value.assetRequests > 0 && value.bodyResponses === 1,
+          bytesFlipped: value.bytesFlipped,
+          bytesRead: value.bytesRead,
+          responseComplete: value.responseComplete,
+          attestationRequests: value.attestationRequests,
+        } : null;
+      }),
+      current.page.evaluate(() => window.__tusProvenanceDiagnostics || []),
+    ]);
+    const downloadEntries = await readdir(path.join(downloadsDir, 'TheUnfinishedShapes-Updates')).catch(error => {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    });
+    const extractionEntries = await readdir(extractDir);
+    const relaunchRequested = await lstat(relaunchMarker).then(() => true, error => {
+      if (error?.code === 'ENOENT') return false;
+      throw error;
+    });
+    const afterVersion = await current.instance.evaluate(({ app }) => app.getVersion());
+    const afterFixture = await fixtureFingerprint();
+    let sourceIdentityUnchanged = null;
+    if (handoffProfile) {
+      const identity = await current.instance.evaluate(({ app }) => ({
+        executable: process.execPath,
+        userData: app.getPath('userData'),
+      }));
+      sourceIdentityUnchanged =
+        path.resolve(identity.executable).toLowerCase() === path.resolve(handoffProfile.installedExe).toLowerCase() &&
+        path.resolve(identity.userData).toLowerCase() === path.resolve(handoffProfile.userData).toLowerCase();
+    }
+    const actual = {
+      assetMatched: control?.assetMatched === true,
+      bytesFlipped: control?.bytesFlipped ?? 0,
+      bytesRead: control?.bytesRead ?? 0,
+      responseComplete: control?.responseComplete === true,
+      attestationRequests: control?.attestationRequests ?? 0,
+      rendererState: renderer?.state ?? 'unknown',
+      rendererPhase: renderer?.phase ?? 'unknown',
+      failureCode: safeUpdaterFailureCode(renderer?.failureCode),
+      rendererInvoke: renderer?.invokeStatus ?? 'unknown',
+      moduleImport: main?.moduleImport ?? 'unknown',
+      mainDownload: main?.download ?? 'unknown',
+      verifierStarted: diagnostics.some(item => typeof item?.stage === 'string' &&
+        (item.stage.startsWith('verify-') || item.stage.startsWith('verifier-'))),
+      extractArchive: main?.extractArchive ?? 'unknown',
+      extractCall: main?.extractCall ?? 'unknown',
+      extractPhase: main?.extractPhase ?? 'unknown',
+      downloadDirectoryEmpty: downloadEntries.length === 0,
+      extractionDirectoryEmpty: extractionEntries.length === 0,
+      relaunchRequested,
+      sourceVersionUnchanged: afterVersion === beforeVersion,
+      sourceIdentityUnchanged,
+      sourceFixtureUnchanged: afterFixture === beforeFixture,
+    };
+    console.log('TUS_UPDATE_DIGEST_NEGATIVE ' + JSON.stringify(actual));
+    assert.deepEqual(actual, {
+      assetMatched: true,
+      bytesFlipped: 1,
+      bytesRead: expectedSize,
+      responseComplete: true,
+      attestationRequests: 0,
+      rendererState: 'failed',
+      rendererPhase: 'download',
+      failureCode: 'DIGEST_MISMATCH',
+      rendererInvoke: 'rejected',
+      moduleImport: 'fulfilled',
+      mainDownload: 'rejected',
+      verifierStarted: false,
+      extractArchive: 'not-started',
+      extractCall: 'not-started',
+      extractPhase: 'unknown',
+      downloadDirectoryEmpty: true,
+      extractionDirectoryEmpty: true,
+      relaunchRequested: false,
+      sourceVersionUnchanged: true,
+      sourceIdentityUnchanged: handoffProfile ? true : null,
+      sourceFixtureUnchanged: true,
+    }, 'the packaged updater rejects one altered byte before provenance, extraction, or relaunch');
+  } finally {
+    fetchRestored = await current.instance.evaluate(() => {
+      const boundary = globalThis.__tusUpdaterSmokeBoundary;
+      const originalFetch = boundary?.digestMismatchFetch;
+      if (typeof originalFetch !== 'function') return false;
+      globalThis.fetch = originalFetch;
+      delete boundary.digestMismatchFetch;
+      delete boundary.digestMismatchControl;
+      return globalThis.fetch === originalFetch;
+    }).catch(() => false);
+  }
+  assert.equal(fetchRestored, true, 'the packaged main process restores its original fetch');
+}
+
 async function updateOnce(distribution, setDiagnostic = () => {}) {
   const workDir = await mkdtemp(path.join(testRoot, 'package-'));
   workDirs.push(workDir);
@@ -677,6 +869,10 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     });
   });
   setDiagnostic('check-download');
+  await assertDigestMismatchRejected(current, {
+    tag, assetName, expectedSize: manifestFile.size, expectedSha256: manifestFile.sha256,
+    downloadsDir, extractDir, relaunchMarker, handoffProfile,
+  });
   await current.page.locator('#updates-download').click({ noWaitAfter: true });
   try {
     await current.page.waitForFunction(() => {
