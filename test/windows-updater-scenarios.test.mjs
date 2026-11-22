@@ -246,6 +246,18 @@ test('NSIS child-page snapshot requires visible parent and process provenance', 
   assert.deepEqual(events, [safe]);
   assert.equal(JSON.stringify(events).includes('C:/private'), false);
 });
+test('NSIS destination setter failure emits current page enums before failing closed', async () => {
+  const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const start = script.indexOf("if ($nativeEdit.SetStatus -ne 'sent') {");
+  const end = script.indexOf("\n    if ($nativeEdit.SetMethod", start);
+  const failureBranch = script.slice(start, end);
+  const snapshotAt = failureBranch.indexOf('Write-WizardStateSnapshot -Snapshot $snapshot -WindowSummary $nativeWindow');
+  const exitAt = failureBranch.lastIndexOf('exit 2');
+
+  assert.ok(start >= 0 && end > start, 'the failure branch is bounded');
+  assert.ok(snapshotAt >= 0 && snapshotAt < exitAt, 'the same verified page snapshot is emitted before fail-closed exit');
+});
+
 
 test('NSIS snapshot maps the production writer fields and rejects private option values', async () => {
   const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
