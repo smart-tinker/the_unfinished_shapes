@@ -201,6 +201,23 @@ test('NSIS timeout snapshot classifies the exact HWND without exposing native te
   assert.ok(script.includes('uia-provider=$UiaProvider'));
 });
 
+test('NSIS page snapshot sanitizes capped controls from the matched child HWND', async () => {
+  const safe = 'TUS_NSIS_WIZARD snapshot stage=installing process=path-match window=pid-match page-window=present page-parent=match page-process=match page-visible=visible page-class=native-dialog page-controls=two page-buttons=one page-edits=none page-static=one page-progress=none page-dialogs=none page-other=none option-page=other option-radio-count=none option-radio-style=mismatch current-user-preset=mismatch all-users-preset=mismatch current-user-selected=unknown all-users-selected=unknown option-next=unknown title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=match native-page=other uia-page=other directory-edit=missing directory-browse=missing directory-text=missing install-progress=missing uia-top-level=one main-window=present wizard-window=none foreground=installer window-class=native-dialog native-title=other uia-provider=available uia-descendants=many win32-children=many win32-buttons=many win32-static=many session=match desktop=default-interactive visible=visible pid=4321';
+  const pageFields = ['page-controls', 'page-buttons', 'page-edits', 'page-static', 'page-progress', 'page-dialogs', 'page-other'];
+  const unsafe = pageFields.map((field) => {
+    const value = safe.split(field + '=')[1].split(' ')[0];
+    return safe.replace(field + '=' + value, field + '=C:/private/path');
+  });
+  const events = safeNsisWizardEvents([safe, ...unsafe, 'raw page caption C:/private/path'].join(String.fromCharCode(10)));
+
+  assert.deepEqual(events, [safe]);
+  assert.equal(JSON.stringify(events).includes('C:/private'), false);
+
+  const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  assert.ok(script.includes('[TUSWindowApi]::GetWindow($pageHandle, 5)'));
+  assert.ok(script.includes('page-controls=$PageControls page-buttons=$PageButtons page-edits=$PageEdits page-static=$PageStatic page-progress=$PageProgress page-dialogs=$PageDialogs page-other=$PageOther'));
+});
+
 test('NSIS timeout snapshot identifies pinned MUI page controls without exposing names', async () => {
   const safe = 'TUS_NSIS_WIZARD snapshot stage=entry process=path-match window=pid-match page-window=unknown page-parent=unknown page-process=unknown page-visible=unknown page-class=unknown option-page=unknown option-radio-count=unknown option-radio-style=unknown current-user-preset=unknown all-users-preset=unknown current-user-selected=unknown all-users-selected=unknown option-next=unknown title=product-missing mode=absent current-user=unknown radios=none edits=none next=missing install=missing finish=missing destination=unknown native-page=directory uia-page=other directory-edit=match directory-browse=match directory-text=match install-progress=missing uia-top-level=one main-window=present wizard-window=none foreground=installer window-class=native-dialog native-title=other uia-provider=available uia-descendants=many win32-children=many win32-buttons=many win32-static=many session=match desktop=default-interactive visible=visible pid=4321';
   const unsafe = safe.replace('directory-edit=match', 'directory-edit=C:/private/path');
