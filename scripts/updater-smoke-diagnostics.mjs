@@ -99,6 +99,13 @@ const zipSinkEntryCompressedSize = 111_522_616;
 const zipSinkEntryUncompressedSize = 249_832_448;
 const zipSinkArmTimeoutMs = 15_000;
 const zipSinkWriteHighWaterMarkBytes = 16 * 1024;
+const zipSinkArmPlan = Object.freeze([
+  { trial: 1, sink: 'count-discard' },
+  { trial: 1, sink: 'file-sink' },
+  { trial: 2, sink: 'file-sink' },
+  { trial: 2, sink: 'count-discard' },
+]);
+const safeZipSinkSinks = new Set(['count-discard', 'file-sink']);
 const safeZipSinkOutcomes = new Set(['completed', 'time-limit', 'failed', 'unknown']);
 
 function safeZipSinkMetric(value, limit) {
@@ -112,12 +119,13 @@ export function safeZipSinkComparison(value) {
   const entryCompressedSize = safeZipSinkMetric(value?.entryCompressedSize, 500_000_000);
   const entryUncompressedSize = safeZipSinkMetric(value?.entryUncompressedSize, 1_073_741_824);
   const entryNonAsar = value?.entryNonAsar === true;
-  const arms = Array.isArray(value?.arms) ? value.arms : [];
-  const safeArm = (name, arm) => {
+  const rawArms = Array.isArray(value?.arms) ? value.arms.slice(0, zipSinkArmPlan.length) : [];
+  const safeArm = arm => {
     const decodedBytes = safeZipSinkMetric(arm?.decodedBytes, 1_073_741_824);
     const sinkBytesWritten = safeZipSinkMetric(arm?.sinkBytesWritten, 1_073_741_824);
     return {
-      sink: name,
+      trial: [1, 2].includes(arm?.trial) ? arm.trial : null,
+      sink: safeZipSinkSinks.has(arm?.sink) ? arm.sink : 'unknown',
       outcome: safeZipSinkOutcomes.has(arm?.outcome) ? arm.outcome : 'unknown',
       wallMs: safeZipSinkMetric(arm?.wallMs, 60_000),
       cpuUserMs: safeZipSinkMetric(arm?.cpuUserMs, 120_000),
@@ -131,6 +139,7 @@ export function safeZipSinkComparison(value) {
       sinkClosed: arm?.sinkClosed === true,
     };
   };
+  const arms = rawArms.map(safeArm);
   const entryMatches = value?.entryMatches === true && entrySequence === zipSinkEntrySequence &&
     compression === 'deflate' && entryCompressedSize === zipSinkEntryCompressedSize &&
     entryUncompressedSize === zipSinkEntryUncompressedSize && entryNonAsar;
@@ -142,10 +151,10 @@ export function safeZipSinkComparison(value) {
     entryUncompressedSize,
     entryNonAsar,
     entryMatches,
-    armOrder: ['count-discard', 'file-sink'],
-    cacheCaveat: 'file-sink-second-may-read-warm-source-cache',
+    armOrder: arms.map(arm => arm.sink),
+    cacheCaveat: 'sink-order-counterbalanced; filesystem-read-cache-not-reset',
     measurementScope: 'pipeline-only',
-    arms: [safeArm('count-discard', arms[0]), safeArm('file-sink', arms[1])],
+    arms,
   };
 }
 
@@ -278,25 +287,30 @@ async function measureZipSinkArm(archivePath, sinkName) {
 
 export async function compareVerifiedWindowsZipEntrySinks(archivePath, assetMatches) {
   if (assetMatches !== true) return safeZipSinkComparison({ assetMatches: false });
-  const first = await measureZipSinkArm(archivePath, 'count-discard');
-  if (!first.entryInfo.entryMatches) {
-    return safeZipSinkComparison({
-      assetMatches: true,
-      ...first.entryInfo,
-      arms: [first.arm],
-    });
+  const arms = [];
+  let entryInfo = null;
+  let allEntriesMatch = true;
+  for (const { trial, sink } of zipSinkArmPlan) {
+    const measured = await measureZipSinkArm(archivePath, sink);
+    if (entryInfo === null) {
+      entryInfo = measured.entryInfo;
+      allEntriesMatch = entryInfo.entryMatches;
+    } else {
+      const sameEntry = measured.entryInfo.entrySequence === entryInfo.entrySequence &&
+        measured.entryInfo.compression === entryInfo.compression &&
+        measured.entryInfo.entryCompressedSize === entryInfo.entryCompressedSize &&
+        measured.entryInfo.entryUncompressedSize === entryInfo.entryUncompressedSize &&
+        measured.entryInfo.entryNonAsar === entryInfo.entryNonAsar;
+      allEntriesMatch = allEntriesMatch && measured.entryInfo.entryMatches && sameEntry;
+    }
+    arms.push({ trial, sink, ...measured.arm });
+    if (!allEntriesMatch) break;
   }
-  const second = await measureZipSinkArm(archivePath, 'file-sink');
-  const sameEntry = second.entryInfo.entrySequence === first.entryInfo.entrySequence &&
-    second.entryInfo.compression === first.entryInfo.compression &&
-    second.entryInfo.entryCompressedSize === first.entryInfo.entryCompressedSize &&
-    second.entryInfo.entryUncompressedSize === first.entryInfo.entryUncompressedSize &&
-    second.entryInfo.entryNonAsar === first.entryInfo.entryNonAsar;
   return safeZipSinkComparison({
     assetMatches: true,
-    ...first.entryInfo,
-    entryMatches: first.entryInfo.entryMatches && second.entryInfo.entryMatches && sameEntry,
-    arms: [first.arm, second.arm],
+    ...(entryInfo ?? {}),
+    entryMatches: allEntriesMatch && arms.length === zipSinkArmPlan.length,
+    arms,
   });
 }
 

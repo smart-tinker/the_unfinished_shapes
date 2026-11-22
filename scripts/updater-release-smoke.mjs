@@ -1410,7 +1410,15 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     assert.equal(zipSinkComparison.assetMatches, true, 'the paired control uses the exact published RC11 portable asset');
     assert.equal(zipSinkComparison.entryMatches, true, 'both arms read the exact non-ASAR Deflate entry 12');
     assert.equal(zipSinkComparison.measurementScope, 'pipeline-only');
-    assert.deepEqual(zipSinkComparison.armOrder, ['count-discard', 'file-sink']);
+    const expectedZipSinkArms = [
+      { trial: 1, sink: 'count-discard' },
+      { trial: 1, sink: 'file-sink' },
+      { trial: 2, sink: 'file-sink' },
+      { trial: 2, sink: 'count-discard' },
+    ];
+    assert.deepEqual(zipSinkComparison.armOrder, expectedZipSinkArms.map(arm => arm.sink));
+    assert.deepEqual(zipSinkComparison.arms.map(({ trial, sink }) => ({ trial, sink })), expectedZipSinkArms);
+    assert.equal(zipSinkComparison.cacheCaveat, 'sink-order-counterbalanced; filesystem-read-cache-not-reset');
     for (const arm of zipSinkComparison.arms) {
       assert.ok(['completed', 'time-limit', 'failed'].includes(arm.outcome), 'each sink arm reports a fixed outcome');
       for (const key of ['wallMs', 'cpuUserMs', 'cpuSystemMs', 'compressedBytesRead', 'decodedBytes', 'sinkBytesWritten']) {
