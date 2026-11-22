@@ -1143,6 +1143,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   await focusByKeyboard(current.page, '#settings-close');
   await current.page.keyboard.press('Enter');
   await current.page.locator('#settings').waitFor({ state: 'hidden', timeout: 5000 });
+  await current.page.waitForFunction(() => document.querySelector('#update-channel')?.value === 'stable', null, { timeout: 5000 });
   assert.equal(
     await current.page.evaluate(async () => (await window.tus.loadSettings()).updateChannel),
     'stable',
