@@ -1137,3 +1137,21 @@ test('NSIS directory setter checks exact native readback after WM_SETTEXT reject
   assert.ok(finalReadbackAt > failedWriteReadbackAt,
     'the normal final native readback remains after control provenance checks');
 });
+
+test('NSIS directory-set result enums are sanitized without raw path or error details', () => {
+  const safe = [
+    'TUS_NSIS_WIZARD event=destination-set-dispatch-failed pid=4321',
+    'TUS_NSIS_WIZARD event=destination-set-message-rejected pid=4321',
+  ];
+  const output = [
+    ...safe,
+    ...safe.map(line => line + ' value=C:/private/path detail=raw error'),
+    'TUS_NSIS_WIZARD event=destination-set-unknown pid=4321',
+    'raw setter error C:/private/path',
+  ].join(String.fromCharCode(10));
+  const events = safeNsisWizardEvents(output);
+
+  assert.deepEqual(events, safe);
+  assert.equal(JSON.stringify(events).includes('C:/private/path'), false);
+  assert.equal(JSON.stringify(events).includes('raw error'), false);
+});
