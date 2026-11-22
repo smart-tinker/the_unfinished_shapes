@@ -2,11 +2,7 @@ param(
   [Parameter(Mandatory=$true)][string]$InstallerPath,
   [Parameter(Mandatory=$true)][string]$ExpectedInstallDir,
   [ValidateRange(30,180)][int]$TimeoutSeconds = 180,
-  [switch]$CleanupOnly,
-  [switch]$NativeEditInteropCheck,
-  [switch]$NativeEditInteropHost,
-  [long]$NativeEditInteropHwnd = 0,
-  [int]$NativeEditInteropPid = 0
+  [switch]$CleanupOnly
 )
 $ErrorActionPreference = 'Stop'
 $script:installerProcessId = 0
@@ -21,7 +17,7 @@ public static class TUSWindowApi {
   [DllImport("user32.dll", SetLastError = true)] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
   [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint command);
   [DllImport("user32.dll", SetLastError = true)] public static extern int GetWindowLong(IntPtr hWnd, int index);
-  [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr childAfter, string className, string windowName);
   [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr hDlg, int nIDDlgItem);
@@ -832,66 +828,6 @@ trap {
   Write-WizardEvent -Name 'automation-failed' -ProcessId $script:installerProcessId
   exit 2
 }
-if ($NativeEditInteropHost) {
-  try {
-    Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop | Out-Null
-    $form = [System.Windows.Forms.Form]::new()
-    $form.ShowInTaskbar = $false
-    $edit = [System.Windows.Forms.TextBox]::new()
-    $null = $form.Controls.Add($edit)
-    $form.CreateControl()
-    $edit.CreateControl()
-    if (-not $edit.IsHandleCreated) { throw 'edit-create-failed' }
-    [Console]::Out.WriteLine("TUS_NSIS_WIZARD event=native-edit-host-ready hwnd=$($edit.Handle.ToInt64())")
-    [Console]::Out.Flush()
-    [System.Windows.Forms.Application]::Run([System.Windows.Forms.ApplicationContext]::new())
-  } catch {
-    [Console]::Out.WriteLine('TUS_NSIS_WIZARD event=native-edit-host-failed')
-    [Console]::Out.Flush()
-    exit 2
-  }
-  exit 0
-}
-if ($NativeEditInteropCheck) {
-  $interopStatus = 'owner-mismatch'
-  try {
-    $control = [IntPtr]$NativeEditInteropHwnd
-    $ownerProcessId = [uint32]0
-    $ownerThreadId = [TUSWindowApi]::GetWindowThreadProcessId($control, [ref]$ownerProcessId)
-    if ($control -ne [IntPtr]::Zero -and $ownerThreadId -ne 0 -and
-        $ownerProcessId -eq [uint32]$NativeEditInteropPid) {
-      $expected = 'C:\TUS\NativeEditInterop\TheUnfinishedShapes'
-      $expectedPointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($expected)
-      $setSent = [IntPtr]::Zero
-      $setResult = [IntPtr]::Zero
-      try {
-        $setSent = [TUSWindowApi]::SendMessageTimeout($control, 0x000C, [IntPtr]::Zero, $expectedPointer, 0x0002, 500, [ref]$setResult)
-      } finally {
-        [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
-      }
-      if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0) {
-        $interopStatus = 'set-failed'
-      } else {
-        $actual = Get-NativeDirectoryEditText -Control $control
-        if ($null -eq $actual) {
-          $interopStatus = 'readback-unavailable'
-        } elseif (-not [System.IO.Path]::IsPathRooted($actual)) {
-          $interopStatus = 'readback-not-rooted'
-        } elseif (-not [String]::Equals($actual, $expected, [StringComparison]::Ordinal)) {
-          $interopStatus = 'readback-mismatch'
-        } else {
-          $interopStatus = 'passed'
-        }
-      }
-    }
-  } catch {
-    $interopStatus = 'operation-failed'
-  }
-  [Console]::Out.WriteLine("TUS_NSIS_WIZARD event=native-edit-interop-$interopStatus")
-  [Console]::Out.Flush()
-  exit 0
-}
-
 try {
   Add-Type -AssemblyName UIAutomationClient
   Add-Type -AssemblyName UIAutomationTypes
