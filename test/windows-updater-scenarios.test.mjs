@@ -98,6 +98,23 @@ test('installer helper failures expose only fixed progress stages', () => {
 });
 
 
+test('installer relaunch request emits only a fixed path-free outcome', () => {
+  const events = safeInstallerHandoffEvents([
+    'TUS_INSTALLER_HANDOFF check=relaunch-request:match',
+    'TUS_INSTALLER_HANDOFF check=relaunch-request:mismatch',
+    'TUS_INSTALLER_HANDOFF check=relaunch-request:failed',
+    'TUS_INSTALLER_HANDOFF check=relaunch-request:/private/path',
+    'raw exception /private/path',
+  ].join(String.fromCharCode(10)));
+
+  assert.deepEqual(events, [
+    'TUS_INSTALLER_HANDOFF check=relaunch-request:match',
+    'TUS_INSTALLER_HANDOFF check=relaunch-request:mismatch',
+    'TUS_INSTALLER_HANDOFF check=relaunch-request:failed',
+  ]);
+  assert.equal(JSON.stringify(events).includes('/private/path'), false);
+});
+
 test('NSIS wizard snapshot preserves bounded page facts without UIA names or paths', () => {
   const safe = 'TUS_NSIS_WIZARD snapshot stage=install-mode process=path-match window=pid-match page-window=unknown page-parent=unknown page-process=unknown page-visible=unknown page-class=unknown option-page=unknown option-radio-count=unknown option-radio-style=unknown current-user-preset=unknown all-users-preset=unknown current-user-selected=unknown all-users-selected=unknown option-next=unknown title=product-match mode=present current-user=selected radios=two edits=none next=match install=missing finish=missing destination=unknown native-page=unknown uia-page=install-mode directory-edit=unknown directory-browse=unknown directory-text=unknown install-progress=unknown uia-top-level=one main-window=present wizard-window=main foreground=installer window-class=native-dialog native-title=error-like uia-provider=empty uia-descendants=none win32-children=two win32-buttons=one win32-static=one session=match desktop=default-interactive visible=visible pid=4321';
   const events = safeNsisWizardEvents([
