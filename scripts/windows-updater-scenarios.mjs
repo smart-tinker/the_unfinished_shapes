@@ -32,7 +32,7 @@ const safeScenarioCategories = new Set([
   'build-label', 'build-title-sha', 'app-version', 'user-data', 'startup-health', 'other',
 ]);
 
-const safeWizardSnapshotPattern = /^TUS_NSIS_WIZARD snapshot stage=(entry|install-mode|directory|installing|finish|unknown) process=path-match window=pid-match page-window=(present|missing|ambiguous|unknown) page-parent=(match|mismatch|unknown) page-process=(match|mismatch|unknown) page-visible=(visible|hidden|unknown) page-class=(native-dialog|other|unknown) option-page=(install-options|other|unknown) option-radio-count=(none|one|two|many|unknown) option-radio-style=(match|mismatch|unknown) current-user-preset=(match|mismatch|unknown) all-users-preset=(match|mismatch|unknown) current-user-selected=(selected|unselected|unknown) all-users-selected=(selected|unselected|unknown) option-next=(match|missing|disabled|hidden|wrong-class|owner-mismatch|unknown) title=(product-match|product-missing|unknown) mode=(present|absent|unknown) current-user=(selected|unselected|unknown) radios=(none|one|two|many) edits=(none|one|many) next=(match|missing) install=(match|missing) finish=(match|missing) destination=(match|mismatch|unknown) native-page=(directory|install-files|other|unknown) uia-page=(install-mode|directory|install-files|finish|other|unknown) directory-edit=(match|missing|wrong-class|unknown) directory-browse=(match|missing|wrong-class|unknown) directory-text=(match|missing|wrong-class|unknown) install-progress=(match|missing|wrong-class|unknown) uia-top-level=(none|one|two|many|unknown) main-window=(present|absent|unknown) wizard-window=(main|other|ambiguous|none|unknown) foreground=(installer|other|none|unknown) window-class=(native-dialog|other|unknown) native-title=(error-like|other|empty|unknown) uia-provider=(empty|available|error|unknown) uia-descendants=(none|one|two|many|unknown) win32-children=(none|one|two|many|unknown) win32-buttons=(none|one|two|many|unknown) win32-static=(none|one|two|many|unknown) session=(match|mismatch|unknown) desktop=(default-interactive|other|unknown) visible=(visible|hidden|unknown) pid=(\d{1,10})$/;
+const safeWizardSnapshotPattern = /^TUS_NSIS_WIZARD snapshot stage=(entry|install-mode|directory|installing|finish|unknown) process=path-match window=pid-match page-window=(present|missing|ambiguous|unknown) page-parent=(match|mismatch|unknown) page-process=(match|mismatch|unknown) page-visible=(visible|hidden|unknown) page-class=(native-dialog|other|unknown) page-controls=((?:none|one|two|many|unknown) page-buttons=(?:none|one|two|many|unknown) page-edits=(?:none|one|two|many|unknown) page-static=(?:none|one|two|many|unknown) page-progress=(?:none|one|two|many|unknown) page-dialogs=(?:none|one|two|many|unknown) page-other=(?:none|one|two|many|unknown)) option-page=(install-options|other|unknown) option-radio-count=(none|one|two|many|unknown) option-radio-style=(match|mismatch|unknown) current-user-preset=(match|mismatch|unknown) all-users-preset=(match|mismatch|unknown) current-user-selected=(selected|unselected|unknown) all-users-selected=(selected|unselected|unknown) option-next=(match|missing|disabled|hidden|wrong-class|owner-mismatch|unknown) title=(product-match|product-missing|unknown) mode=(present|absent|unknown) current-user=(selected|unselected|unknown) radios=(none|one|two|many) edits=(none|one|many) next=(match|missing) install=(match|missing) finish=(match|missing) destination=(match|mismatch|unknown) native-page=(directory|install-files|other|unknown) uia-page=(install-mode|directory|install-files|finish|other|unknown) directory-edit=(match|missing|wrong-class|unknown) directory-browse=(match|missing|wrong-class|unknown) directory-text=(match|missing|wrong-class|unknown) install-progress=(match|missing|wrong-class|unknown) uia-top-level=(none|one|two|many|unknown) main-window=(present|absent|unknown) wizard-window=(main|other|ambiguous|none|unknown) foreground=(installer|other|none|unknown) window-class=(native-dialog|other|unknown) native-title=(error-like|other|empty|unknown) uia-provider=(empty|available|error|unknown) uia-descendants=(none|one|two|many|unknown) win32-children=(none|one|two|many|unknown) win32-buttons=(none|one|two|many|unknown) win32-static=(none|one|two|many|unknown) session=(match|mismatch|unknown) desktop=(default-interactive|other|unknown) visible=(visible|hidden|unknown) pid=(\d{1,10})$/;
 
 export function windowsRelaunchRequestStatus(marker, expectedInstallerPath) {
   let options;
@@ -64,23 +64,23 @@ export function safeNsisWizardEvents(output) {
       'TUS_NSIS_WIZARD snapshot stage=' + snapshot[1] +
       ' process=path-match window=pid-match page-window=' + snapshot[2] + ' page-parent=' + snapshot[3] +
       ' page-process=' + snapshot[4] + ' page-visible=' + snapshot[5] + ' page-class=' + snapshot[6] +
-      ' option-page=' + snapshot[7] + ' option-radio-count=' + snapshot[8] +
-      ' option-radio-style=' + snapshot[9] + ' current-user-preset=' + snapshot[10] +
-      ' all-users-preset=' + snapshot[11] + ' current-user-selected=' + snapshot[12] +
-      ' all-users-selected=' + snapshot[13] + ' option-next=' + snapshot[14] + ' title=' + snapshot[15] +
-      ' mode=' + snapshot[16] + ' current-user=' + snapshot[17] +
-      ' radios=' + snapshot[18] + ' edits=' + snapshot[19] +
-      ' next=' + snapshot[20] + ' install=' + snapshot[21] +
-      ' finish=' + snapshot[22] + ' destination=' + snapshot[23] +
-      ' native-page=' + snapshot[24] + ' uia-page=' + snapshot[25] +
-      ' directory-edit=' + snapshot[26] + ' directory-browse=' + snapshot[27] +
-      ' directory-text=' + snapshot[28] + ' install-progress=' + snapshot[29] +
-      ' uia-top-level=' + snapshot[30] + ' main-window=' + snapshot[31] + ' wizard-window=' + snapshot[32] +
-      ' foreground=' + snapshot[33] + ' window-class=' + snapshot[34] + ' native-title=' + snapshot[35] +
-      ' uia-provider=' + snapshot[36] + ' uia-descendants=' + snapshot[37] +
-      ' win32-children=' + snapshot[38] + ' win32-buttons=' + snapshot[39] + ' win32-static=' + snapshot[40] +
-      ' session=' + snapshot[41] + ' desktop=' + snapshot[42] + ' visible=' + snapshot[43] +
-      ' pid=' + snapshot[44],
+      ' page-controls=' + snapshot[7] + ' option-page=' + snapshot[8] + ' option-radio-count=' + snapshot[9] +
+      ' option-radio-style=' + snapshot[10] + ' current-user-preset=' + snapshot[11] +
+      ' all-users-preset=' + snapshot[12] + ' current-user-selected=' + snapshot[13] +
+      ' all-users-selected=' + snapshot[14] + ' option-next=' + snapshot[15] + ' title=' + snapshot[16] +
+      ' mode=' + snapshot[17] + ' current-user=' + snapshot[18] +
+      ' radios=' + snapshot[19] + ' edits=' + snapshot[20] +
+      ' next=' + snapshot[21] + ' install=' + snapshot[22] +
+      ' finish=' + snapshot[23] + ' destination=' + snapshot[24] +
+      ' native-page=' + snapshot[25] + ' uia-page=' + snapshot[26] +
+      ' directory-edit=' + snapshot[27] + ' directory-browse=' + snapshot[28] +
+      ' directory-text=' + snapshot[29] + ' install-progress=' + snapshot[30] +
+      ' uia-top-level=' + snapshot[31] + ' main-window=' + snapshot[32] + ' wizard-window=' + snapshot[33] +
+      ' foreground=' + snapshot[34] + ' window-class=' + snapshot[35] + ' native-title=' + snapshot[36] +
+      ' uia-provider=' + snapshot[37] + ' uia-descendants=' + snapshot[38] +
+      ' win32-children=' + snapshot[39] + ' win32-buttons=' + snapshot[40] + ' win32-static=' + snapshot[41] +
+      ' session=' + snapshot[42] + ' desktop=' + snapshot[43] + ' visible=' + snapshot[44] +
+      ' pid=' + snapshot[45],
     ];
   });
 }
