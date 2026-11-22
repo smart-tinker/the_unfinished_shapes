@@ -86,7 +86,10 @@ test('safe ZIP sink comparison reports bounded counters for both sinks without p
       },
     ],
   });
-  assert.doesNotMatch(JSON.stringify(comparison), /C:\\/private|raw filesystem error|raw stream error/);
+  const serialized = JSON.stringify(comparison);
+  assert.equal(serialized.includes('C:/private'), false);
+  assert.equal(serialized.includes('raw filesystem error'), false);
+  assert.equal(serialized.includes('raw stream error'), false);
 
   const bounded = diagnostics.safeZipSinkComparison({
     assetMatches: 'true',
