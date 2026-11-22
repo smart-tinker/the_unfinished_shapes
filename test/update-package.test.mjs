@@ -877,6 +877,8 @@ test('ZIP stream snapshots identify the current archive entry without its name',
     sinkClosed: false,
     sinkBytesWritten: 233242624,
     sinkWritableLength: 16384,
+    writeCallbackState: 'unknown',
+    writeCallbackAgeMs: null,
   });
   assert.equal(unsafe.entrySequence, null);
   assert.doesNotMatch(JSON.stringify([snapshot, unsafe]), /private-entry-name|C:\/private\/path/);

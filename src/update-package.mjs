@@ -53,7 +53,7 @@ export function createZipWriteBatcher() {
   });
 }
 
-export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, entry, compressedSource) {
+export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, entry, compressedSource, writeCallback = null) {
   const count = (value, limit = maxExtractedBytes) =>
     Number.isSafeInteger(value) && value >= 0 ? Math.min(value, limit) : null;
   const position = (value, limit) => Number.isSafeInteger(value?.start) && Number.isSafeInteger(value?.pos) && value.pos >= value.start
@@ -62,6 +62,10 @@ export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, ent
   const decodedBytes = Number.isSafeInteger(source?.actualByteCount)
     ? count(source.actualByteCount)
     : compression === 'stored' ? position(source, maxExtractedBytes) : null;
+  const writeCallbackState = ['write', 'writev', 'idle'].includes(writeCallback?.state) ? writeCallback.state : 'unknown';
+  const writeCallbackAgeMs = ['write', 'writev'].includes(writeCallbackState) &&
+    Number.isSafeInteger(writeCallback?.ageMs) && writeCallback.ageMs >= 0
+    ? Math.min(writeCallback.ageMs, 120_000) : null;
   return {
     entrySequence: Number.isSafeInteger(entrySequence) && entrySequence >= 1 && entrySequence <= maxArchiveEntries ? entrySequence : null,
     compression,
@@ -74,8 +78,50 @@ export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, ent
     sinkClosed: sink?.closed === true,
     sinkBytesWritten: count(sink?.bytesWritten),
     sinkWritableLength: count(sink?.writableLength),
+    writeCallbackState,
+    writeCallbackAgeMs,
   };
 }
+
+export function trackZipWriteCallback(sink) {
+  let active = null;
+  let instrumented = false;
+  let supported = true;
+  for (const method of ['_write', '_writev']) {
+    const original = sink?.[method];
+    if (typeof original !== 'function') continue;
+    instrumented = true;
+    const wrapped = function (...args) {
+      const callbackIndex = args.length - 1;
+      const callback = args[callbackIndex];
+      if (typeof callback !== 'function') return original.apply(this, args);
+      const pending = { state: method === '_write' ? 'write' : 'writev', startedAt: performance.now() };
+      active = pending;
+      args[callbackIndex] = function (...callbackArgs) {
+        if (active === pending) active = null;
+        return callback.apply(this, callbackArgs);
+      };
+      try { return original.apply(this, args); }
+      catch (error) {
+        if (active === pending) active = null;
+        throw error;
+      }
+    };
+    try {
+      sink[method] = wrapped;
+      if (sink[method] !== wrapped) supported = false;
+    } catch { supported = false; }
+  }
+  return () => {
+    if (!instrumented || !supported) return { state: 'unknown', ageMs: null };
+    if (!active) return { state: 'idle', ageMs: null };
+    return {
+      state: active.state,
+      ageMs: Math.min(120_000, Math.max(0, Math.floor(performance.now() - active.startedAt))),
+    };
+  };
+}
+
 const sigstoreVerifierCodes = new Set([
   'NOT_IMPLEMENTED_ERROR', 'TLOG_ERROR', 'TLOG_INCLUSION_PROOF_ERROR', 'TLOG_INCLUSION_PROMISE_ERROR',
   'TLOG_MISSING_INCLUSION_ERROR', 'TLOG_BODY_ERROR', 'CERTIFICATE_ERROR', 'PUBLIC_KEY_ERROR',
@@ -715,7 +761,12 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
       writeStream = isAppAsar && electronFs
         ? electronFs.createWriteStream(output, { flags: 'wx', mode: fileMode })
         : createWriteStream(output, { flags: 'wx', mode: fileMode });
-      extraction.streamSnapshot = () => safeZipExtractionStreamSnapshot(stream, writeStream, count, entry, compressedReadStream);
+      const writeCallbackSnapshot = extraction.trackDiagnostics && platform === 'win32' && !isAppAsar
+        ? trackZipWriteCallback(writeStream)
+        : null;
+      extraction.streamSnapshot = () => safeZipExtractionStreamSnapshot(
+        stream, writeStream, count, entry, compressedReadStream, writeCallbackSnapshot?.(),
+      );
       await pipeline(...(platform === 'win32' && !isAppAsar
         ? [stream, createZipWriteBatcher(), writeStream]
         : [stream, writeStream]));

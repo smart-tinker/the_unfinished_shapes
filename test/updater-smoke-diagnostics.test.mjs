@@ -261,7 +261,8 @@ test('TUS extraction snapshots localize bounded read, decode and write throughpu
     entryCompressedSize: 111_522_616, entryUncompressedSize: 249_832_448,
     compressedBytesRead: 100, decodedBytes: 1_000,
     sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
-    sinkBytesWritten: 900, sinkWritableLength: 100, byteProgress: 'baseline',
+    sinkBytesWritten: 900, sinkWritableLength: 100,
+    writeCallbackState: 'unknown', writeCallbackAgeMs: null, byteProgress: 'baseline',
     intervalMs: null, compressedReadBytesPerSecond: null,
     decodedBytesPerSecond: null, writtenBytesPerSecond: null,
   });

@@ -55,6 +55,10 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
   const compressedBytesRead = safeExtractStreamCount(value.compressedBytesRead);
   const decodedBytes = safeExtractStreamCount(value.decodedBytes);
   const sinkBytesWritten = safeExtractStreamCount(value.sinkBytesWritten);
+  const writeCallbackState = ['write', 'writev', 'idle'].includes(value.writeCallbackState) ? value.writeCallbackState : 'unknown';
+  const writeCallbackAgeMs = ['write', 'writev'].includes(writeCallbackState) &&
+    Number.isSafeInteger(value.writeCallbackAgeMs) && value.writeCallbackAgeMs >= 0 && value.writeCallbackAgeMs <= 120_000
+    ? value.writeCallbackAgeMs : null;
   const sameEntry = entrySequence !== null && entrySequence === previous?.entrySequence;
   const intervalMs = sameEntry && Number.isSafeInteger(elapsedMs) && elapsedMs >= 1 && elapsedMs <= 60_000
     ? elapsedMs : null;
@@ -86,6 +90,8 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
     sinkClosed: value.sinkClosed === true,
     sinkBytesWritten,
     sinkWritableLength: safeExtractStreamCount(value.sinkWritableLength),
+    writeCallbackState,
+    writeCallbackAgeMs,
     byteProgress,
     intervalMs,
     compressedReadBytesPerSecond: rate(compressedBytesRead, previous?.compressedBytesRead),
