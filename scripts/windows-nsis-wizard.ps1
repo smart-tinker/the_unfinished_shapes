@@ -843,6 +843,15 @@ function Write-WizardSnapshot {
   [Console]::Out.Flush()
 }
 
+function Write-WizardStateSnapshot {
+  param(
+    [System.Collections.IDictionary]$Snapshot,
+    [psobject]$WindowSummary,
+    [int]$ProcessId
+  )
+  Write-WizardSnapshot -Stage $Snapshot.Stage -Title $Snapshot.Title -Mode $Snapshot.Mode -CurrentUser $Snapshot.CurrentUser -Radios $Snapshot.Radios -Edits $Snapshot.Edits -Next $Snapshot.Next -Install $Snapshot.Install -Finish $Snapshot.Finish -Destination $Snapshot.Destination -NativePage $WindowSummary.NativePage -PageWindow $WindowSummary.PageWindow -PageParent $WindowSummary.PageParent -PageProcess $WindowSummary.PageProcess -PageVisible $WindowSummary.PageVisible -PageClass $WindowSummary.PageClass -PageControls $WindowSummary.PageControls -PageButtons $WindowSummary.PageButtons -PageEdits $WindowSummary.PageEdits -PageStatic $WindowSummary.PageStatic -PageProgress $WindowSummary.PageProgress -PageDialogs $WindowSummary.PageDialogs -PageOther $WindowSummary.PageOther -OptionPage $WindowSummary.OptionPage -OptionRadioCount $WindowSummary.OptionRadioCount -OptionRadioStyle $WindowSummary.OptionRadioStyle -CurrentUserPreset $WindowSummary.CurrentUserPreset -AllUsersPreset $WindowSummary.AllUsersPreset -CurrentUserSelected $WindowSummary.CurrentUserSelected -AllUsersSelected $WindowSummary.AllUsersSelected -OptionNext $WindowSummary.OptionNext -UiaPage $Snapshot.UiPage -DirectoryEdit $WindowSummary.DirectoryEdit -DirectoryBrowse $WindowSummary.DirectoryBrowse -DirectoryText $WindowSummary.DirectoryText -InstallProgress $WindowSummary.InstallProgress -UiaTopLevel 'unknown' -MainWindow 'present' -WizardWindow 'unknown' -Foreground $WindowSummary.Foreground -WindowClass $WindowSummary.WindowClass -NativeTitle $WindowSummary.NativeTitle -UiaProvider 'unknown' -UiaDescendants 'unknown' -Win32Children $WindowSummary.Children -Win32Buttons $WindowSummary.Buttons -Win32Static $WindowSummary.Static -Session $WindowSummary.Session -Desktop $WindowSummary.Desktop -Visible $WindowSummary.Visible -ProcessId $ProcessId
+}
+
 function Write-WizardEvent {
   param(
     [Parameter(Mandatory=$true)]
@@ -1136,6 +1145,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
         default { 'destination-set-unknown' }
       }
       Write-WizardEvent -Name $setFailureEvent -ProcessId $script:installerProcessId
+      Write-WizardStateSnapshot -Snapshot $snapshot -WindowSummary $nativeWindow -ProcessId $script:installerProcessId
       Write-WizardEvent -Name 'destination-unavailable' -ProcessId $script:installerProcessId
       exit 2
     }
