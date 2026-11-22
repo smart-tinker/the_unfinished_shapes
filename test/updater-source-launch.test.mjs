@@ -80,11 +80,14 @@ test('pending ZIP extraction exposes per-entry read, decode and write state with
     sinkClosed: false,
     sinkBytesWritten: 1_073_741_824,
     sinkWritableLength: 1_073_741_824,
+    writeCallbackState: 'unknown',
+    writeCallbackAgeMs: null,
   });
 
   const sourceText = await readFile(new URL('../src/update-package.mjs', import.meta.url), 'utf8');
   const smoke = await readFile(new URL('../scripts/updater-release-smoke.mjs', import.meta.url), 'utf8');
-  assert.ok(sourceText.includes('safeZipExtractionStreamSnapshot(stream, writeStream, count, entry, compressedReadStream)'));
+  assert.ok(sourceText.includes("const writeCallbackSnapshot = extraction.trackDiagnostics && platform === 'win32' && !isAppAsar"));
+  assert.ok(sourceText.includes('stream, writeStream, count, entry, compressedReadStream, writeCallbackSnapshot?.(),'));
   assert.ok(sourceText.includes("typeof zip.reader?.createReadStream !== 'function'"));
   assert.ok(smoke.includes('streamIntervalMs'));
   assert.ok(smoke.includes('previousStreamSnapshot: previousStreamSnapshot.snapshot'));
