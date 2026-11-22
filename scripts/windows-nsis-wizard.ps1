@@ -2,7 +2,8 @@ param(
   [Parameter(Mandatory=$true)][string]$InstallerPath,
   [Parameter(Mandatory=$true)][string]$ExpectedInstallDir,
   [ValidateRange(30,180)][int]$TimeoutSeconds = 180,
-  [switch]$CleanupOnly
+  [switch]$CleanupOnly,
+  [switch]$NativeEditInteropCheck
 )
 $ErrorActionPreference = 'Stop'
 $script:installerProcessId = 0
@@ -14,6 +15,9 @@ using System.Text;
 using System.Runtime.InteropServices;
 public static class TUSWindowApi {
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr GetModuleHandle(string moduleName);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern IntPtr CreateWindowEx(uint exStyle, string className, string windowName, uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+  [DllImport("user32.dll", SetLastError = true)] public static extern bool DestroyWindow(IntPtr handle);
   [DllImport("user32.dll", SetLastError = true)] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
   [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint command);
   [DllImport("user32.dll", SetLastError = true)] public static extern int GetWindowLong(IntPtr hWnd, int index);
@@ -828,6 +832,44 @@ trap {
   Write-WizardEvent -Name 'automation-failed' -ProcessId $script:installerProcessId
   exit 2
 }
+if ($NativeEditInteropCheck) {
+  $interopStatus = 'failed'
+  $parent = [IntPtr]::Zero
+  $edit = [IntPtr]::Zero
+  try {
+    $instance = [TUSWindowApi]::GetModuleHandle($null)
+    $parent = [TUSWindowApi]::CreateWindowEx(0, 'STATIC', '', 0, 0, 0, 1, 1, [IntPtr]::Zero, [IntPtr]::Zero, $instance, [IntPtr]::Zero)
+    if ($parent -eq [IntPtr]::Zero) { throw 'window-create-failed' }
+    $edit = [TUSWindowApi]::CreateWindowEx(0, 'EDIT', '', [uint32]0x40000000, 0, 0, 1, 1, $parent, [IntPtr]::Zero, $instance, [IntPtr]::Zero)
+    if ($edit -eq [IntPtr]::Zero) { throw 'edit-create-failed' }
+
+    $expected = 'C:\TUS\NativeEditInterop\TheUnfinishedShapes'
+    $expectedPointer = [Runtime.InteropServices.Marshal]::StringToHGlobalUni($expected)
+    $sent = [IntPtr]::Zero
+    $setResult = [IntPtr]::Zero
+    try {
+      $sent = [TUSWindowApi]::SendMessageTimeout($edit, 0x000C, [IntPtr]::Zero, $expectedPointer, 0x0002, 500, [ref]$setResult)
+    } finally {
+      [Runtime.InteropServices.Marshal]::FreeHGlobal($expectedPointer)
+    }
+    $actual = Get-NativeDirectoryEditText -Control $edit
+    if ($sent -ne [IntPtr]::Zero -and $setResult.ToInt64() -ne 0 -and
+        $null -ne $actual -and [System.IO.Path]::IsPathRooted($actual) -and
+        [String]::Equals($actual, $expected, [StringComparison]::Ordinal)) {
+      $interopStatus = 'passed'
+    }
+  } catch {
+    $interopStatus = 'failed'
+  } finally {
+    if ($edit -ne [IntPtr]::Zero) { $null = [TUSWindowApi]::DestroyWindow($edit) }
+    if ($parent -ne [IntPtr]::Zero) { $null = [TUSWindowApi]::DestroyWindow($parent) }
+  }
+  [Console]::Out.WriteLine("TUS_NSIS_WIZARD event=native-edit-interop-$interopStatus")
+  [Console]::Out.Flush()
+  if ($interopStatus -ne 'passed') { exit 2 }
+  exit 0
+}
+
 try {
   Add-Type -AssemblyName UIAutomationClient
   Add-Type -AssemblyName UIAutomationTypes

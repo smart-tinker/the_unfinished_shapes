@@ -892,3 +892,21 @@ test('NSIS readback classifies unrooted text before normalization without exposi
   const validateSet = script.slice(writerStart, writerEnd).split('[ValidateSet(')[1]?.split(')]')[0] ?? '';
   for (const line of safe) assert.ok(validateSet.includes("'" + line.match(/event=([a-z-]+)/)[1] + "'"));
 });
+
+
+test('Windows NSIS native Edit helper round-trips rooted text through its production Win32 messages', { skip: process.platform !== 'win32' }, async () => {
+  let result;
+  try {
+    result = await execFileAsync('powershell.exe', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-Sta', '-ExecutionPolicy', 'Bypass',
+      '-File', 'scripts/windows-nsis-wizard.ps1',
+      '-InstallerPath', process.execPath,
+      '-ExpectedInstallDir', 'C:\\TUS\\NativeEditInterop\\TheUnfinishedShapes',
+      '-NativeEditInteropCheck',
+    ], { timeout: 10000, maxBuffer: 65536, windowsHide: true });
+  } catch {
+    assert.fail('native Edit text round-trip failed');
+  }
+
+  assert.equal(result.stdout.trim(), 'TUS_NSIS_WIZARD event=native-edit-interop-passed');
+});
