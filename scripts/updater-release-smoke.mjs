@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import { compareReleaseVersions } from '../src/update-release.mjs';
-import { safeVerifierCode, safeVerifierErrorType, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, verifyReleaseAttestation } from '../src/update-package.mjs';
 import { closeSmokeApp, observeGraphics, waitForExit, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
