@@ -11,6 +11,24 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory, windowsRelaunchRequestStatus } from '../scripts/windows-updater-scenarios.mjs';
 
+test('installer scenario failure awaits bounded Setup cleanup before returning', async () => {
+  const events = [];
+  const installerFailure = new Error('installer scenario failed');
+  const outcomes = await runWindowsUpdaterScenarios({
+    portable: async () => { events.push('portable'); return 'portable result'; },
+    installer: async () => { events.push('installer'); throw installerFailure; },
+    cleanupInstaller: async failure => {
+      events.push('cleanup');
+      assert.equal(failure, installerFailure, 'cleanup receives the original installer failure');
+    },
+  });
+
+  assert.deepEqual(events, ['portable', 'installer', 'cleanup']);
+  assert.equal(outcomes.portable.status, 'fulfilled', 'portable result remains independent');
+  assert.equal(outcomes.installer.status, 'rejected');
+  assert.equal(outcomes.installer.error, installerFailure, 'successful cleanup preserves the original installer error');
+});
+
 test('Windows installer acceptance still runs when portable acceptance fails', async () => {
   const calls = [];
   const portableFailure = new Error('portable acceptance failed');
