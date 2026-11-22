@@ -169,10 +169,13 @@ app.whenReady().then(async()=>{
       if (updaterSmokeBoundary) updaterSmokeBoundary.downloadVerifiedAsset = 'pending';
       const digestMismatchControl = diagnosticEnabled ? updaterSmokeBoundary?.digestMismatchControl : null;
       if (digestMismatchControl) {
-        digestMismatchControl.selectedAssetMatches =
-          availableUpdate.release?.tag_name === digestMismatchControl.expectedTag &&
-          availableUpdate.asset?.name === digestMismatchControl.expectedAssetName &&
-          availableUpdate.asset?.digest === 'sha256:' + digestMismatchControl.expectedSha256;
+        digestMismatchControl.selectedTagMatches = availableUpdate.release?.tag_name === digestMismatchControl.expectedTag;
+        digestMismatchControl.selectedNameMatches = availableUpdate.asset?.name === digestMismatchControl.expectedAssetName;
+        digestMismatchControl.selectedDigestMatches = availableUpdate.asset?.digest === 'sha256:' + digestMismatchControl.expectedSha256;
+        digestMismatchControl.selectedSizeMatches = availableUpdate.asset?.size === digestMismatchControl.expectedSize;
+        digestMismatchControl.selectedAssetMatches = digestMismatchControl.selectedTagMatches &&
+          digestMismatchControl.selectedNameMatches && digestMismatchControl.selectedDigestMatches &&
+          digestMismatchControl.selectedSizeMatches;
       }
       const result = await downloadVerifiedAsset({
         ...availableUpdate,

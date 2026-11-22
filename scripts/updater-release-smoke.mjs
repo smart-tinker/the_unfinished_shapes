@@ -607,8 +607,9 @@ async function assertDigestMismatchRejected(current, {
     const originalFetch = globalThis.fetch;
     const assetUrls = new Set([assetUrl]);
     const control = {
-      expectedTag: tag, expectedAssetName: assetName, expectedSha256,
-      selectedAssetMatches: null, fetcherCalls: 0,
+      expectedTag: tag, expectedAssetName: assetName, expectedSha256, expectedSize,
+      selectedAssetMatches: null, selectedTagMatches: null, selectedNameMatches: null,
+      selectedDigestMatches: null, selectedSizeMatches: null, fetcherCalls: 0,
       assetRequests: 0, bodyResponses: 0, bytesFlipped: 0, bytesRead: 0,
       responseComplete: false, attestationRequests: 0,
     };
@@ -690,6 +691,10 @@ async function assertDigestMismatchRejected(current, {
         return value ? {
           assetMatched: value.assetRequests > 0 && value.bodyResponses === 1,
           assetSelectionMatches: value.selectedAssetMatches === true,
+          selectedTagMatches: value.selectedTagMatches === true,
+          selectedNameMatches: value.selectedNameMatches === true,
+          selectedDigestMatches: value.selectedDigestMatches === true,
+          selectedSizeMatches: value.selectedSizeMatches === true,
           fetcherCalled: value.fetcherCalls > 0,
           bytesFlipped: value.bytesFlipped,
           bytesRead: value.bytesRead,
@@ -723,6 +728,10 @@ async function assertDigestMismatchRejected(current, {
     const actual = {
       assetMatched: control?.assetMatched === true,
       assetSelectionMatches: control?.assetSelectionMatches === true,
+      selectedTagMatches: control?.selectedTagMatches === true,
+      selectedNameMatches: control?.selectedNameMatches === true,
+      selectedDigestMatches: control?.selectedDigestMatches === true,
+      selectedSizeMatches: control?.selectedSizeMatches === true,
       fetcherCalled: control?.fetcherCalled === true,
       bytesFlipped: control?.bytesFlipped ?? 0,
       bytesRead: control?.bytesRead ?? 0,
@@ -750,6 +759,10 @@ async function assertDigestMismatchRejected(current, {
     assert.deepEqual(actual, {
       assetMatched: true,
       assetSelectionMatches: true,
+      selectedTagMatches: true,
+      selectedNameMatches: true,
+      selectedDigestMatches: true,
+      selectedSizeMatches: true,
       fetcherCalled: true,
       bytesFlipped: 1,
       bytesRead: expectedSize,
