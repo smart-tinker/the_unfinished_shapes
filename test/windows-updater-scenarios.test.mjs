@@ -769,6 +769,33 @@ test('NSIS UIA fallback outcomes use safe, producer-mapped enums', async () => {
 });
 
 
+test('NSIS UIA ValuePattern failures stay distinct, mapped, and private', async () => {
+  const statuses = ['pattern-unavailable', 'value-state-unavailable'];
+  const safe = statuses.map(status => 'TUS_NSIS_WIZARD event=destination-uia-' + status + ' pid=4321');
+  const output = [...safe, ...safe.map(line => line + ' value=C:/private/path'), 'raw UIA error /private/user'].join(String.fromCharCode(10));
+  assert.deepEqual(safeNsisWizardEvents(output), safe);
+  assert.equal(JSON.stringify(safeNsisWizardEvents(output)).includes('C:/private'), false);
+
+  const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const start = script.indexOf('function Set-NativeDirectoryEditWithUIA {');
+  const end = script.indexOf(String.fromCharCode(10) + 'function Set-NativeDirectoryEdit {', start);
+  const fallback = script.slice(start, end);
+  assert.ok(fallback.includes("catch { return 'pattern-unavailable' }"));
+  assert.ok(fallback.includes("catch { return 'value-state-unavailable' }"));
+
+  const callStart = script.indexOf('$uiaFallbackEvent = switch ($nativeEdit.UiaFallbackStatus)');
+  const callEnd = script.indexOf('if ($uiaFallbackEvent)', callStart);
+  const mapping = script.slice(callStart, callEnd);
+  const writerStart = script.indexOf('function Write-WizardEvent {');
+  const writerEnd = script.indexOf(String.fromCharCode(10) + 'trap {', writerStart);
+  const validateSet = script.slice(writerStart, writerEnd).split('[ValidateSet(')[1]?.split(')]')[0] ?? '';
+  for (const status of statuses) {
+    const event = 'destination-uia-' + status;
+    assert.ok(mapping.includes("'" + status + "' { '" + event + "' }"), status + ' maps to its fixed event');
+    assert.ok(validateSet.includes("'" + event + "'"), event + ' is accepted by the writer');
+  }
+});
+
 test('Windows relaunch failure cleanup stops only the exact verified Setup path', { skip: process.platform !== 'win32' }, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'tus-setup-cleanup-'));
   const exactPath = path.join(root, 'TheUnfinishedShapes-0.1.0-rc.11-Setup-x64.exe');
