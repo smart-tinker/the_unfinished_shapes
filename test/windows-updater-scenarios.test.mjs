@@ -1009,3 +1009,71 @@ test('NSIS readback classifies unrooted text before normalization without exposi
 
 
 
+
+test('NSIS mode path events keep only bounded UIA, native, and unknown markers', () => {
+  const safeLines = [
+    'TUS_NSIS_WIZARD event=install-mode-path-uia pid=4321',
+    'TUS_NSIS_WIZARD event=install-mode-path-native pid=4321',
+    'TUS_NSIS_WIZARD event=install-mode-path-unknown pid=4321',
+  ];
+  const output = [
+    ...safeLines,
+    ...safeLines.map((line) => line + ' caption=C:/private/account'),
+    'raw NSIS caption C:/private/account',
+  ].join(String.fromCharCode(10));
+
+  assert.deepEqual(safeNsisWizardEvents(output), safeLines);
+  assert.equal(JSON.stringify(safeNsisWizardEvents(output)).includes('C:/private'), false);
+});
+
+test('NSIS InstallFiles and Finish pages require pinned native signatures', async () => {
+  const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const scenarioSource = await readFile(new URL('../scripts/windows-updater-scenarios.mjs', import.meta.url), 'utf8');
+  const pageReader = script.slice(script.indexOf('function Get-NsisPageSummary'), script.indexOf('function Get-Win32WindowSummary'));
+  const uiaLoop = script.slice(script.indexOf('$finish = @('), script.indexOf('$titleStatus ='));
+
+  assert.ok(pageReader.includes("Get-NativeControlStatus -Window $pageHandle -ControlId 1006 -ExpectedClass 'Static'"));
+  assert.ok(pageReader.includes("Get-NativeControlStatus -Window $pageHandle -ControlId 1004 -ExpectedClass 'msctls_progress32'"));
+  assert.ok(pageReader.includes("$result.NativePage = 'install-files'"));
+  assert.ok(pageReader.includes("$result.NativePage = 'finish'"));
+  assert.ok(pageReader.includes('$pageControlsCount -eq 3') && pageReader.includes('$pageStaticCount -eq 3'),
+    'the pinned no-reboot Finish page has only its bitmap, title, and text statics');
+  assert.ok(pageReader.includes('$pageButtonsCount -eq 0') && pageReader.includes('$pageEditsCount -eq 0') &&
+    pageReader.includes('$pageProgressCount -eq 0') && pageReader.includes('$pageOtherCount -eq 0'),
+    'Finish does not accept a generic child page layout');
+  assert.ok(uiaLoop.includes("$nativeWindow.NativePage -eq 'install-files'"),
+    'UIA progress alone does not identify the pinned InstallFiles page');
+  assert.ok(uiaLoop.includes("$nativeWindow.NativePage -eq 'finish'"),
+    'a generic Finish-named control alone does not identify the pinned Finish page');
+  assert.ok(uiaLoop.includes('$finishButtonHandle -eq $finishNext.Handle'),
+    'the Finish action maps to NSIS main-button ID 1 on the matched Setup window');
+  assert.ok(scenarioSource.includes('native-page=(directory|install-files|finish|other|unknown)'),
+    'the sanitizer accepts the fixed Finish enum');
+});
+
+test('NSIS install mode identifies AllUsers and checks radio visibility before native Next', async () => {
+  const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
+  const modeStart = script.indexOf("if ($nativeWindow.OptionPage -eq 'install-options') {");
+  const modeEnd = script.indexOf("if ($modeStatus -eq 'unknown')", modeStart);
+  const nativeMode = script.slice(modeStart, modeEnd);
+
+  assert.ok(script.includes('Anyone who uses this computer (&all users)'),
+    'AllUsers is matched to the pinned English preset, not any nonempty caption');
+  assert.ok(script.includes('Anyone who uses this computer (&all users) (must run as admin)'),
+    'the pinned disabled preset remains identifiable');
+  assert.equal(script.includes('$otherRadio.Caption.Length -gt 0'), false);
+  assert.ok(script.includes('[TUSWindowApi]::IsWindowVisible($Handle)'),
+    'the bounded native radio reader rejects hidden controls');
+  assert.ok(script.includes('CurrentUserEnabled') && script.includes('AllUsersVisible'),
+    'native mode requires a visible pair and an enabled CurrentUser radio');
+  for (const source of ['install-mode-path-uia', 'install-mode-path-native', 'install-mode-path-unknown']) {
+    assert.ok(script.includes("Write-WizardEvent -Name '" + source + "'"), source + ' is emitted by the producer');
+  }
+  assert.ok(nativeMode.includes("$nativeWindow.AllUsersPreset -ne 'match'"));
+  assert.ok(nativeMode.includes("$nativeWindow.AllUsersSelected -ne 'unselected'"));
+  assert.ok(nativeMode.includes("$nativeWindow.CurrentUserPreset -ne 'match'"));
+  assert.ok(nativeMode.includes("$nativeWindow.CurrentUserSelected -ne 'selected'"));
+  assert.ok(nativeMode.indexOf("$nativeWindow.AllUsersPreset -ne 'match'") < nativeMode.indexOf('SendMessageTimeout($nextControl.Handle, 0x00F5'),
+    'unknown or noncanonical mode evidence cannot advance native Next');
+  assert.ok(script.includes("'install-mode-path-unknown'"), 'unrecognized path has a bounded safe category');
+});
