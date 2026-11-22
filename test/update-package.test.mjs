@@ -946,7 +946,7 @@ test('smoke-only ENOSPC after one completed target write cleans extraction and p
     const childSource = [
       "process.argv.push('--tus-smoke-provenance-diagnostic');",
       "const control = { state: 'armed', firstChunkWritten: false };",
-      "globalThis.__tusUpdaterSmokeBoundary = { writeFailureControl: control };",
+      "globalThis.__tusUpdaterSmokeBoundary = { downloadVerifiedAsset: 'fulfilled', writeFailureControl: control };",
       "const [moduleUrl, requestJSON] = process.argv.slice(1);",
       "const request = JSON.parse(requestJSON);",
       "const target = path.join(request.directory, 'TheUnfinishedShapes-0.1.0-rc.11');",
