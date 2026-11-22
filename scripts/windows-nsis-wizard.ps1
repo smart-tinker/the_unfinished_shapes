@@ -400,6 +400,54 @@ function Get-MuiNextControl {
   } catch {}
   return [pscustomobject]$result
 }
+function Get-NativeFinishControl {
+  param([int]$ProcessId, [IntPtr]$MainWindowHandle, [IntPtr]$PageHandle)
+  $result = [ordered]@{ Handle = [IntPtr]::Zero; Status = 'unknown' }
+  if (-not $script:nativeWindowApiAvailable -or $MainWindowHandle -eq [IntPtr]::Zero -or
+      $PageHandle -eq [IntPtr]::Zero) { return [pscustomobject]$result }
+  try {
+    $mainProcessId = [uint32]0
+    $mainThreadId = [TUSWindowApi]::GetWindowThreadProcessId($MainWindowHandle, [ref]$mainProcessId)
+    $pageProcessId = [uint32]0
+    $pageThreadId = [TUSWindowApi]::GetWindowThreadProcessId($PageHandle, [ref]$pageProcessId)
+    $pageClass = [System.Text.StringBuilder]::new(128)
+    if ($mainThreadId -eq 0 -or $mainProcessId -ne $ProcessId -or
+        $pageThreadId -eq 0 -or $pageProcessId -ne $ProcessId -or
+        [TUSWindowApi]::GetParent($PageHandle) -ne $MainWindowHandle) {
+      $result.Status = 'owner-mismatch'
+      return [pscustomobject]$result
+    }
+    if (-not [TUSWindowApi]::IsWindowVisible($PageHandle)) {
+      $result.Status = 'hidden'
+      return [pscustomobject]$result
+    }
+    if ([TUSWindowApi]::GetClassName($PageHandle, $pageClass, $pageClass.Capacity) -le 0 -or
+        $pageClass.ToString() -ne '#32770') {
+      $result.Status = 'wrong-class'
+      return [pscustomobject]$result
+    }
+    $next = Get-MuiNextControl -ProcessId $ProcessId -MainWindowHandle $MainWindowHandle
+    $result.Handle = $next.Handle
+    if ($next.Status -ne 'match') {
+      $result.Status = $next.Status
+      return [pscustomobject]$result
+    }
+    $captionLength = [TUSWindowApi]::GetWindowTextLength($next.Handle)
+    if ($captionLength -le 0 -or $captionLength -gt 32) { return [pscustomobject]$result }
+    $caption = [System.Text.StringBuilder]::new(33)
+    if ([TUSWindowApi]::GetWindowText($next.Handle, $caption, $caption.Capacity) -ne $captionLength) {
+      return [pscustomobject]$result
+    }
+    if (-not [String]::Equals($caption.ToString(), '&Finish', [StringComparison]::Ordinal) -and
+        -not [String]::Equals($caption.ToString(), 'Finish', [StringComparison]::Ordinal)) {
+      $result.Status = 'wrong-label'
+      return [pscustomobject]$result
+    }
+    $result.Status = 'match'
+  } catch {}
+  return [pscustomobject]$result
+}
+
 function Get-NsisPageSummary {
   param([int]$ProcessId, [IntPtr]$MainWindowHandle)
   $result = [ordered]@{
@@ -1018,6 +1066,10 @@ while ([DateTime]::UtcNow -lt $deadline) {
   $finishPageMatch = $finish.Count -eq 1 -and $nativeWindow.NativePage -eq 'finish' -and
     $finishNext.Status -eq 'match' -and $finishButtonHandle -ne [IntPtr]::Zero -and
     $finishButtonHandle -eq $finishNext.Handle
+  $nativeFinishControl = [pscustomobject]@{ Handle = [IntPtr]::Zero; Status = 'unknown' }
+  if ($finish.Count -eq 0 -and $nativeWindow.NativePage -eq 'finish') {
+    $nativeFinishControl = Get-NativeFinishControl -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle -PageHandle $nativeWindow.PageHandle
+  }
   $nextControl = [pscustomobject]@{ Handle = [IntPtr]::Zero; Status = 'unknown' }
   $nextStatus = 'missing'
   if ($next.Count -eq 1) {
@@ -1029,7 +1081,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
   }
   $installStatus = 'missing'
   if ($install.Count -eq 1 -and (Get-MuiNextControl -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle).Status -eq 'match') { $installStatus = 'match' }
-  $finishStatus = if ($finishPageMatch) { 'match' } else { 'missing' }
+  $finishStatus = if ($finishPageMatch -or $nativeFinishControl.Status -eq 'match') { 'match' } else { 'missing' }
   $titleStatus = 'unknown'
   try {
     if ([String]::Equals([string]$window.Current.Name, 'The Unfinished Shapes', [StringComparison]::OrdinalIgnoreCase)) { $titleStatus = 'product-match' }
@@ -1302,7 +1354,8 @@ while ([DateTime]::UtcNow -lt $deadline) {
   }
 
   if ($stage -eq 'installing') {
-    if ($finish.Count -eq 1 -and $uiaPageStatus -eq 'finish' -and
+    if ($destinationVerified -and $destinationStatus -eq 'match' -and
+        $finish.Count -eq 1 -and $uiaPageStatus -eq 'finish' -and
         $nativeWindow.NativePage -eq 'finish' -and $finishButtonHandle -ne [IntPtr]::Zero -and
         $finishButtonHandle -eq $finishNext.Handle -and $finishNext.Status -eq 'match') {
       $finish[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
@@ -1310,6 +1363,24 @@ while ([DateTime]::UtcNow -lt $deadline) {
       $stage = 'finish'
       Start-Sleep -Milliseconds 100
       continue
+    }
+    if ($destinationVerified -and $destinationStatus -eq 'match' -and $finish.Count -eq 0 -and
+        $nativeWindow.NativePage -eq 'finish' -and
+        $nativeWindow.PageWindow -eq 'present' -and $nativeWindow.PageParent -eq 'match' -and
+        $nativeWindow.PageProcess -eq 'match' -and $nativeWindow.PageVisible -eq 'visible' -and
+        $nativeWindow.PageClass -eq 'native-dialog' -and $nativeWindow.NativeTitle -eq 'other' -and
+        $nativeFinishControl.Status -eq 'match') {
+      $verifiedNativeFinish = Get-NativeFinishControl -ProcessId $script:installerProcessId -MainWindowHandle $script:mainWindowHandle -PageHandle $nativeWindow.PageHandle
+      if ($verifiedNativeFinish.Status -eq 'match' -and $verifiedNativeFinish.Handle -eq $nativeFinishControl.Handle) {
+        $clickResult = [IntPtr]::Zero
+        $sent = [TUSWindowApi]::SendMessageTimeout($verifiedNativeFinish.Handle, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero, 0x0002, 500, [ref]$clickResult)
+        if ($sent -ne [IntPtr]::Zero) {
+          Write-WizardEvent -Name 'finish-clicked' -ProcessId $script:installerProcessId
+          $stage = 'finish'
+          Start-Sleep -Milliseconds 100
+          continue
+        }
+      }
     }
   }
   Start-Sleep -Milliseconds 100
