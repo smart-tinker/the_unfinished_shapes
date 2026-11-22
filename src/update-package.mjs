@@ -18,6 +18,7 @@ const maxAssetBytes = 500_000_000;
 const maxJsonBytes = 2_000_000;
 const maxExtractedBytes = 1_073_741_824;
 const maxArchiveEntries = 20_000;
+const zipReadChunkBytes = 256 * 1024;
 
 const zipWriteBatchBytes = 256 * 1024;
 
@@ -602,8 +603,9 @@ function platformArchive(platform, assetName, tag) {
   return value;
 }
 
-async function openZipReadStream(zip, entry, trackCompressedRead) {
-  if (!trackCompressedRead || typeof zip.reader?.createReadStream !== 'function') {
+async function openZipReadStream(zip, entry, trackCompressedRead, readHighWaterMark) {
+  const configureReadHighWaterMark = Number.isSafeInteger(readHighWaterMark) && readHighWaterMark > 0;
+  if ((!trackCompressedRead && !configureReadHighWaterMark) || typeof zip.reader?.createReadStream !== 'function') {
     return { stream: await zip.openReadStreamPromise(entry), compressedReadStream: null };
   }
   const reader = zip.reader;
@@ -611,8 +613,12 @@ async function openZipReadStream(zip, entry, trackCompressedRead) {
   const createReadStream = reader.createReadStream;
   let compressedReadStream = null;
   reader.createReadStream = function (options) {
-    const stream = createReadStream.call(this, options);
-    if (options?.end - options?.start === entry.compressedSize &&
+    const isEntryRange = options?.end - options?.start === entry.compressedSize;
+    const readOptions = configureReadHighWaterMark && isEntryRange
+      ? { ...options, highWaterMark: readHighWaterMark }
+      : options;
+    const stream = createReadStream.call(this, readOptions);
+    if (trackCompressedRead && isEntryRange &&
         Number.isSafeInteger(stream?.start) && Number.isSafeInteger(stream?.pos) && stream.pos >= stream.start) {
       compressedReadStream = stream;
     }
@@ -694,7 +700,9 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
     extraction.value = 'write';
     extraction.substage = 'read-stream-open';
     extraction.appAsarEntry = isAppAsar;
-    const { stream, compressedReadStream } = await openZipReadStream(zip, entry, extraction.trackDiagnostics);
+    const { stream, compressedReadStream } = await openZipReadStream(
+      zip, entry, extraction.trackDiagnostics, platform === 'win32' ? zipReadChunkBytes : null,
+    );
     extraction.substage = 'none';
     extraction.appAsarEntry = false;
     const fileMode = ((entry.externalFileAttributes >>> 16) & 0o777) || 0o600;
