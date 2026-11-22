@@ -1113,33 +1113,27 @@ test('NSIS install mode identifies AllUsers and checks radio visibility before n
   assert.ok(script.includes("'install-mode-path-unknown'"), 'unrecognized path has a bounded safe category');
 });
 
-test('NSIS directory setter accepts only a verified already-selected rooted destination without rewriting it', async () => {
+test('NSIS directory setter checks exact native readback after WM_SETTEXT rejection before UIA fallback', async () => {
   const script = await readFile(new URL('../scripts/windows-nsis-wizard.ps1', import.meta.url), 'utf8');
   const setterStart = script.indexOf('function Set-NativeDirectoryEdit {');
   const setterEnd = script.indexOf(String.fromCharCode(10) + 'function Get-NativeRadioSelection', setterStart);
   assert.ok(setterStart >= 0 && setterEnd > setterStart);
   const setter = script.slice(setterStart, setterEnd);
 
-  const beforeReadAt = setter.indexOf('$beforeValue = Get-NativeDirectoryEditText -Control $control');
-  const exactMatchAt = setter.indexOf("$alreadyMatchesExpected = $beforeReadClass -eq 'read'");
   const writeAt = setter.indexOf('SendMessageTimeout($control, 0x000C');
-  assert.ok(beforeReadAt >= 0 && exactMatchAt > beforeReadAt && writeAt > exactMatchAt,
-    'an exact rooted pre-read is compared before the native WM_SETTEXT attempt');
-  assert.ok(setter.includes('if (-not $alreadyMatchesExpected)'),
-    'the script avoids mutating an already correct destination');
+  const rejectionAt = setter.indexOf('if ($setSent -eq [IntPtr]::Zero -or $setResult.ToInt64() -eq 0)', writeAt);
+  const failedWriteReadbackAt = setter.indexOf('$afterSetValue = Get-NativeDirectoryEditText -Control $control', rejectionAt);
+  const uiFallbackAt = setter.indexOf('Set-NativeDirectoryEditWithUIA', rejectionAt);
+  assert.ok(writeAt >= 0 && rejectionAt > writeAt && failedWriteReadbackAt > rejectionAt && uiFallbackAt > failedWriteReadbackAt,
+    'a rejected native set is read back before using UIA or failing the directory step');
+  assert.ok(setter.includes('$afterSetValueIsRooted') && setter.includes('$normalizedAfterSetValue'),
+    'the fallback accepts only a rooted path normalized against the exact expected destination');
   assert.ok(setter.includes("$result.SetMethod = 'readback'"),
-    'the unchanged exact path is accepted as a readback, not as a successful write');
+    'an exact native readback is distinguished from a successful WM_SETTEXT result');
+  assert.equal(setter.includes('$alreadyMatchesExpected'), false,
+    'the preselected path still receives the native set notification that refreshes the NSIS page');
 
-  const postSetAt = setter.indexOf('$postSetProcessId', writeAt);
-  const readbackAt = setter.indexOf('$value = Get-NativeDirectoryEditText -Control $control', postSetAt);
-  assert.ok(postSetAt > writeAt && readbackAt > postSetAt,
-    'both paths still pass native control provenance and a final destination readback');
-
-  const directoryStart = script.indexOf("if ($stage -eq 'directory') {");
-  const installStart = script.indexOf("if ($stage -eq 'installing') {", directoryStart);
-  const directory = script.slice(directoryStart, installStart);
-  const requireReadbackAt = directory.indexOf("$nativeEdit.Readback -ne 'match'");
-  const nextClickAt = directory.indexOf('SendMessageTimeout($nextControl.Handle, 0x00F5');
-  assert.ok(requireReadbackAt >= 0 && nextClickAt > requireReadbackAt,
-    'the wizard cannot advance unless the final readback still matches the expected destination');
+  const finalReadbackAt = setter.indexOf('$value = Get-NativeDirectoryEditText -Control $control', failedWriteReadbackAt);
+  assert.ok(finalReadbackAt > failedWriteReadbackAt,
+    'the normal final native readback remains after control provenance checks');
 });
