@@ -601,7 +601,7 @@ async function assertDigestMismatchRejected(current, {
   };
   const beforeFixture = await fixtureFingerprint();
   const beforeVersion = await current.instance.evaluate(({ app }) => app.getVersion());
-  const controlInstalled = await current.instance.evaluate(({ assetUrl, attestationUrl, tag, assetName, expectedSha256 }) => {
+  const controlInstalled = await current.instance.evaluate(({ assetUrl, attestationUrl, tag, assetName, expectedSha256, expectedSize }) => {
     const boundary = globalThis.__tusUpdaterSmokeBoundary;
     if (!boundary || typeof globalThis.fetch !== 'function') return false;
     const originalFetch = globalThis.fetch;
@@ -653,7 +653,7 @@ async function assertDigestMismatchRejected(current, {
       });
     };
     return typeof boundary.digestMismatchFetcher === 'function';
-  }, { assetUrl, attestationUrl, tag, assetName, expectedSha256 });
+  }, { assetUrl, attestationUrl, tag, assetName, expectedSha256, expectedSize });
   assert.equal(controlInstalled, true, 'the packaged main-process asset control is installed');
 
   let fetchRestored = false;
