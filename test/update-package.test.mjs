@@ -8,6 +8,7 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } fro
 import os from 'node:os';
 import path from 'node:path';
 import { create as createTar } from 'tar';
+import yauzl from 'yauzl';
 import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeUpdaterFailureCode, safeVerifierErrorType, safeVerifierSetupStage, safeZipExtractionStreamSnapshot, verifyReleaseAttestation } from '../src/update-package.mjs';
 
 const tag = 'v0.1.0-rc11';
@@ -866,4 +867,41 @@ test('ZIP stream snapshots identify the current archive entry without its name',
   });
   assert.equal(unsafe.entrySequence, null);
   assert.doesNotMatch(JSON.stringify([snapshot, unsafe]), /private-entry-name|C:\/private\/path/);
+});
+
+test('Windows ZIP extraction uses bounded larger compressed reads', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-win-read-'));
+  const archive = path.join(parent, 'windows.zip');
+  const entryName = 'TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe';
+  const payload = Buffer.from('Windows executable fixture');
+  const originalOpenPromise = yauzl.openPromise;
+  let compressedReadHighWaterMark = null;
+  try {
+    await writeFile(archive, zipFixture(entryName, payload));
+    const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+    yauzl.openPromise = async (...args) => {
+      const zip = await originalOpenPromise(...args);
+      const reader = zip.reader;
+      const createReadStream = reader.createReadStream;
+      reader.createReadStream = function (options) {
+        const stream = createReadStream.call(this, options);
+        compressedReadHighWaterMark = stream.readableHighWaterMark;
+        return stream;
+      };
+      return zip;
+    };
+    const result = await extractVerifiedArchive({
+      filePath: archive,
+      directory: parent,
+      tag,
+      assetName: 'TheUnfinishedShapes-0.1.0-rc.11-win32-x64.zip',
+      sha256,
+      platform: 'win32',
+    });
+    assert.deepEqual(await readFile(result.executablePath), payload);
+    assert.equal(compressedReadHighWaterMark, 256 * 1024);
+  } finally {
+    yauzl.openPromise = originalOpenPromise;
+    await rm(parent, { recursive: true, force: true });
+  }
 });
