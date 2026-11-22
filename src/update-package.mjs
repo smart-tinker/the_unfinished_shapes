@@ -188,6 +188,7 @@ const updaterFailureCodes = new Set([
   'MISSING_PROVENANCE', 'NO_MATCHING_PROVENANCE', 'INVALID_ATTESTATION',
   'INVALID_ATTESTATION_PAYLOAD', 'SIGNATURE_REJECTED', 'ATTESTATION_MISMATCH',
   'DOWNLOAD_FETCH_ERROR', 'DOWNLOAD_HTTP_ERROR', 'UPDATE_NOT_AVAILABLE', 'DOWNLOAD_ALREADY_RUNNING',
+  'DIGEST_MISMATCH',
 ]);
 
 export function safeUpdaterFailureCode(code) {
@@ -535,7 +536,8 @@ export async function downloadVerifiedAsset({
           }
         };
         await pipeline(source(), createWriteStream(partPath, { flags: 'wx', mode: 0o600 }), { signal: requestSignal });
-        if (received !== asset.size || hash.digest('hex') !== digest) throw new Error('Release asset SHA-256 integrity check failed.');
+        if (received !== asset.size) throw new Error('Release asset size does not match GitHub metadata.');
+        if (hash.digest('hex') !== digest) throw updaterFailure('Release asset SHA-256 integrity check failed.', 'DIGEST_MISMATCH');
         await verifyDownloadedFile({ filePath: partPath, sha256: digest });
         await rename(partPath, finalPath);
         partPath = null;

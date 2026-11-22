@@ -213,11 +213,14 @@ test('rejects an untrusted redirect and removes partial update files', async () 
 
 test('rejects a byte digest mismatch before asking GitHub for provenance', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'tus-update-digest-'));
+  const progress = [];
   let attestationRequested = false;
   try {
+    let caught;
     await assert.rejects(downloadVerifiedAsset({
       asset: { ...asset, size: 4 },
       tag, directory: dir,
+      onProgress: event => progress.push(event),
       fetcher: async url => {
         if (url.startsWith('https://api.github.com/')) {
           attestationRequested = true;
@@ -226,7 +229,17 @@ test('rejects a byte digest mismatch before asking GitHub for provenance', async
         return new Response(Buffer.from('evil'), { status: 200 });
       },
       verifySignature: async () => ({}),
-    }), /digest|integrity/i);
+    }), error => {
+      caught = error;
+      assert.match(error.message, /digest|integrity/i);
+      assert.equal(error.failureCode, 'DIGEST_MISMATCH');
+      return true;
+    });
+    assert.equal(safeUpdaterFailureCode(caught.failureCode), 'DIGEST_MISMATCH');
+    assert.deepEqual(progress.at(-1), {
+      state: 'failed', phase: 'download', failureCode: 'DIGEST_MISMATCH',
+      verifierCode: 'OTHER', verifierErrorType: 'OTHER', httpStatus: null,
+    });
     assert.equal(attestationRequested, false);
     assert.deepEqual(await readdir(dir), []);
   } finally {
