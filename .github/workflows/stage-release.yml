@@ -100,7 +100,7 @@ jobs:
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
         run: node scripts/release-candidate.mjs stage windows dist/candidate $env:RELEASE_ID
       - name: Attest the tested candidate files
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/candidate/*
   macos:
@@ -148,7 +148,7 @@ jobs:
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
         run: node scripts/release-candidate.mjs stage macos dist/candidate "$RELEASE_ID"
       - name: Attest the tested candidate files
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/candidate/*
   linux:
@@ -192,6 +192,6 @@ jobs:
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
         run: node scripts/release-candidate.mjs stage linux dist/candidate "$RELEASE_ID"
       - name: Attest the tested candidate files
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/candidate/*
