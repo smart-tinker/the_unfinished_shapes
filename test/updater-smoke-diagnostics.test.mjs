@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Writable } from 'node:stream';
+import * as updatePackage from '../src/update-package.mjs';
 import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from '../scripts/updater-smoke-diagnostics.mjs';
 
 test('TUS main diagnostic preserves only safe verifier setup stages at the log boundary', () => {
@@ -326,4 +328,105 @@ test('TUS ZIP stream sampler takes one late sample before the unchanged extracti
   assert.deepEqual(updaterZipStreamSampleOffsetsMs, [
     15_000, 35_000, 55_000, 75_000, 95_000, 110_000,
   ]);
+});
+
+
+test('TUS Windows ZIP sink totals completed write callback time at the safe log boundary', async () => {
+  const trackWriteCallback = updatePackage.trackZipWriteCallback;
+  assert.equal(typeof trackWriteCallback, 'function', 'the packaged extraction sink exposes callback timing');
+
+  const manifestFile = { sha256: 'a'.repeat(64) };
+  const exercise = async expectedState => {
+    let finishWrite;
+    let remainingWrites = expectedState === 'write' ? 1 : 2;
+    let resolveWrites;
+    let rejectWrites;
+    const writesDone = new Promise((resolve, reject) => {
+      resolveWrites = resolve;
+      rejectWrites = reject;
+    });
+    const onWritten = error => {
+      if (error) {
+        rejectWrites(error);
+        return;
+      }
+      remainingWrites--;
+      if (remainingWrites === 0) resolveWrites();
+    };
+    const options = {
+      write(_chunk, _encoding, callback) {
+        if (expectedState === 'write') finishWrite = callback;
+        else callback();
+      },
+    };
+    if (expectedState === 'writev') options.writev = (_chunks, callback) => { finishWrite = callback; };
+    const sink = new Writable(options);
+    const readWriteCallback = trackWriteCallback(sink);
+    if (expectedState === 'write') sink.write(Buffer.from('payload'), onWritten);
+    else {
+      sink.cork();
+      sink.write(Buffer.from('first'), onWritten);
+      sink.write(Buffer.from('second'), onWritten);
+      sink.uncork();
+    }
+
+    await new Promise(resolve => setImmediate(resolve));
+    const pending = readWriteCallback();
+    assert.equal(pending.state, expectedState);
+    assert.equal(pending.writeCallCount, expectedState === 'write' ? 1 : 0);
+    assert.equal(pending.writevCallCount, expectedState === 'writev' ? 1 : 0);
+    assert.equal(pending.writeCallbackCount, 0);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(typeof finishWrite, 'function');
+    finishWrite();
+    await writesDone;
+
+    const completed = readWriteCallback();
+    assert.equal(completed.state, 'idle');
+    assert.equal(completed.writeCallbackCount, 1);
+    assert.ok(completed.writeCallbackWaitMs >= 10);
+    const raw = updatePackage.safeZipExtractionStreamSnapshot(
+      { readableEnded: false, actualByteCount: 7 },
+      { writableFinished: false, closed: false, bytesWritten: 7, writableLength: 0 },
+      12,
+      { compressionMethod: 8, compressedSize: 3, uncompressedSize: 7 },
+      null,
+      completed,
+    );
+    const [first] = safeMainDiagnostics([{
+      stage: 'extract-archive',
+      status: 'starting',
+      extractStreamSnapshot: { ...raw, privatePath: 'C:/private/path', privateError: 'raw error' },
+    }], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+    assert.equal(first.streamSnapshot.writeCallbackState, 'idle');
+    assert.equal(first.streamSnapshot.writeCallbackWaitMs, completed.writeCallbackWaitMs);
+    assert.equal(first.streamSnapshot.writeCallbackWaitMsDelta, null);
+    assert.equal(first.streamSnapshot.writeCallbackCount, 1);
+    assert.equal(first.streamSnapshot.writeCallCount, expectedState === 'write' ? 1 : 0);
+    assert.equal(first.streamSnapshot.writevCallCount, expectedState === 'writev' ? 1 : 0);
+
+    const [second] = safeMainDiagnostics([{
+      stage: 'extract-archive',
+      status: 'starting',
+      previousStreamSnapshot: first.streamSnapshot,
+      streamIntervalMs: 1000,
+      extractStreamSnapshot: {
+        ...raw,
+        writeCallbackCount: 2,
+        writeCallCount: completed.writeCallCount + (expectedState === 'write' ? 1 : 0),
+        writevCallCount: completed.writevCallCount + (expectedState === 'writev' ? 1 : 0),
+        writeCallbackWaitMs: completed.writeCallbackWaitMs + 7,
+        privatePath: 'C:/private/path',
+        privateError: 'raw error',
+      },
+    }], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+    assert.equal(second.streamSnapshot.writeCallbackWaitMsDelta, 7);
+    assert.equal(second.streamSnapshot.writeCallbackCountDelta, 1);
+    assert.equal(JSON.stringify([first, second]).includes('C:/private/path'), false);
+    assert.equal(JSON.stringify([first, second]).includes('raw error'), false);
+    await new Promise(resolve => sink.end(resolve));
+  };
+
+  await exercise('write');
+  await exercise('writev');
 });
