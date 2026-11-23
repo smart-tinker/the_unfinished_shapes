@@ -70,7 +70,7 @@ test('reports only allowlisted names for missing updater modules', async()=>{
   classify(Object.assign(new Error("Cannot find package 'private-module' imported from C:\\private\\app.asar"),{code:'ERR_MODULE_NOT_FOUND'})),
   classify(Object.assign(new Error("Cannot find package 'sigstore' imported from C:\\private\\app.asar"),{code:'ERR_RUNTIME'})),
  ];
- assert.deepEqual(names,['@sigstore/tuf','update-release.mjs','unknown','unknown']);
+ assert.deepEqual(names,['@sigstore/tuf','unknown','unknown','unknown']);
  assert.doesNotMatch(JSON.stringify(names),/private|app\\.asar/);
 });
 
@@ -80,6 +80,7 @@ test('does not infer a missing module from a nested importer URL', async () => {
   code:'ERR_MODULE_NOT_FOUND',
   url:'file:///C:/private/app.asar/node_modules/minipass-pipeline/node_modules/minipass/index.js',
  });
- assert.equal(safeUpdaterModuleFailureName?.(error),'unknown');
- assert.equal(JSON.stringify(error.url).includes('private'),true);
+ const moduleName=safeUpdaterModuleFailureName?.(error);
+ assert.equal(moduleName,'unknown');
+ assert.equal(JSON.stringify(moduleName).includes('private'),false);
 });

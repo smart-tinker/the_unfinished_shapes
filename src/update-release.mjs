@@ -42,16 +42,7 @@ export function safeUpdaterModuleFailureName(error) {
   const specifier = typeof error.message === 'string'
     ? error.message.match(/^Cannot find (?:package|module) '([^']+)' imported from /)?.[1]
     : null;
-  if (specifier) {
-    const name = safeUpdaterModuleName(specifier);
-    if (name !== 'unknown') return name;
-  }
-  if (typeof error.url !== 'string') return 'unknown';
-  try {
-    const pathname = decodeURIComponent(new URL(error.url).pathname);
-    const name = pathname.match(/(?:^|\/)node_modules\/(@[^/]+\/[^/]+|[^/]+)/)?.[1] ?? pathname.split('/').at(-1);
-    return safeUpdaterModuleName(name);
-  } catch { return 'unknown'; }
+  return safeUpdaterModuleName(specifier);
 }
 
 export function parseReleaseTag(value) {
