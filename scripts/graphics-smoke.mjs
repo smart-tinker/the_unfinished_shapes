@@ -28,7 +28,7 @@ export async function withSmokeCleanup(work, ...cleanup) {
 }
 
 
-const appCloseTimeoutMs = 10000;
+const smokeCleanupStepTimeoutMs = 10000;
 const appProcessTimeoutMs = 5000;
 
 function smokeCleanupMarker(stage, outcome) {
@@ -46,7 +46,7 @@ async function closePackagedApp(app) {
   try {
     outcome = await Promise.race([
       closing,
-      new Promise(resolve => { timer = setTimeout(() => resolve({ status: 'timeout' }), appCloseTimeoutMs); }),
+      new Promise(resolve => { timer = setTimeout(() => resolve({ status: 'timeout' }), smokeCleanupStepTimeoutMs); }),
     ]);
   } finally {
     clearTimeout(timer);
@@ -83,8 +83,30 @@ export async function closeSmokeApp(app, graphics, phase = 'normal close') {
     graphics?.phase(phase);
     const startedAt = Date.now();
     if (windows) console.log('TUS_WINDOWS_CLOSE: graphics-health-started');
-    try { await graphics?.assertHealthy(); }
-    finally { if (windows) console.log('TUS_UIA_TIMING: graphics-health-ms=' + (Date.now() - startedAt)); }
+    try {
+      if (graphics?.assertHealthy) {
+        smokeCleanupMarker('graphics-health', 'started');
+        let timer;
+        const check = Promise.resolve().then(() => graphics.assertHealthy()).then(
+          () => ({ status: 'completed' }),
+          error => ({ status: 'failed', error }),
+        );
+        let outcome;
+        try {
+          outcome = await Promise.race([
+            check,
+            new Promise(resolve => { timer = setTimeout(() => resolve({ status: 'timeout' }), smokeCleanupStepTimeoutMs); }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+        smokeCleanupMarker('graphics-health', outcome.status);
+        if (outcome.status === 'timeout') {
+          throw Object.assign(new Error('Graphics health check timed out during smoke cleanup.'), { code: 'ETIMEDOUT' });
+        }
+        if (outcome.status === 'failed') throw outcome.error;
+      }
+    } finally { if (windows) console.log('TUS_UIA_TIMING: graphics-health-ms=' + (Date.now() - startedAt)); }
   }, async () => {
     const startedAt = Date.now();
     if (windows) console.log('TUS_WINDOWS_CLOSE: app-close-started');
