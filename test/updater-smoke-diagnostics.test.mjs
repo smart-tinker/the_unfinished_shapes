@@ -595,3 +595,16 @@ test('TUS launch boundary preserves only allowlisted renderer and main phases', 
   assert.equal(JSON.stringify([rehash, dialog, response, unsafe]).includes('raw exception'), false);
   assert.equal(JSON.stringify([rehash, dialog, response, unsafe]).includes('private caption'), false);
 });
+
+test('TUS launch substage keeps only fixed module and rehash states', () => {
+  const diagnostics = safeMainDiagnostics([
+    { stage: 'update-launch', status: 'starting', launchSubstage: 'module-import' },
+    { stage: 'update-launch', status: 'starting', launchSubstage: 'file-rehash' },
+    { stage: 'update-launch', status: 'starting', launchSubstage: 'C:/private/path' },
+  ], { sha256: 'a'.repeat(64) }, 'candidate.exe', 'v0.1.0-rc11');
+
+  assert.deepEqual(diagnostics.map(item => item.launchSubstage), [
+    'module-import', 'file-rehash', 'unknown',
+  ]);
+  assert.equal(JSON.stringify(diagnostics).includes('C:/private/path'), false);
+});
