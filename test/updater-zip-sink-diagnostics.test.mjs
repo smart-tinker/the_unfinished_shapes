@@ -3,10 +3,10 @@ import { test } from 'node:test';
 import * as diagnostics from '../scripts/updater-smoke-diagnostics.mjs';
 import { Readable, Writable } from 'node:stream';
 
-test('ZIP sink comparison reports the pinned entry and sanitized paired results', () => {
-  assert.equal(typeof diagnostics.safeZipSinkComparison, 'function');
+test('ZIP batcher comparison reports the pinned entry and sanitized paired modes', () => {
+  assert.equal(typeof diagnostics.safeZipBatcherComparison, 'function');
 
-  const comparison = diagnostics.safeZipSinkComparison({
+  const comparison = diagnostics.safeZipBatcherComparison({
     assetMatches: true,
     entrySequence: 12,
     compression: 'deflate',
@@ -16,48 +16,50 @@ test('ZIP sink comparison reports the pinned entry and sanitized paired results'
     entryMatches: true,
     assetPath: 'C:/private/archive.zip',
     arms: [
-      { trial: 1, sink: 'count-discard', outcome: 'completed', wallMs: 12_000, cpuUserMs: 8_100, cpuSystemMs: 1_200, compressedBytesRead: 111_522_616, decodedBytes: 249_832_448, sinkBytesWritten: 249_832_448, sourceReadableEnded: true, sinkWritableFinished: true, sinkClosed: true, entryName: 'private-entry', error: 'private error' },
-      { trial: 1, sink: 'file-sink', outcome: 'time-limit', wallMs: 15_000, cpuUserMs: 4_300, cpuSystemMs: 700, compressedBytesRead: 38_000_000, decodedBytes: 80_000_000, sinkBytesWritten: 80_000_000, sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false },
-      { trial: 2, sink: 'file-sink', outcome: 'time-limit', wallMs: 15_000, cpuUserMs: 4_100, cpuSystemMs: 800, compressedBytesRead: 50_000_000, decodedBytes: 100_000_000, sinkBytesWritten: 99_800_000, sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false },
-      { trial: 2, sink: 'count-discard', outcome: 'time-limit', wallMs: 15_000, cpuUserMs: 4_000, cpuSystemMs: 800, compressedBytesRead: 44_000_000, decodedBytes: 90_000_000, sinkBytesWritten: 90_000_000, sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false },
+      { trial: 1, batcher: 'production-batcher', outcome: 'completed', wallMs: 12_000, cpuUserMs: 8_100, cpuSystemMs: 1_200, compressedBytesRead: 111_522_616, decodedBytes: 249_832_448, sinkBytesWritten: 249_832_448, sourceReadableEnded: true, sinkWritableFinished: true, sinkClosed: true, entryName: 'private-entry', error: 'private error' },
+      { trial: 1, batcher: 'direct-stream', outcome: 'time-limit', wallMs: 15_000, cpuUserMs: 4_300, cpuSystemMs: 700, compressedBytesRead: 38_000_000, decodedBytes: 80_000_000, sinkBytesWritten: 80_000_000, sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false },
+      { trial: 2, batcher: 'direct-stream', outcome: 'time-limit', wallMs: 15_000, cpuUserMs: 4_100, cpuSystemMs: 800, compressedBytesRead: 50_000_000, decodedBytes: 100_000_000, sinkBytesWritten: 99_800_000, sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false },
+      { trial: 2, batcher: 'production-batcher', outcome: 'time-limit', wallMs: 15_000, cpuUserMs: 4_000, cpuSystemMs: 800, compressedBytesRead: 44_000_000, decodedBytes: 90_000_000, sinkBytesWritten: 90_000_000, sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false },
     ],
   });
 
   assert.equal(comparison.assetMatches, true);
   assert.equal(comparison.entryMatches, true);
   assert.equal(comparison.entrySequence, 12);
-  assert.deepEqual(comparison.armOrder, ['count-discard', 'file-sink', 'file-sink', 'count-discard']);
-  assert.deepEqual(comparison.arms.map(({ trial, sink }) => ({ trial, sink })), [
-    { trial: 1, sink: 'count-discard' },
-    { trial: 1, sink: 'file-sink' },
-    { trial: 2, sink: 'file-sink' },
-    { trial: 2, sink: 'count-discard' },
+  assert.equal(comparison.sink, 'count-discard');
+  assert.deepEqual(comparison.batcherOrder, ['production-batcher', 'direct-stream', 'direct-stream', 'production-batcher']);
+  assert.deepEqual(comparison.arms.map(({ trial, batcher }) => ({ trial, batcher })), [
+    { trial: 1, batcher: 'production-batcher' },
+    { trial: 1, batcher: 'direct-stream' },
+    { trial: 2, batcher: 'direct-stream' },
+    { trial: 2, batcher: 'production-batcher' },
   ]);
   assert.equal(comparison.arms[0].countersMatch, true);
   assert.equal(comparison.arms[2].countersMatch, false);
-  assert.equal(comparison.cacheCaveat, 'sink-order-counterbalanced; filesystem-read-cache-not-reset');
+  assert.equal(comparison.cacheCaveat, 'batcher-order-counterbalanced; filesystem-read-cache-not-reset');
   assert.equal(comparison.measurementScope, 'pipeline-only');
-  assert.doesNotMatch(JSON.stringify(comparison), /C:\/private|private-entry|private error/);
+  for (const unsafe of ['C:/private', 'private-entry', 'private error']) {
+    assert.equal(JSON.stringify(comparison).includes(unsafe), false);
+  }
 
-  const bounded = diagnostics.safeZipSinkComparison({
+  const bounded = diagnostics.safeZipBatcherComparison({
     assetMatches: 'true',
     entrySequence: Number.MAX_SAFE_INTEGER,
     compression: 'private',
     entryCompressedSize: Number.MAX_SAFE_INTEGER,
     entryUncompressedSize: -1,
-    arms: [{ trial: 99, sink: 'C:/private/path', outcome: 'private', wallMs: -1, decodedBytes: 'private' }],
+    arms: [{ trial: 99, batcher: 'C:/private/path', outcome: 'private', wallMs: -1, decodedBytes: 'private' }],
   });
   assert.equal(bounded.assetMatches, false);
   assert.equal(bounded.entrySequence, null);
   assert.equal(bounded.compression, 'unknown');
   assert.equal(bounded.entryCompressedSize, null);
   assert.equal(bounded.arms[0].trial, null);
-  assert.equal(bounded.arms[0].sink, 'unknown');
+  assert.equal(bounded.arms[0].batcher, 'unknown');
   assert.equal(bounded.arms[0].outcome, 'unknown');
   assert.equal(bounded.arms[0].wallMs, null);
-  assert.doesNotMatch(JSON.stringify(bounded), /C:\/private/);
+  assert.equal(JSON.stringify(bounded).includes('C:/private'), false);
 });
-
 
 test('ZIP pipeline diagnostic selects the production batcher or direct stream without changing bytes', async () => {
   assert.equal(typeof diagnostics.runZipSinkPipeline, 'function');

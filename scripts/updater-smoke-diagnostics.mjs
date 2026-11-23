@@ -1,7 +1,3 @@
-import { createWriteStream } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import yauzl from 'yauzl';
@@ -97,35 +93,35 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
 const zipSinkEntrySequence = 12;
 const zipSinkEntryCompressedSize = 111_522_616;
 const zipSinkEntryUncompressedSize = 249_832_448;
-const zipSinkArmTimeoutMs = 15_000;
-const zipSinkWriteHighWaterMarkBytes = 16 * 1024;
-const zipSinkArmPlan = Object.freeze([
-  { trial: 1, sink: 'count-discard' },
-  { trial: 1, sink: 'file-sink' },
-  { trial: 2, sink: 'file-sink' },
-  { trial: 2, sink: 'count-discard' },
+const zipBatcherArmTimeoutMs = 15_000;
+const zipBatcherWriteHighWaterMarkBytes = 16 * 1024;
+const zipBatcherArmPlan = Object.freeze([
+  { trial: 1, batcher: 'production-batcher' },
+  { trial: 1, batcher: 'direct-stream' },
+  { trial: 2, batcher: 'direct-stream' },
+  { trial: 2, batcher: 'production-batcher' },
 ]);
-const safeZipSinkNames = new Set(['count-discard', 'file-sink']);
-const safeZipSinkOutcomes = new Set(['completed', 'time-limit', 'failed', 'unknown']);
+const safeZipBatcherModes = new Set(['production-batcher', 'direct-stream']);
+const safeZipBatcherOutcomes = new Set(['completed', 'time-limit', 'failed', 'unknown']);
 
 function safeZipSinkMetric(value, limit) {
   return Number.isSafeInteger(value) && value >= 0 && value <= limit ? value : null;
 }
 
-export function safeZipSinkComparison(value) {
+export function safeZipBatcherComparison(value) {
   const entrySequence = Number.isSafeInteger(value?.entrySequence) && value.entrySequence >= 1 && value.entrySequence <= 20_000
     ? value.entrySequence : null;
   const compression = ['stored', 'deflate'].includes(value?.compression) ? value.compression : 'unknown';
   const entryCompressedSize = safeZipSinkMetric(value?.entryCompressedSize, 500_000_000);
   const entryUncompressedSize = safeZipSinkMetric(value?.entryUncompressedSize, 1_073_741_824);
   const entryNonAsar = value?.entryNonAsar === true;
-  const arms = (Array.isArray(value?.arms) ? value.arms : []).slice(0, zipSinkArmPlan.length).map(arm => {
+  const arms = (Array.isArray(value?.arms) ? value.arms : []).slice(0, zipBatcherArmPlan.length).map(arm => {
     const decodedBytes = safeZipSinkMetric(arm?.decodedBytes, 1_073_741_824);
     const sinkBytesWritten = safeZipSinkMetric(arm?.sinkBytesWritten, 1_073_741_824);
     return {
       trial: [1, 2].includes(arm?.trial) ? arm.trial : null,
-      sink: safeZipSinkNames.has(arm?.sink) ? arm.sink : 'unknown',
-      outcome: safeZipSinkOutcomes.has(arm?.outcome) ? arm.outcome : 'unknown',
+      batcher: safeZipBatcherModes.has(arm?.batcher) ? arm.batcher : 'unknown',
+      outcome: safeZipBatcherOutcomes.has(arm?.outcome) ? arm.outcome : 'unknown',
       wallMs: safeZipSinkMetric(arm?.wallMs, 60_000),
       cpuUserMs: safeZipSinkMetric(arm?.cpuUserMs, 120_000),
       cpuSystemMs: safeZipSinkMetric(arm?.cpuSystemMs, 120_000),
@@ -148,8 +144,9 @@ export function safeZipSinkComparison(value) {
     entryMatches: value?.entryMatches === true && entrySequence === zipSinkEntrySequence &&
       compression === 'deflate' && entryCompressedSize === zipSinkEntryCompressedSize &&
       entryUncompressedSize === zipSinkEntryUncompressedSize && entryNonAsar,
-    armOrder: arms.map(arm => arm.sink),
-    cacheCaveat: 'sink-order-counterbalanced; filesystem-read-cache-not-reset',
+    sink: 'count-discard',
+    batcherOrder: arms.map(arm => arm.batcher),
+    cacheCaveat: 'batcher-order-counterbalanced; filesystem-read-cache-not-reset',
     measurementScope: 'pipeline-only',
     arms,
   };
@@ -189,7 +186,15 @@ function zipStreamPositionBytes(stream) {
     ? stream.pos - stream.start : null;
 }
 
-async function measureZipSinkArm(archivePath, sinkName) {
+export function runZipSinkPipeline(source, sink, batcherMode, signal) {
+  if (!safeZipBatcherModes.has(batcherMode)) throw new Error('Invalid ZIP batcher mode.');
+  const streams = batcherMode === 'production-batcher'
+    ? [source, createZipWriteBatcher(), sink]
+    : [source, sink];
+  return pipeline(...streams, { signal });
+}
+
+async function measureZipBatcherArm(archivePath, batcherMode) {
   let entryInfo = {
     entrySequence: null, compression: 'unknown',
     entryCompressedSize: null, entryUncompressedSize: null,
@@ -200,7 +205,7 @@ async function measureZipSinkArm(archivePath, sinkName) {
     compressedBytesRead: null, decodedBytes: null, sinkBytesWritten: null,
     sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
   };
-  let zip, selected, source, compressedReadStream, sink, tempDir, timer, timedOut = false;
+  let zip, selected, source, compressedReadStream, sink, timer, timedOut = false;
   try {
     zip = await yauzl.openPromise(archivePath, { strictFileNames: true, validateEntrySizes: true });
     selected = await readZipEntryAt(zip, zipSinkEntrySequence);
@@ -225,31 +230,24 @@ async function measureZipSinkArm(archivePath, sinkName) {
       entry.uncompressedSize === zipSinkEntryUncompressedSize && entryNonAsar;
     if (!entryInfo.entryMatches) return { entryInfo, arm };
 
-    if (sinkName === 'file-sink') tempDir = await mkdtemp(path.join(os.tmpdir(), 'tus-zip-sink-'));
     const opened = await openZipReadStream(zip, entry, true, zipReadChunkBytes);
     source = opened.stream;
     compressedReadStream = opened.compressedReadStream;
-    if (sinkName === 'file-sink') {
-      sink = createWriteStream(path.join(tempDir, 'entry.bin'), {
-        flags: 'wx', mode: 0o600, highWaterMark: zipSinkWriteHighWaterMarkBytes,
-      });
-    } else {
-      sink = new Writable({
-        highWaterMark: zipSinkWriteHighWaterMarkBytes,
-        write(chunk, _encoding, callback) {
-          this.bytesWritten += chunk.length;
-          callback();
-        },
-      });
-      sink.bytesWritten = 0;
-    }
+    sink = new Writable({
+      highWaterMark: zipBatcherWriteHighWaterMarkBytes,
+      write(chunk, _encoding, callback) {
+        this.bytesWritten += chunk.length;
+        callback();
+      },
+    });
+    sink.bytesWritten = 0;
 
     const controller = new AbortController();
     const cpuStart = process.cpuUsage();
     const startedAt = performance.now();
-    timer = setTimeout(() => { timedOut = true; controller.abort(); }, zipSinkArmTimeoutMs);
+    timer = setTimeout(() => { timedOut = true; controller.abort(); }, zipBatcherArmTimeoutMs);
     try {
-      await pipeline(source, createZipWriteBatcher(), sink, { signal: controller.signal });
+      await runZipSinkPipeline(source, sink, batcherMode, controller.signal);
       arm.outcome = 'completed';
     } catch {
       arm.outcome = timedOut ? 'time-limit' : 'failed';
@@ -275,24 +273,21 @@ async function measureZipSinkArm(archivePath, sinkName) {
     selected?.cleanup();
     source?.destroy();
     compressedReadStream?.destroy();
+    sink?.destroy();
     try { zip?.close(); } catch {}
-    if (tempDir) {
-      try { await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
-      catch { arm.outcome = 'failed'; }
-    }
   }
   return { entryInfo, arm };
 }
 
-export async function compareVerifiedWindowsZipEntrySinks(archivePath, assetMatches) {
+export async function compareVerifiedWindowsZipBatcher(archivePath, assetMatches) {
   if (assetMatches !== true || typeof archivePath !== 'string') {
-    return safeZipSinkComparison({ assetMatches: false });
+    return safeZipBatcherComparison({ assetMatches: false });
   }
   const arms = [];
   let entryInfo = null;
   let allEntriesMatch = true;
-  for (const { trial, sink } of zipSinkArmPlan) {
-    const measured = await measureZipSinkArm(archivePath, sink);
+  for (const { trial, batcher } of zipBatcherArmPlan) {
+    const measured = await measureZipBatcherArm(archivePath, batcher);
     if (entryInfo === null) {
       entryInfo = measured.entryInfo;
       allEntriesMatch = entryInfo.entryMatches;
@@ -304,13 +299,13 @@ export async function compareVerifiedWindowsZipEntrySinks(archivePath, assetMatc
         measured.entryInfo.entryNonAsar === entryInfo.entryNonAsar;
       allEntriesMatch = allEntriesMatch && measured.entryInfo.entryMatches && sameEntry;
     }
-    arms.push({ trial, sink, ...measured.arm });
+    arms.push({ trial, batcher, ...measured.arm });
     if (!allEntriesMatch) break;
   }
-  return safeZipSinkComparison({
+  return safeZipBatcherComparison({
     assetMatches: true,
     ...(entryInfo ?? {}),
-    entryMatches: allEntriesMatch && arms.length === zipSinkArmPlan.length,
+    entryMatches: allEntriesMatch && arms.length === zipBatcherArmPlan.length,
     arms,
   });
 }

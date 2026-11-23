@@ -22,7 +22,7 @@ const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagn
   : null;
 if (updaterSmokeBoundary) {
   globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
-  globalThis.__tusUpdaterSmokeZipSinkCompare = async expected => {
+  globalThis.__tusUpdaterSmokeZipBatcherCompare = async expected => {
     const update = downloadedUpdate;
     const assetMatches = process.platform === 'win32' &&
       updaterSmokeBoundary.downloadVerifiedAsset === 'fulfilled' &&
@@ -35,8 +35,8 @@ if (updaterSmokeBoundary) {
       update?.asset?.size === expected.size &&
       update?.asset?.digest === 'sha256:' + expected.sha256 &&
       update?.sha256 === expected.sha256;
-    const { compareVerifiedWindowsZipEntrySinks } = await import('../scripts/updater-smoke-diagnostics.mjs');
-    return compareVerifiedWindowsZipEntrySinks(assetMatches ? update.filePath : null, assetMatches);
+    const { compareVerifiedWindowsZipBatcher } = await import('../scripts/updater-smoke-diagnostics.mjs');
+    return compareVerifiedWindowsZipBatcher(assetMatches ? update.filePath : null, assetMatches);
   };
 }
 if (!app.requestSingleInstanceLock()) app.quit();
