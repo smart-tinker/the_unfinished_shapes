@@ -191,7 +191,15 @@ async function focusByKeyboard(page, selector) {
 async function observeUpdaterKeyboardActions(page) {
   await page.evaluate(() => {
     window.__tusUpdaterKeyboardActions = [];
+    window.__tusUpdateDialogWaiting = false;
+    window.__tusUpdateDialogKey = null;
     document.addEventListener('keydown', event => {
+      if (window.__tusUpdateDialogWaiting && ['Escape', 'Enter'].includes(event.key)) {
+        window.__tusUpdateDialogWaiting = false;
+        window.__tusUpdateDialogKey = event.key;
+        event.preventDefault();
+        return;
+      }
       const id = event.target instanceof HTMLElement ? event.target.id : '';
       if (event.key === 'Enter' && ['updates-check', 'updates-download', 'updates-cancel', 'updates-launch'].includes(id) &&
           window.__tusUpdaterKeyboardActions.length < 40) {
@@ -211,11 +219,29 @@ async function activateUpdaterButtonByKeyboard(page, id) {
   assert.equal(await lastUpdaterKeyboardAction(page), id, id + ' is activated by keyboard');
 }
 
-async function respondToUpdateLaunch(page, dialogMarker, key) {
+async function respondToUpdateLaunch(current, dialogMarker, key) {
   await rm(dialogMarker, { force: true });
-  await activateUpdaterButtonByKeyboard(page, 'updates-launch');
+  await activateUpdaterButtonByKeyboard(current.page, 'updates-launch');
   assert.equal(await waitForFile(dialogMarker, 5000), true, 'the launch approval prompt was invoked');
-  await page.keyboard.press(key);
+  await current.page.evaluate(() => {
+    window.__tusUpdateDialogKey = null;
+    window.__tusUpdateDialogWaiting = true;
+  });
+  await current.page.keyboard.press(key);
+  const selectedKey = await current.page.evaluate(() => {
+    const value = window.__tusUpdateDialogKey;
+    window.__tusUpdateDialogKey = null;
+    return value;
+  });
+  assert.equal(selectedKey, key, 'the launch prompt choice comes from keyboard input');
+  const resolved = await current.instance.evaluate((_electron, response) => {
+    const resolve = globalThis.__tusUpdateDialogResolve;
+    if (typeof resolve !== 'function') return false;
+    delete globalThis.__tusUpdateDialogResolve;
+    resolve({ response });
+    return true;
+  }, key === 'Enter' ? 1 : 0);
+  assert.equal(resolved, true, 'the keyboard choice resolves the packaged dialog request');
 }
 
 async function assertInstalledSourceIdentity(current, profile) {
@@ -471,7 +497,7 @@ function expectedAssetName(version, distribution) {
 }
 
 async function configureUpdateDialogs(instance, { downloadsDir, extractDir, dialogMarker, extractMarker, relaunchMarker, executeRelaunch = false }) {
-  await instance.evaluate(({ app, dialog, BrowserWindow }, config) => {
+  await instance.evaluate(({ app, dialog }, config) => {
     const { writeFileSync } = process.getBuiltinModule('node:fs');
     const productionRelaunch = app.relaunch;
     app.setPath('downloads', config.downloadsDir);
@@ -479,30 +505,15 @@ async function configureUpdateDialogs(instance, { downloadsDir, extractDir, dial
       writeFileSync(config.extractMarker, JSON.stringify({ invoked: true, selected: true }));
       return { canceled: false, filePaths: [config.extractDir] };
     };
-    dialog.showMessageBox = async (_window, options) => {
-      const webContents = BrowserWindow.getAllWindows()[0]?.webContents;
-      if (!webContents) throw new Error('Update approval window is unavailable.');
-      return new Promise((resolve, reject) => {
-        let response = null;
-        const onInput = (event, input) => {
-          if (input.type === 'keyDown' && ['Escape', 'Enter'].includes(input.key)) {
-            event.preventDefault();
-            response = input.key === 'Enter' ? 1 : 0;
-          } else if (input.type === 'keyUp' && response !== null) {
-            event.preventDefault();
-            webContents.removeListener('before-input-event', onInput);
-            resolve({ response });
-          }
-        };
-        webContents.on('before-input-event', onInput);
-        try {
-          writeFileSync(config.dialogMarker, JSON.stringify({ title: options.title, buttons: options.buttons }));
-        } catch (error) {
-          webContents.removeListener('before-input-event', onInput);
-          reject(error);
-        }
-      });
-    };
+    dialog.showMessageBox = async (_window, options) => new Promise((resolve, reject) => {
+      globalThis.__tusUpdateDialogResolve = resolve;
+      try {
+        writeFileSync(config.dialogMarker, JSON.stringify({ title: options.title, buttons: options.buttons }));
+      } catch (error) {
+        delete globalThis.__tusUpdateDialogResolve;
+        reject(error);
+      }
+    });
     app.relaunch = options => {
       writeFileSync(config.relaunchMarker, JSON.stringify(options));
       if (config.executeRelaunch) productionRelaunch.call(app, options);
@@ -1588,7 +1599,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   }
 
   setDiagnostic(distribution === 'installer' ? 'relaunch-cancel' : 'relaunch');
-  await respondToUpdateLaunch(current.page, dialogMarker, 'Escape');
+  await respondToUpdateLaunch(current, dialogMarker, 'Escape');
   await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Update launch cancelled.');
   const relaunchAfterCancel = await lstat(relaunchMarker).then(() => true, error => {
     if (error?.code === 'ENOENT') return false;
@@ -1606,7 +1617,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     try {
       await runWindowsRelaunch({
       child,
-      click: () => respondToUpdateLaunch(closing.page, dialogMarker, 'Enter').catch(error => {
+      click: () => respondToUpdateLaunch(closing, dialogMarker, 'Enter').catch(error => {
         if (child.exitCode === null) throw error;
       }),
       waitForExit,
@@ -1637,7 +1648,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     if (relaunchFailure) throw relaunchFailure;
   } else {
     const exit = waitForExit(closing.instance.process());
-    const approval = respondToUpdateLaunch(closing.page, dialogMarker, 'Enter').catch(error => {
+    const approval = respondToUpdateLaunch(closing, dialogMarker, 'Enter').catch(error => {
       if (closing.instance.process().exitCode === null) throw error;
     });
     setDiagnostic('relaunch');
