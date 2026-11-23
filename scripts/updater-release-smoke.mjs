@@ -54,6 +54,11 @@ function withTimeout(promise, label, timeoutMs = 30000) {
 }
 
 
+
+function updaterMarker(kind, stage, outcome) {
+  try { console.log('TUS_UPDATER_' + kind + ' stage=' + stage + ' outcome=' + outcome); } catch {}
+}
+
 async function waitForFile(filePath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -111,15 +116,34 @@ async function start(executablePath, label, dataDir, useBaseline = false, extraE
 }
 
 async function closeActive(label) {
-  if (!active) return;
+  if (!active) {
+    updaterMarker('CLEANUP', 'active-app', 'not-needed');
+    return;
+  }
   const current = active;
   active = null;
-  await withSmokeCleanup(
-    () => current.instance.process().exitCode === null
-      ? closeSmokeApp(current.instance, current.graphics, label)
-      : current.graphics?.assertNoErrors(),
-    () => current.gpu.finish(),
-  );
+  updaterMarker('CLEANUP', 'active-app', 'started');
+  try {
+    await withSmokeCleanup(
+      () => current.instance.process().exitCode === null
+        ? closeSmokeApp(current.instance, current.graphics, label)
+        : current.graphics?.assertNoErrors(),
+      async () => {
+        updaterMarker('CLEANUP', 'gpu-log', 'started');
+        try {
+          await withTimeout(current.gpu.finish(), 'Updater GPU log cleanup', 10000);
+          updaterMarker('CLEANUP', 'gpu-log', 'completed');
+        } catch (error) {
+          updaterMarker('CLEANUP', 'gpu-log', error?.code === 'ETIMEDOUT' ? 'timeout' : 'failed');
+          throw error;
+        }
+      },
+    );
+    updaterMarker('CLEANUP', 'active-app', 'completed');
+  } catch (error) {
+    updaterMarker('CLEANUP', 'active-app', 'failed');
+    throw error;
+  }
 }
 
 async function closeAfterQuit(current, wait) {
@@ -1543,34 +1567,50 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   return { workDir, downloadedPath, assetName, tag, manifest, targetExecutable };
 }
 
-try {
-  if (process.platform === 'win32') {
-    const outcomes = await runWindowsUpdaterScenarios({
-      portable: () => runIndependentWindowsScenario('portable'),
-      installer: () => runIndependentWindowsScenario('installer'),
-      cleanupInstaller: cleanupPendingWindowsInstaller,
-    });
-    for (const [scenario, outcome] of Object.entries(outcomes)) {
-      console.log('TUS_WINDOWS_UPDATER_RESULT ' + JSON.stringify({
-        scenario,
-        status: outcome.status === 'fulfilled' ? 'passed' : 'failed',
-        stage: outcome.diagnostic.stage,
-        category: outcome.diagnostic.category,
-      }));
-      if (outcome.status === 'rejected') console.error('Windows updater scenario failed: ' + scenario);
+const resultStage = process.platform === 'win32' ? 'windows-scenarios' : 'archive-update';
+await withSmokeCleanup(async () => {
+  try {
+    if (process.platform === 'win32') {
+      const outcomes = await runWindowsUpdaterScenarios({
+        portable: () => runIndependentWindowsScenario('portable'),
+        installer: () => runIndependentWindowsScenario('installer'),
+        cleanupInstaller: cleanupPendingWindowsInstaller,
+      });
+      for (const [scenario, outcome] of Object.entries(outcomes)) {
+        console.log('TUS_WINDOWS_UPDATER_RESULT ' + JSON.stringify({
+          scenario,
+          status: outcome.status === 'fulfilled' ? 'passed' : 'failed',
+          stage: outcome.diagnostic.stage,
+          category: outcome.diagnostic.category,
+        }));
+        if (outcome.status === 'rejected') console.error('Windows updater scenario failed: ' + scenario);
+      }
+      const failure = outcomes.portable.status === 'rejected' ? outcomes.portable.error
+        : outcomes.installer.status === 'rejected' ? outcomes.installer.error : null;
+      if (failure) throw new Error('A required Windows updater scenario failed.');
+      console.log('Windows updater acceptance passed for independent portable and installed-source NSIS outcomes from the same published release.');
+    } else {
+      await updateOnce('archive');
     }
-    const failure = outcomes.portable.status === 'rejected' ? outcomes.portable.error
-      : outcomes.installer.status === 'rejected' ? outcomes.installer.error : null;
-    if (failure) throw new Error('A required Windows updater scenario failed.');
-    console.log('Windows updater acceptance passed for independent portable and installed-source NSIS outcomes from the same published release.');
-  } else {
-    await updateOnce('archive');
+    updaterMarker('RESULT', resultStage, 'passed');
+  } catch (error) {
+    updaterMarker('RESULT', resultStage, 'failed');
+    throw error;
   }
-} finally {
-  await closeActive('updater test cleanup').catch(() => {});
-  if (await cleanupPendingWindowsInstaller()) {
-    for (const workDir of workDirs) await rm(workDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
-    await rm(testRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+}, async () => {
+  await closeActive('updater test cleanup');
+}, async () => {
+  let outcome = 'retained';
+  try {
+    if (await cleanupPendingWindowsInstaller()) {
+      for (const workDir of workDirs) await rm(workDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+      await rm(testRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+      outcome = 'removed';
+    }
+  } catch (error) {
+    outcome = 'failed';
+    throw error;
+  } finally {
+    updaterMarker('CLEANUP', 'temporary-data', outcome);
   }
-  // shortcut: retain the isolated tree only if bounded Setup cleanup fails; GitHub runner teardown clears it.
-}
+});

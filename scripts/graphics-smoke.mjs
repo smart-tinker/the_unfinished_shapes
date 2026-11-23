@@ -27,6 +27,55 @@ export async function withSmokeCleanup(work, ...cleanup) {
   return result;
 }
 
+
+const appCloseTimeoutMs = 10000;
+const appProcessTimeoutMs = 5000;
+
+function smokeCleanupMarker(stage, outcome) {
+  try { console.log('TUS_SMOKE_CLEANUP stage=' + stage + ' outcome=' + outcome); } catch {}
+}
+
+async function closePackagedApp(app) {
+  smokeCleanupMarker('app-close', 'started');
+  let timer;
+  const closing = Promise.resolve().then(() => app.close()).then(
+    () => ({ status: 'completed' }),
+    error => ({ status: 'rejected', error }),
+  );
+  let outcome;
+  try {
+    outcome = await Promise.race([
+      closing,
+      new Promise(resolve => { timer = setTimeout(() => resolve({ status: 'timeout' }), appCloseTimeoutMs); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  smokeCleanupMarker('app-close', outcome.status);
+  if (outcome.status === 'completed') return;
+
+  const closeError = outcome.status === 'timeout'
+    ? Object.assign(new Error('Packaged app close timed out.'), { code: 'ETIMEDOUT' })
+    : outcome.error;
+  let processOutcome = 'failed', reapError;
+  try {
+    const child = typeof app.process === 'function' ? app.process() : null;
+    if (!child) processOutcome = 'unavailable';
+    else if (child.exitCode !== null) processOutcome = 'already-exited';
+    else {
+      if (!child.kill('SIGKILL') && child.exitCode === null) throw new Error('Packaged app process could not be stopped.');
+      await waitForExit(child, appProcessTimeoutMs);
+      processOutcome = 'terminated';
+    }
+  } catch (error) {
+    reapError = error;
+    processOutcome = error?.code === 'ETIMEDOUT' ? 'timeout' : 'failed';
+  }
+  smokeCleanupMarker('app-process', processOutcome);
+  if (reapError) throw new AggregateError([closeError, reapError], 'Packaged app cleanup failed; close failure preserved', { cause: closeError });
+  throw closeError;
+}
+
 export async function closeSmokeApp(app, graphics, phase = 'normal close') {
   if (!app) return;
   const windows = process.platform === 'win32';
@@ -40,7 +89,7 @@ export async function closeSmokeApp(app, graphics, phase = 'normal close') {
     const startedAt = Date.now();
     if (windows) console.log('TUS_WINDOWS_CLOSE: app-close-started');
     let outcome = 'failed';
-    try { await app.close(); outcome = 'completed'; }
+    try { await closePackagedApp(app); outcome = 'completed'; }
     finally {
       if (windows) {
         console.log('TUS_UIA_TIMING: app-close-ms=' + (Date.now() - startedAt));
