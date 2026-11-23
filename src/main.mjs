@@ -20,7 +20,25 @@ let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, ext
 const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic')
   ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null }
   : null;
-if (updaterSmokeBoundary) globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
+if (updaterSmokeBoundary) {
+  globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
+  globalThis.__tusUpdaterSmokeZipSinkCompare = async expected => {
+    const update = downloadedUpdate;
+    const assetMatches = process.platform === 'win32' &&
+      updaterSmokeBoundary.downloadVerifiedAsset === 'fulfilled' &&
+      update?.distribution === 'portable' &&
+      expected?.tag === 'v0.1.0-rc11' &&
+      typeof expected?.sha256 === 'string' && /^[a-f0-9]{64}$/.test(expected.sha256) &&
+      Number.isSafeInteger(expected?.size) &&
+      update?.release?.tag_name === expected.tag &&
+      update?.assetName === expected.assetName &&
+      update?.asset?.size === expected.size &&
+      update?.asset?.digest === 'sha256:' + expected.sha256 &&
+      update?.sha256 === expected.sha256;
+    const { compareVerifiedWindowsZipEntrySinks } = await import('../scripts/updater-smoke-diagnostics.mjs');
+    return compareVerifiedWindowsZipEntrySinks(assetMatches ? update.filePath : null, assetMatches);
+  };
+}
 if (!app.requestSingleInstanceLock()) app.quit();
 const settings = () => loadSettings(app.getPath('userData'));
 async function sigstoreTrustedRootTargetInfo() {

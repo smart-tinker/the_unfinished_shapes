@@ -18,7 +18,7 @@ const maxAssetBytes = 500_000_000;
 const maxJsonBytes = 2_000_000;
 const maxExtractedBytes = 1_073_741_824;
 const maxArchiveEntries = 20_000;
-const zipReadChunkBytes = 256 * 1024;
+export const zipReadChunkBytes = 256 * 1024;
 
 const zipWriteBatchBytes = 256 * 1024;
 
@@ -682,7 +682,7 @@ function platformArchive(platform, assetName, tag) {
   return value;
 }
 
-async function openZipReadStream(zip, entry, trackCompressedRead, readHighWaterMark) {
+export async function openZipReadStream(zip, entry, trackCompressedRead, readHighWaterMark) {
   const configureReadHighWaterMark = Number.isSafeInteger(readHighWaterMark) && readHighWaterMark > 0;
   if ((!trackCompressedRead && !configureReadHighWaterMark) || typeof zip.reader?.createReadStream !== 'function') {
     return { stream: await zip.openReadStreamPromise(entry), compressedReadStream: null };

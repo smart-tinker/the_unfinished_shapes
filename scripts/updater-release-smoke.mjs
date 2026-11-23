@@ -12,7 +12,7 @@ import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, verify
 import { closeSmokeApp, observeGraphics, waitForExit, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 import { cleanupUpdaterTemporaryData, withTimeout } from './updater-cleanup.mjs';
-import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
+import { safeMainDiagnostics, safeZipSinkComparison, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
 import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory, windowsInstallerHandoffInstallDir, windowsRelaunchRequestStatus } from './windows-updater-scenarios.mjs';
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
@@ -1402,6 +1402,15 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   const downloadedPath = path.join(updateDir, downloadName);
   assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'downloaded bytes match the published release manifest');
   console.log('TUS_UPDATE_ABORT_RETRY status=verified package=' + distribution);
+  let zipSinkComparison = null;
+  if (process.platform === 'win32' && distribution === 'portable') {
+    const rawComparison = await current.instance.evaluate(async (_electron, expected) => {
+      const compare = globalThis.__tusUpdaterSmokeZipSinkCompare;
+      return typeof compare === 'function' ? compare(expected) : null;
+    }, { tag, assetName, size: manifestFile.size, sha256: manifestFile.sha256 }).catch(() => null);
+    zipSinkComparison = safeZipSinkComparison(rawComparison);
+    console.log('TUS_UPDATE_ZIP_SINK_COMPARISON ' + JSON.stringify(zipSinkComparison));
+  }
   if (distribution === 'installer') {
     assert.ok(handoffProfile, 'the exact installer handoff has an isolated source profile');
     pendingWindowsInstallerCleanup = {
@@ -1600,6 +1609,35 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     assert.equal(objects[0].position.x, 7);
     assert.equal(await current.page.locator('#send').isDisabled(), true, 'the updater does not connect Codex or send a model turn');
     await closeActive('updated package close');
+  }
+
+  if (zipSinkComparison) {
+    assert.equal(zipSinkComparison.assetMatches, true, 'sink comparison uses the exact verified RC11 asset');
+    assert.equal(zipSinkComparison.entryMatches, true, 'each arm reads the exact published non-ASAR Deflate entry');
+    assert.equal(zipSinkComparison.measurementScope, 'pipeline-only');
+    const expectedArms = [
+      { trial: 1, sink: 'count-discard' },
+      { trial: 1, sink: 'file-sink' },
+      { trial: 2, sink: 'file-sink' },
+      { trial: 2, sink: 'count-discard' },
+    ];
+    assert.deepEqual(zipSinkComparison.armOrder, expectedArms.map(arm => arm.sink));
+    assert.deepEqual(zipSinkComparison.arms.map(({ trial, sink }) => ({ trial, sink })), expectedArms);
+    for (const arm of zipSinkComparison.arms) {
+      assert.ok(['completed', 'time-limit'].includes(arm.outcome), 'each bounded sink arm produced a measurement');
+      for (const key of ['wallMs', 'cpuUserMs', 'cpuSystemMs', 'compressedBytesRead', 'decodedBytes', 'sinkBytesWritten']) {
+        assert.ok(Number.isSafeInteger(arm[key]) && arm[key] >= 0, 'each sink arm reports bounded ' + key);
+      }
+      if (arm.outcome === 'completed') {
+        assert.equal(arm.compressedBytesRead, zipSinkComparison.entryCompressedSize);
+        assert.equal(arm.decodedBytes, zipSinkComparison.entryUncompressedSize);
+        assert.equal(arm.sinkBytesWritten, zipSinkComparison.entryUncompressedSize);
+        assert.equal(arm.countersMatch, true);
+        assert.equal(arm.sourceReadableEnded, true);
+        assert.equal(arm.sinkWritableFinished, true);
+        assert.equal(arm.sinkClosed, true);
+      }
+    }
   }
 
   console.log('Updater E2E passed: ' + platform + ' ' + distribution + ' -> ' + tag + ' (' + assetName + '), exact published digest and provenance, explicit cancel/launch, isolated world persistence.');
