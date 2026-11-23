@@ -608,3 +608,23 @@ test('TUS launch substage keeps only fixed module and rehash states', () => {
   ]);
   assert.equal(JSON.stringify(diagnostics).includes('C:/private/path'), false);
 });
+
+
+test('TUS launch snapshot keeps bounded file rehash read state', () => {
+  const diagnostics = safeMainDiagnostics([
+    { stage: 'update-launch', status: 'starting', launchReadPhase: 'waiting-before-read', launchReadBytes: 0 },
+    { stage: 'update-launch', status: 'starting', launchReadPhase: 'reading', launchReadBytes: 65_536 },
+    { stage: 'update-launch', status: 'fulfilled', launchReadPhase: 'verified', launchReadBytes: 170_307_116 },
+    { stage: 'update-launch', status: 'starting', launchReadPhase: 'C:/private/path', launchReadBytes: 'C:/private/path' },
+    { stage: 'update-launch', status: 'starting', launchReadPhase: 'reading', launchReadBytes: Number.MAX_SAFE_INTEGER },
+  ], { sha256: 'a'.repeat(64) }, 'candidate.exe', 'v0.1.0-rc11');
+
+  assert.deepEqual(diagnostics.map(item => [item.launchReadPhase, item.launchReadBytes]), [
+    ['waiting-before-read', 0],
+    ['reading', 65_536],
+    ['verified', 170_307_116],
+    ['unknown', null],
+    ['reading', 0xffff_ffff],
+  ]);
+  assert.equal(JSON.stringify(diagnostics).includes('C:/private/path'), false);
+});

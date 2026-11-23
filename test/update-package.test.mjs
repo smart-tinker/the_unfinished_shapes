@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { create as createTar } from 'tar';
 import yauzl from 'yauzl';
-import { createZipWriteBatcher, downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeUpdaterFailureCode, safeVerifierErrorType, safeVerifierSetupStage, safeZipExtractionStreamSnapshot, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { createZipWriteBatcher, downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeUpdaterFailureCode, safeVerifierErrorType, safeVerifierSetupStage, safeZipExtractionStreamSnapshot, verifyDownloadedFile, verifyReleaseAttestation } from '../src/update-package.mjs';
 
 const tag = 'v0.1.0-rc11';
 const asset = {
@@ -1027,4 +1027,29 @@ test('ZIP write batcher preserves bytes and uses only the requested bounded batc
   assert.deepEqual(Buffer.concat(largerChunks), payload);
   assert.throws(() => createZipWriteBatcher(0), /Invalid ZIP write batch size/);
   assert.throws(() => createZipWriteBatcher(2 * 1024 * 1024), /Invalid ZIP write batch size/);
+});
+
+
+test('download verification reports hash bytes only after a real file read begins', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-file-hash-progress-'));
+  const filePath = path.join(parent, 'candidate.zip');
+  const payload = Buffer.alloc(256 * 1024, 0x5a);
+  const sha256 = createHash('sha256').update(payload).digest('hex');
+  const progress = [];
+  try {
+    await writeFile(filePath, payload);
+    await verifyDownloadedFile({
+      filePath,
+      sha256,
+      onReadProgress: value => progress.push(value),
+    });
+    assert.deepEqual(progress[0], { phase: 'waiting-before-read', bytesRead: 0 });
+    assert.ok(progress.length >= 2);
+    assert.ok(progress.slice(1).every(value =>
+      value.phase === 'reading' && Number.isSafeInteger(value.bytesRead) && value.bytesRead > 0));
+    assert.equal(progress.at(-1).bytesRead, payload.length);
+    assert.equal(JSON.stringify(progress).includes(filePath), false);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
 });
