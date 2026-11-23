@@ -1038,13 +1038,30 @@ async function assertArchiveWriteFailureCleaned(current, {
 
   try {
     await current.page.locator('#updates-extract').click({ noWaitAfter: true });
-    await current.page.waitForFunction(() => {
+    const observedFailureHandle = await current.page.waitForFunction(() => {
       const status = document.querySelector('#updates-status');
-      return status?.dataset.updateExtractInvokeStatus === 'rejected' &&
-        status.dataset.updateExtractFailureCode === 'FILESYSTEM_SPACE' &&
-        status.dataset.updateExtractStage === 'write';
+      if (status?.dataset.updateExtractInvokeStatus === 'rejected' &&
+          status.dataset.updateExtractFailureCode === 'FILESYSTEM_SPACE' &&
+          status.dataset.updateExtractStage === 'write') {
+        return {
+          rendererInvokeStatus: status.dataset.updateExtractInvokeStatus,
+          failureCode: status.dataset.updateExtractFailureCode,
+          extractStage: status.dataset.updateExtractStage,
+        };
+      }
+      return false;
     }, null, { timeout: 120000 });
+    let observedFailure;
+    try { observedFailure = await observedFailureHandle.jsonValue(); }
+    finally { await observedFailureHandle.dispose(); }
 
+    const [safeObservedFailure] = safeMainDiagnostics([{
+      stage: 'extract-archive',
+      status: 'rejected',
+      rendererInvokeStatus: observedFailure?.rendererInvokeStatus,
+      failureCode: observedFailure?.failureCode,
+      extractStage: observedFailure?.extractStage,
+    }], manifestFile, assetName, tag);
     const runtime = await extractRuntimeBoundary(current, extractDir, manifestVersion, manifestFile, assetName, tag);
     const control = await current.instance.evaluate(() => {
       const value = globalThis.__tusUpdaterSmokeBoundary?.writeFailureControl;
@@ -1076,9 +1093,9 @@ async function assertArchiveWriteFailureCleaned(current, {
       mainStatus: runtime.mainStatus,
       extractModuleImport: runtime.extractModuleImport,
       extractCall: runtime.extractCall,
-      rendererInvokeStatus: runtime.rendererInvokeStatus,
-      failureCode: runtime.failureCode,
-      extractStage: runtime.extractStage,
+      rendererInvokeStatus: safeObservedFailure.rendererInvokeStatus,
+      failureCode: safeObservedFailure.failureCode,
+      extractStage: safeObservedFailure.extractStage,
       controlState: control?.state ?? 'missing',
       firstChunkWritten: control?.firstChunkWritten === true,
       targetRemoved,
