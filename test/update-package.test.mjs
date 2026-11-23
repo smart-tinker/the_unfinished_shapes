@@ -3,13 +3,14 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { Readable } from 'node:stream';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { create as createTar } from 'tar';
 import yauzl from 'yauzl';
-import { downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeUpdaterFailureCode, safeVerifierErrorType, safeVerifierSetupStage, safeZipExtractionStreamSnapshot, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { createZipWriteBatcher, downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeUpdaterFailureCode, safeVerifierErrorType, safeVerifierSetupStage, safeZipExtractionStreamSnapshot, verifyReleaseAttestation } from '../src/update-package.mjs';
 
 const tag = 'v0.1.0-rc11';
 const asset = {
@@ -998,4 +999,31 @@ test('smoke-only ENOSPC after one completed target write cleans extraction and p
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
+});
+
+
+test('ZIP write batcher preserves bytes and uses only the requested bounded batch size', async () => {
+  const payload = Buffer.alloc(2 * 1024 * 1024 + 17, 0x5a);
+  const chunksFor = async batchBytes => {
+    const chunks = [];
+    const stream = batchBytes === null ? createZipWriteBatcher() : createZipWriteBatcher(batchBytes);
+    stream.on('data', chunk => chunks.push(Buffer.from(chunk)));
+    await new Promise((resolve, reject) => {
+      stream.once('error', reject);
+      stream.once('end', resolve);
+      stream.end(payload);
+    });
+    return chunks;
+  };
+  const defaultChunks = await chunksFor(null);
+  const productionChunks = await chunksFor(256 * 1024);
+  const largerChunks = await chunksFor(1024 * 1024);
+
+  assert.deepEqual(defaultChunks.map(chunk => chunk.length), [...Array(8).fill(256 * 1024), 17]);
+  assert.deepEqual(productionChunks.map(chunk => chunk.length), [...Array(8).fill(256 * 1024), 17]);
+  assert.deepEqual(largerChunks.map(chunk => chunk.length), [1024 * 1024, 1024 * 1024, 17]);
+  assert.deepEqual(Buffer.concat(defaultChunks), payload);
+  assert.deepEqual(Buffer.concat(productionChunks), payload);
+  assert.deepEqual(Buffer.concat(largerChunks), payload);
+  assert.throws(() => createZipWriteBatcher(2 * 1024 * 1024), /Invalid ZIP write batch size/);
 });
