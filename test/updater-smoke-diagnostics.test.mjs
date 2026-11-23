@@ -1,8 +1,63 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { Writable } from 'node:stream';
 import * as updatePackage from '../src/update-package.mjs';
 import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from '../scripts/updater-smoke-diagnostics.mjs';
+
+test('TUS Windows ZIP writer reports bounded finish-to-close time at the safe log boundary', async () => {
+  const sink = new EventEmitter();
+  sink._write = (_chunk, _encoding, callback) => callback();
+  const readSnapshot = updatePackage.trackZipWriteCallback(sink);
+  sink.emit('finish');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const pending = readSnapshot();
+  assert.ok(pending.writeFinishToCloseMs >= 10);
+
+  const manifestFile = { sha256: 'a'.repeat(64) };
+  const safeSnapshot = (closed, writerSnapshot) => {
+    const raw = updatePackage.safeZipExtractionStreamSnapshot(
+      { readableEnded: true, actualByteCount: 1 },
+      { writableFinished: true, closed, bytesWritten: 1, writableLength: 0 },
+      10,
+      { compressionMethod: 8, compressedSize: 1, uncompressedSize: 1 },
+      null,
+      writerSnapshot,
+    );
+    const [diagnostic] = safeMainDiagnostics([{
+      stage: 'extract-archive',
+      status: 'starting',
+      extractStreamSnapshot: { ...raw, privatePath: 'C:/private/path' },
+    }], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+    return diagnostic.streamSnapshot;
+  };
+  const pendingSafe = safeSnapshot(false, pending);
+  assert.equal(pendingSafe.writeFinishToCloseMs, pending.writeFinishToCloseMs);
+
+  sink.emit('close');
+  const closed = readSnapshot();
+  assert.ok(closed.writeFinishToCloseMs >= pending.writeFinishToCloseMs);
+  const closedSafe = safeSnapshot(true, closed);
+  assert.equal(closedSafe.writeFinishToCloseMs, closed.writeFinishToCloseMs);
+
+  const [bounded] = safeMainDiagnostics([{
+    stage: 'extract-archive',
+    status: 'starting',
+    extractStreamSnapshot: {
+      ...updatePackage.safeZipExtractionStreamSnapshot(
+        { readableEnded: true, actualByteCount: 1 },
+        { writableFinished: true, closed: true, bytesWritten: 1, writableLength: 0 },
+        10,
+        { compressionMethod: 8, compressedSize: 1, uncompressedSize: 1 },
+        null,
+        { state: 'idle', writeFinishToCloseMs: Number.MAX_SAFE_INTEGER },
+      ),
+      privatePath: 'C:/private/path',
+    },
+  }], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+  assert.equal(bounded.streamSnapshot.writeFinishToCloseMs, 120_000);
+  assert.equal(JSON.stringify([pendingSafe, closedSafe, bounded]).includes('C:/private/path'), false);
+});
 
 test('TUS main diagnostic preserves only safe verifier setup stages at the log boundary', () => {
   const assetName = 'candidate.zip';
