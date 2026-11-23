@@ -57,6 +57,7 @@ export function trackZipWriteCallback(sink) {
   const maxCount = 0xffffffff;
   let writeCallCount = 0, writevCallCount = 0, writeCallbackCount = 0, writeCallbackWaitMs = 0;
   let finishedAt = null, closedAt = null;
+  let previousCpuUsage = process.cpuUsage();
   const pending = new Set();
   const wrap = (method, state) => function (...args) {
     const callbackIndex = args.length - 1;
@@ -77,7 +78,8 @@ export function trackZipWriteCallback(sink) {
   };
   if (!sink || typeof sink._write !== 'function') return () => ({
     state: 'unknown', writeCallbackAgeMs: null, writeCallbackWaitMs: null,
-    writeCallbackCount: null, writeCallCount: null, writevCallCount: null, writeFinishToCloseMs: null,
+    writeCallbackCount: null, writeCallCount: null, writevCallCount: null,
+    writeFinishToCloseMs: null, mainCpuUserMsDelta: null, mainCpuSystemMsDelta: null,
   });
   if (typeof sink.once === 'function') {
     sink.once('finish', () => { finishedAt = performance.now(); });
@@ -87,6 +89,13 @@ export function trackZipWriteCallback(sink) {
   if (typeof sink._writev === 'function') sink._writev = wrap(sink._writev, 'writev');
   return () => {
     const active = pending.size === 1 ? pending.values().next().value : null;
+    const currentCpuUsage = process.cpuUsage();
+    const cpuDeltaMs = (current, previous) =>
+      Number.isSafeInteger(current) && Number.isSafeInteger(previous) && current >= previous
+        ? Math.min(120_000, Math.round((current - previous) / 1000)) : null;
+    const mainCpuUserMsDelta = cpuDeltaMs(currentCpuUsage.user, previousCpuUsage.user);
+    const mainCpuSystemMsDelta = cpuDeltaMs(currentCpuUsage.system, previousCpuUsage.system);
+    previousCpuUsage = currentCpuUsage;
     return {
       state: pending.size === 0 ? 'idle' : active?.state ?? 'unknown',
       writeCallbackAgeMs: active ? Math.min(120_000, Math.max(0, Math.round(performance.now() - active.startedAt))) : null,
@@ -95,6 +104,8 @@ export function trackZipWriteCallback(sink) {
       writeCallCount,
       writevCallCount,
       writeFinishToCloseMs: finishedAt === null ? null : Math.min(120_000, Math.max(0, Math.round((closedAt ?? performance.now()) - finishedAt))),
+      mainCpuUserMsDelta,
+      mainCpuSystemMsDelta,
     };
   };
 }
@@ -123,6 +134,8 @@ export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, ent
     ...(writeCallback ? {
       writeCallbackState: ['idle', 'write', 'writev'].includes(writeCallback.state) ? writeCallback.state : 'unknown',
       writeFinishToCloseMs: count(writeCallback.writeFinishToCloseMs, 120_000),
+      mainCpuUserMsDelta: count(writeCallback.mainCpuUserMsDelta, 120_000),
+      mainCpuSystemMsDelta: count(writeCallback.mainCpuSystemMsDelta, 120_000),
       writeCallbackAgeMs: count(writeCallback.writeCallbackAgeMs, 120_000),
       writeCallbackWaitMs: count(writeCallback.writeCallbackWaitMs, 120_000),
       writeCallbackCount: count(writeCallback.writeCallbackCount, 0xffffffff),
