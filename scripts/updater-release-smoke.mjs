@@ -52,6 +52,17 @@ function updaterMarker(kind, stage, outcome) {
   try { console.log('TUS_UPDATER_' + kind + ' stage=' + stage + ' outcome=' + outcome); } catch {}
 }
 
+async function finishGpuLog(gpu) {
+  updaterMarker('CLEANUP', 'gpu-log', 'started');
+  try {
+    await withTimeout(gpu.finish(), 'Updater GPU log cleanup', 10000);
+    updaterMarker('CLEANUP', 'gpu-log', 'completed');
+  } catch (error) {
+    updaterMarker('CLEANUP', 'gpu-log', error?.code === 'ETIMEDOUT' ? 'timeout' : 'failed');
+    throw error;
+  }
+}
+
 async function waitForFile(filePath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -97,13 +108,14 @@ async function start(executablePath, label, dataDir, useBaseline = false, extraE
       async () => {
         if (!instance) return;
         const child = instance.process();
-        await Promise.race([
-          instance.close().catch(() => {}),
-          new Promise(resolve => setTimeout(resolve, 5000)),
-        ]);
+        await withTimeout(
+          Promise.resolve().then(() => instance.close()).catch(() => {}),
+          'Updater smoke startup app close',
+          5000,
+        ).catch(() => {});
         if (child.exitCode === null) child.kill('SIGKILL');
       },
-      () => gpu.finish(),
+      () => finishGpuLog(gpu),
     );
   }
 }
@@ -121,16 +133,7 @@ async function closeActive(label) {
       () => current.instance.process().exitCode === null
         ? closeSmokeApp(current.instance, current.graphics, label)
         : current.graphics?.assertNoErrors(),
-      async () => {
-        updaterMarker('CLEANUP', 'gpu-log', 'started');
-        try {
-          await withTimeout(current.gpu.finish(), 'Updater GPU log cleanup', 10000);
-          updaterMarker('CLEANUP', 'gpu-log', 'completed');
-        } catch (error) {
-          updaterMarker('CLEANUP', 'gpu-log', error?.code === 'ETIMEDOUT' ? 'timeout' : 'failed');
-          throw error;
-        }
-      },
+      () => finishGpuLog(current.gpu),
     );
     updaterMarker('CLEANUP', 'active-app', 'completed');
   } catch (error) {
@@ -142,7 +145,7 @@ async function closeActive(label) {
 async function closeAfterQuit(current, wait) {
   await wait;
   await current.graphics.assertNoErrors();
-  await current.gpu.finish();
+  await finishGpuLog(current.gpu);
   if (active === current) active = null;
 }
 

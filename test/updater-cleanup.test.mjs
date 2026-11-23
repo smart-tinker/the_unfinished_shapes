@@ -33,6 +33,19 @@ test('updater temporary cleanup bounds a stalled remove and preserves the origin
   assert.equal(result.error.errors[0], primary);
   assert.equal(result.error.errors[1]?.code, 'ETIMEDOUT');
   assert.equal(laterCleanupRan, true, 'independent cleanup still runs after a cleanup timeout');
-  assert.deepEqual(outcomes, ['timeout', 'failed']);
+  assert.deepEqual(outcomes, ['timeout']);
   assert.equal(JSON.stringify(outcomes).includes('C:/private'), false);
+});
+
+test('updater temporary cleanup retains data until installer cleanup succeeds', async () => {
+  const outcomes = [];
+  let removed = false;
+  await cleanupUpdaterTemporaryData({
+    testRoot: 'C:/private/updater-smoke',
+    canRemove: async () => false,
+    remove: async () => { removed = true; },
+    onOutcome: outcome => outcomes.push(outcome),
+  });
+  assert.equal(removed, false);
+  assert.deepEqual(outcomes, ['retained']);
 });
