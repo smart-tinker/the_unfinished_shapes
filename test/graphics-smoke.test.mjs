@@ -206,3 +206,51 @@ test('bounded child exit timeout uses ETIMEDOUT and releases its listener', asyn
   assert.equal(error?.code, 'ETIMEDOUT');
   assert.equal(child.listenerCount('exit'), 0);
 });
+
+test('bounded app-close timeout preserves primary updater failure and reaps the child', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const originalLog = console.log, logs = [];
+  console.log = (...args) => logs.push(args.join(' '));
+  t.after(() => { console.log = originalLog; });
+
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.killed = false;
+  child.kill = signal => {
+    assert.equal(signal, 'SIGKILL');
+    child.killed = true;
+    child.exitCode = 1;
+    child.emit('exit', 1, signal);
+    return true;
+  };
+  const app = { close: () => new Promise(() => {}), process: () => child };
+  const graphics = { phase() {}, assertHealthy: async () => {}, assertNoErrors() {} };
+  const primary = new Error('updater operation failed');
+  let outcome;
+  const completion = withSmokeCleanup(
+    async () => { throw primary; },
+    () => closeSmokeApp(app, graphics, 'updater test cleanup'),
+  ).then(
+    () => { outcome = { status: 'fulfilled' }; },
+    error => { outcome = { status: 'rejected', error }; },
+  );
+
+  await new Promise(resolve => setImmediate(resolve));
+  await t.mock.timers.tick(10_001);
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.ok(outcome, 'a stalled app.close must settle within its cleanup bound');
+  assert.equal(outcome.status, 'rejected');
+  assert.ok(outcome.error instanceof AggregateError);
+  assert.equal(outcome.error.cause, primary);
+  assert.equal(outcome.error.errors[0], primary);
+  assert.equal(outcome.error.errors[1]?.code, 'ETIMEDOUT');
+  assert.equal(child.killed, true);
+  assert.equal(child.exitCode, 1);
+  assert.deepEqual(logs, [
+    'TUS_SMOKE_CLEANUP stage=app-close outcome=started',
+    'TUS_SMOKE_CLEANUP stage=app-close outcome=timeout',
+    'TUS_SMOKE_CLEANUP stage=app-process outcome=terminated',
+  ]);
+  assert.equal(logs.join(' ').includes(primary.message), false);
+});
