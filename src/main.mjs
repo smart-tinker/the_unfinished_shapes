@@ -18,7 +18,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld, gameToolSession, fullscreenRestoreBounds;
 let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, extractedUpdate = null, updateDownloadController = null;
 const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic')
-  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null, launchStatus: 'not-started', launchPhase: 'unknown', launchSubstage: 'not-started', launchDialog: 'not-started', launchDecision: 'not-started' }
+  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null, launchStatus: 'not-started', launchPhase: 'unknown', launchSubstage: 'not-started', launchReadPhase: 'not-started', launchReadBytes: 0, launchDialog: 'not-started', launchDecision: 'not-started' }
   : null;
 if (updaterSmokeBoundary) {
   globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
@@ -341,6 +341,8 @@ app.whenReady().then(async()=>{
       updaterSmokeBoundary.launchStatus = 'starting';
       updaterSmokeBoundary.launchPhase = 'unknown';
       updaterSmokeBoundary.launchSubstage = 'not-started';
+      updaterSmokeBoundary.launchReadPhase = 'not-started';
+      updaterSmokeBoundary.launchReadBytes = 0;
       updaterSmokeBoundary.launchDialog = 'not-started';
       updaterSmokeBoundary.launchDecision = 'not-started';
     }
@@ -353,14 +355,34 @@ app.whenReady().then(async()=>{
           updaterSmokeBoundary.launchSubstage = 'module-import';
         }
         const { verifyDownloadedFile } = await import('./update-package.mjs');
-        if (updaterSmokeBoundary) updaterSmokeBoundary.launchSubstage = 'file-rehash';
-        await verifyDownloadedFile({ filePath: downloadedUpdate.filePath, sha256: downloadedUpdate.sha256 });
-        if (updaterSmokeBoundary) updaterSmokeBoundary.launchSubstage = 'verified';
+        let onReadProgress;
+        if (updaterSmokeBoundary) {
+          updaterSmokeBoundary.launchSubstage = 'file-rehash';
+          updaterSmokeBoundary.launchReadPhase = 'waiting-before-read';
+          updaterSmokeBoundary.launchReadBytes = 0;
+          onReadProgress = ({ phase, bytesRead }) => {
+            updaterSmokeBoundary.launchReadPhase = phase;
+            updaterSmokeBoundary.launchReadBytes = bytesRead;
+          };
+        }
+        await verifyDownloadedFile({
+          filePath: downloadedUpdate.filePath,
+          sha256: downloadedUpdate.sha256,
+          onReadProgress,
+        });
+        if (updaterSmokeBoundary) {
+          updaterSmokeBoundary.launchSubstage = 'verified';
+          updaterSmokeBoundary.launchReadPhase = 'verified';
+        }
         executable = downloadedUpdate.filePath;
       } else {
         if (!extractedUpdate) throw new Error('Extract the verified archive first.');
         executable = extractedUpdate.executablePath;
-        if (updaterSmokeBoundary) updaterSmokeBoundary.launchSubstage = 'not-applicable';
+        if (updaterSmokeBoundary) {
+          updaterSmokeBoundary.launchSubstage = 'not-applicable';
+          updaterSmokeBoundary.launchReadPhase = 'not-applicable';
+          updaterSmokeBoundary.launchReadBytes = 0;
+        }
       }
       if (updaterSmokeBoundary) updaterSmokeBoundary.launchPhase = 'dialog';
       const choice = await dialog.showMessageBox(win, {

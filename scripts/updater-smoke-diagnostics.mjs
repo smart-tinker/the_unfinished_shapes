@@ -31,6 +31,7 @@ const safeExtractRendererStatuses = new Map([
 const safeExtractInvokeStatuses = new Set(['not-started', 'pending', 'fulfilled', 'rejected']);
 const safeUpdateLaunchPhases = new Set(['unknown', 'rehash', 'dialog', 'response']);
 const safeUpdateLaunchSubstages = new Set(['unknown', 'not-started', 'module-import', 'file-rehash', 'verified', 'not-applicable']);
+const safeUpdateLaunchReadPhases = new Set(['unknown', 'not-started', 'not-applicable', 'waiting-before-read', 'reading', 'verified']);
 const safeUpdateLaunchDialogs = new Set(['not-started', 'invoked', 'marker-written', 'marker-write-failed']);
 const safeUpdateLaunchDecisions = new Set(['not-started', 'cancelled', 'approved']);
 const safeUpdateLaunchClickStatuses = new Set(['not-started', 'received']);
@@ -413,6 +414,10 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
     ...(item?.stage === 'update-launch' ? {
       launchPhase: safeUpdateLaunchPhases.has(item.launchPhase) ? item.launchPhase : 'unknown',
       launchSubstage: safeUpdateLaunchSubstages.has(item.launchSubstage) ? item.launchSubstage : 'unknown',
+      launchReadPhase: safeUpdateLaunchReadPhases.has(item.launchReadPhase) ? item.launchReadPhase : 'unknown',
+      launchReadBytes: Number.isSafeInteger(item.launchReadBytes) && item.launchReadBytes >= 0
+        ? Math.min(item.launchReadBytes, 0xffff_ffff)
+        : null,
       launchDialog: safeUpdateLaunchDialogs.has(item.launchDialog) ? item.launchDialog : 'unknown',
       launchDecision: safeUpdateLaunchDecisions.has(item.launchDecision) ? item.launchDecision : 'unknown',
       rendererClickStatus: safeUpdateLaunchClickStatuses.has(item.rendererClickStatus) ? item.rendererClickStatus : 'unknown',

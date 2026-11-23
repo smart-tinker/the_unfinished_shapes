@@ -420,18 +420,27 @@ export async function verifyReleaseAttestation({ bundle, asset, tag }, verifySig
   return { sourceSha: source.digest.gitCommit, assetName: asset.name };
 }
 
-async function fileSha256(filePath) {
+async function fileSha256(filePath, onReadProgress) {
   const hash = createHash('sha256');
-  for await (const chunk of createReadStream(filePath)) hash.update(chunk);
+  let bytesRead = 0;
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk);
+    bytesRead = Math.min(0xffff_ffff, bytesRead + chunk.byteLength);
+    if (onReadProgress) onReadProgress({ phase: 'reading', bytesRead });
+  }
   return hash.digest('hex');
 }
 
-export async function verifyDownloadedFile({ filePath, sha256 }) {
+export async function verifyDownloadedFile({ filePath, sha256, onReadProgress }) {
   if (typeof filePath !== 'string' || !filePath || typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256)) {
     throw new Error('Invalid downloaded update file.');
   }
+  const reportReadProgress = typeof onReadProgress === 'function'
+    ? progress => { try { onReadProgress(progress); } catch {} }
+    : null;
+  reportReadProgress?.({ phase: 'waiting-before-read', bytesRead: 0 });
   const stat = await lstat(filePath);
-  if (!stat.isFile() || stat.isSymbolicLink() || await fileSha256(filePath) !== sha256) {
+  if (!stat.isFile() || stat.isSymbolicLink() || await fileSha256(filePath, reportReadProgress) !== sha256) {
     throw new Error('Downloaded update file failed its SHA-256 integrity check.');
   }
   return true;
