@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Writable } from 'node:stream';
 import * as updatePackage from '../src/update-package.mjs';
@@ -644,4 +646,15 @@ test('TUS ZIP batch comparison reports only bounded counterbalanced wx/0600 file
   assert.equal(bounded.arms[0].outcome, 'unknown');
   assert.equal(bounded.arms[0].cleanupStatus, 'unknown');
   assert.equal(JSON.stringify(bounded).includes('C:/private'), false);
+});
+
+
+test('Windows ZIP comparison scratch prefix stays under the verified archive directory', async () => {
+  const diagnostics = await import('../scripts/updater-smoke-diagnostics.mjs');
+  const testRoot = path.join(tmpdir(), 'tus-update-e2e-scratch-test');
+  const archivePath = path.join(testRoot, 'downloads', 'candidate.zip');
+
+  const scratchPrefix = diagnostics.zipBatcherScratchPrefix?.(archivePath);
+  assert.equal(scratchPrefix, path.join(path.dirname(archivePath), 'tus-zip-batcher-'));
+  assert.equal(path.relative(testRoot, scratchPrefix).split(path.sep)[0], 'downloads');
 });

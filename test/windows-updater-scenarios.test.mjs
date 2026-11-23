@@ -76,6 +76,24 @@ test('independent Windows scenario failures retain only safe stage and category'
   assert.equal(JSON.stringify([outcomes.portable.diagnostic, outcomes.installer.diagnostic]).includes('token'), false);
 });
 
+
+test('Windows ZIP batch comparison timeout retains its own safe phase', async () => {
+  const timeout = Object.assign(new Error('private comparison details'), { code: 'ETIMEDOUT' });
+  timeout.tusScenarioDiagnostic = {
+    stage: 'zip-batcher-comparison',
+    category: safeWindowsScenarioFailureCategory(timeout),
+  };
+  const outcomes = await runWindowsUpdaterScenarios({
+    portable: async () => { throw timeout; },
+    installer: async () => 'installer still runs',
+  });
+
+  assert.deepEqual(outcomes.portable.diagnostic, { stage: 'zip-batcher-comparison', category: 'timeout' });
+  assert.equal(outcomes.portable.error, timeout);
+  assert.deepEqual(outcomes.installer.diagnostic, { stage: 'complete', category: 'none' });
+  assert.equal(JSON.stringify(outcomes.portable.diagnostic).includes('private comparison details'), false);
+});
+
 test('NSIS wizard output drops paths and raw details while keeping fixed events', () => {
   const events = safeNsisWizardEvents([
     'TUS_NSIS_WIZARD event=process-found pid=4321',
