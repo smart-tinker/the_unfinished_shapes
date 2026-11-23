@@ -1423,6 +1423,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   console.log('TUS_UPDATE_ABORT_RETRY status=verified package=' + distribution);
   let zipBatcherComparison = null;
   if (process.platform === 'win32' && distribution === 'portable') {
+    setDiagnostic('zip-batcher-comparison');
     const rawComparison = await withTimeout(current.instance.evaluate(async (_electron, expected) => {
       const compare = globalThis.__tusUpdaterSmokeZipBatcherCompare;
       return typeof compare === 'function' ? compare(expected) : null;

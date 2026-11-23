@@ -21,7 +21,7 @@ const safeHandoffStages = new Set([
 const safeHandoffChecks = new Set(['build-label', 'build-title-sha', 'app-version', 'user-data', 'startup-health', 'relaunch-request', 'other']);
 const safeHandoffCheckResults = new Set(['match', 'mismatch', 'failed']);
 const safeScenarioStages = new Set([
-  'source-setup', 'source-identity', 'source-prepare', 'check-download',
+  'source-setup', 'source-identity', 'source-prepare', 'check-download', 'zip-batcher-comparison',
   'extract', 'relaunch', 'relaunch-cancel', 'relaunch-approve', 'relaunch-exit',
   'relaunch-click', 'relaunch-source-exit', 'relaunch-cleanup',
   'relaunch-prompt', 'relaunch-request', 'relaunch-target', 'wizard', 'target-verify', 'complete',

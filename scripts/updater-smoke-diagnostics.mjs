@@ -1,6 +1,5 @@
 import { createWriteStream } from 'node:fs';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import yauzl from 'yauzl';
@@ -128,6 +127,10 @@ const zipSinkEntryCompressedSize = 111_522_616;
 const zipSinkEntryUncompressedSize = 249_832_448;
 const zipBatcherArmTimeoutMs = 15_000;
 const zipBatcherWriteHighWaterMarkBytes = 16 * 1024;
+
+export function zipBatcherScratchPrefix(archivePath) {
+  return path.join(path.dirname(archivePath), 'tus-zip-batcher-');
+}
 const zipBatcherArmPlan = Object.freeze([
   { trial: 1, batchBytes: zipWriteBatchBytes },
   { trial: 1, batchBytes: 1024 * 1024 },
@@ -267,7 +270,7 @@ async function measureZipBatcherArm(archivePath, batchBytes) {
     const opened = await openZipReadStream(zip, entry, true, zipReadChunkBytes);
     source = opened.stream;
     compressedReadStream = opened.compressedReadStream;
-    tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'tus-zip-batcher-'));
+    tempDirectory = await mkdtemp(zipBatcherScratchPrefix(archivePath));
     filePath = path.join(tempDirectory, 'entry.bin');
     sink = createWriteStream(filePath, {
       flags: 'wx', mode: 0o600, highWaterMark: zipBatcherWriteHighWaterMarkBytes,
