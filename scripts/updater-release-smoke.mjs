@@ -11,6 +11,7 @@ import { compareReleaseVersions } from '../src/update-release.mjs';
 import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, verifyReleaseAttestation } from '../src/update-package.mjs';
 import { closeSmokeApp, observeGraphics, waitForExit, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
+import { cleanupUpdaterTemporaryData, withTimeout } from './updater-cleanup.mjs';
 import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
 import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory, windowsInstallerHandoffInstallDir, windowsRelaunchRequestStatus } from './windows-updater-scenarios.mjs';
 
@@ -38,20 +39,12 @@ const projectPackagePath = new URL('../package.json', import.meta.url);
 const projectPackageOriginal = await readFile(projectPackagePath, 'utf8');
 
 const testRoot = await mkdtemp(path.join(os.tmpdir(), 'tus-update-e2e-'));
-const workDirs = [];
 let active = null;
 let pendingWindowsInstallerCleanup = null;
 const platform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
 const runnerFlags = process.platform === 'linux' || process.platform === 'win32'
   ? ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader'] : [];
 
-function withTimeout(promise, label, timeoutMs = 30000) {
-  let timer;
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label + ' timed out after ' + timeoutMs + 'ms.')), timeoutMs); }),
-  ]).finally(() => clearTimeout(timer));
-}
 
 
 
@@ -1126,7 +1119,6 @@ async function assertArchiveWriteFailureCleaned(current, {
 
 async function updateOnce(distribution, setDiagnostic = () => {}) {
   const workDir = await mkdtemp(path.join(testRoot, 'package-'));
-  workDirs.push(workDir);
   let handoffProfile = null;
   if (process.platform === 'win32' && distribution === 'installer') {
     setDiagnostic('source-setup');
@@ -1643,18 +1635,9 @@ await withSmokeCleanup(async () => {
   }
 }, async () => {
   await closeActive('updater test cleanup');
-}, async () => {
-  let outcome = 'retained';
-  try {
-    if (await cleanupPendingWindowsInstaller()) {
-      for (const workDir of workDirs) await rm(workDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
-      await rm(testRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
-      outcome = 'removed';
-    }
-  } catch (error) {
-    outcome = 'failed';
-    throw error;
-  } finally {
-    updaterMarker('CLEANUP', 'temporary-data', outcome);
-  }
-});
+}, () => cleanupUpdaterTemporaryData({
+  testRoot,
+  canRemove: cleanupPendingWindowsInstaller,
+  remove: rm,
+  onOutcome: outcome => updaterMarker('CLEANUP', 'temporary-data', outcome),
+}));
