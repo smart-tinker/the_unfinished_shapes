@@ -1161,8 +1161,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   await current.page.keyboard.press('Enter');
   await current.page.locator('#settings').waitFor({ state: 'visible', timeout: 5000 });
   await focusByKeyboard(current.page, '#update-channel');
-  await current.page.keyboard.press('ArrowDown');
-  await current.page.keyboard.press('Enter');
+  await current.page.keyboard.press('p');
   assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'keyboard selection changes the channel');
   await focusByKeyboard(current.page, '#settings-close');
   await current.page.keyboard.press('Enter');
@@ -1179,8 +1178,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   await current.page.locator('#settings').waitFor({ state: 'visible', timeout: 5000 });
   assert.equal(await current.page.locator('#update-channel').inputValue(), 'stable', 'reopening restores the saved channel');
   await focusByKeyboard(current.page, '#update-channel');
-  await current.page.keyboard.press('ArrowDown');
-  await current.page.keyboard.press('Enter');
+  await current.page.keyboard.press('p');
   assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'keyboard can select the prerelease channel again');
   if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
   await focusByKeyboard(current.page, '#updates-save');
