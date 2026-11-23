@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
+import { runInNewContext } from 'node:vm';
 
 test('installed-source restart reuses the source executable and profile configuration', async () => {
   const smoke = await readFile(new URL('../scripts/updater-release-smoke.mjs', import.meta.url), 'utf8');
@@ -90,4 +91,35 @@ test('pending ZIP extraction exposes per-entry read, decode and write state with
   assert.ok(smoke.includes('previousStreamSnapshot: previousStreamSnapshot.snapshot'));
   assert.ok(sourceText.includes('extraction.streamSnapshot = null;'));
   assert.ok(sourceText.includes("if (smokeBoundary) smokeBoundary.extractStreamSnapshot = typeof value === 'function' ? value : null;"));
+});
+
+test('incompatible package verifier IPC is exposed only to the packaged smoke process', async () => {
+  const preload = await readFile(new URL('../src/preload.cjs', import.meta.url), 'utf8');
+  const load = argv => {
+    let exposedName, exposedApi;
+    const calls = [];
+    runInNewContext(preload, {
+      process: { platform: 'linux', argv },
+      require: id => {
+        assert.equal(id, 'electron');
+        return {
+          contextBridge: { exposeInMainWorld: (name, api) => { exposedName = name; exposedApi = api; } },
+          ipcRenderer: {
+            invoke: (...args) => { calls.push(args); return Promise.resolve('verified'); },
+            on() {}, removeListener() {},
+          },
+        };
+      },
+    });
+    return { exposedName, exposedApi, calls };
+  };
+  const regular = load([]);
+  assert.equal(regular.exposedName, 'tus');
+  assert.equal('smokeVerifyIncompatiblePackage' in regular.exposedApi, false);
+
+  const smoke = load(['--tus-smoke-provenance-diagnostic']);
+  assert.equal(typeof smoke.exposedApi.smokeVerifyIncompatiblePackage, 'function');
+  assert.equal(await smoke.exposedApi.smokeVerifyIncompatiblePackage(), 'verified');
+  assert.equal(smoke.calls.length, 1);
+  assert.equal(smoke.calls[0][0], 'updates:smoke-verify-incompatible-package');
 });

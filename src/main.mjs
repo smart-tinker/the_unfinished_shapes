@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
@@ -116,6 +116,65 @@ app.whenReady().then(async()=>{
       publishedAt: typeof release.published_at === 'string' ? release.published_at : '',
     };
   });
+  if (updaterSmokeBoundary) {
+    handle('updates:smoke-verify-incompatible-package', async () => {
+      if (updateDownloadController) return { status: 'download-running' };
+      const selected = availableUpdate;
+      if (!selected?.release) return { status: 'selection-unavailable' };
+      const target = process.platform === 'win32'
+        ? { platform: 'linux', architecture: 'x64', distribution: 'archive' }
+        : { platform: 'win32', architecture: 'x64', distribution: 'portable' };
+      const asset = selectReleaseAsset(selected.release, target);
+      if (!asset) return { status: 'asset-unavailable' };
+      const controller = new AbortController();
+      updateDownloadController = controller;
+      let updater, workDirectory;
+      try {
+        updater = await import('./update-package.mjs');
+        workDirectory = await mkdtemp(path.join(app.getPath('temp'), 'tus-incompatible-'));
+        let verifierSetupReady = false, verifierVerified = false;
+        const result = await updater.downloadVerifiedAsset({
+          asset, tag: selected.release.tag_name, directory: path.join(workDirectory, 'downloads'),
+          signal: controller.signal,
+          onProvenanceDiagnostic: diagnostic => {
+            if (diagnostic?.assetName !== asset.name ||
+                diagnostic?.assetSha256 !== asset.digest.slice(7) ||
+                diagnostic?.tag !== selected.release.tag_name) return;
+            if (diagnostic.stage === 'verifier-setup' && diagnostic.status === 'ready') verifierSetupReady = true;
+            if (diagnostic.stage === 'verifier-verify' && diagnostic.status === 'verified') verifierVerified = true;
+          },
+        });
+        if (result?.cancelled === true) return { status: 'download-cancelled' };
+        const targetDirectory = path.join(workDirectory, 'target');
+        await mkdir(targetDirectory, { recursive: true, mode: 0o700 });
+        let failure = null;
+        try {
+          await updater.extractVerifiedArchive({
+            filePath: result.filePath, directory: targetDirectory, tag: selected.release.tag_name,
+            assetName: asset.name, sha256: result.sha256,
+          });
+        } catch (error) { failure = error; }
+        let targetCreated;
+        try { targetCreated = (await readdir(targetDirectory)).length > 0; }
+        catch { targetCreated = true; }
+        const failureCode = failure ? updater.safeArchiveExtractionFailureCode(failure) : 'OTHER';
+        const extractStage = failure ? updater.safeArchiveExtractionStage(failure) : 'unknown';
+        return {
+          status: failureCode === 'UNSUPPORTED_PACKAGE' && extractStage === 'preflight'
+            ? 'verified-incompatible-rejected' : 'unexpected-extraction-result',
+          tag: selected.release.tag_name, assetName: result.assetName,
+          sha256: result.sha256, size: result.size, sourceSha: result.sourceSha,
+          verifierSetupReady, verifierVerified, failureCode, extractStage, targetCreated,
+          relaunchRequested: false,
+        };
+      } catch (error) {
+        return { status: 'control-failed', failureCode: updater?.safeUpdaterFailureCode(error?.failureCode) || 'OTHER' };
+      } finally {
+        if (workDirectory) await rm(workDirectory, { recursive: true, force: true }).catch(() => {});
+        if (updateDownloadController === controller) updateDownloadController = null;
+      }
+    });
+  }
   handle('updates:download', async () => {
     const diagnosticEnabled = process.argv.includes('--tus-smoke-provenance-diagnostic');
     const reportEarlyFailure = failureCode => {

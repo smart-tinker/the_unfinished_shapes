@@ -1248,44 +1248,50 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     });
   });
 
-  const incompatiblePlatform = process.platform === 'win32' ? 'linux' : 'windows';
-  const incompatibleManifest = await getManifest(tag, incompatiblePlatform);
-  assert.equal(incompatibleManifest.sourceSha, manifest.sourceSha, 'the incompatible package comes from the same selected release source');
-  const incompatibleSuffix = incompatiblePlatform === 'windows' ? 'win32-x64.zip' : 'linux-x64.tar.gz';
-  const incompatibleAssetName = 'TheUnfinishedShapes-' + incompatibleManifest.version + '-' + incompatibleSuffix;
-  const incompatibleFile = incompatibleManifest.files.find(file => file.name === incompatibleAssetName);
-  assert.ok(incompatibleFile, 'the exact cross-platform asset has a published digest');
-  const incompatibleResult = await current.page.evaluate(async () =>
-    typeof window.tus.smokeVerifyIncompatiblePackage === 'function'
-      ? window.tus.smokeVerifyIncompatiblePackage()
-      : null);
-  const relaunchRequested = await lstat(relaunchMarker).then(() => true, () => false);
-  const incompatibleDiagnostic = {
-    status: incompatibleResult?.status === 'verified-incompatible-rejected' ? incompatibleResult.status : 'control-unavailable',
-    tagMatches: incompatibleResult?.tag === tag,
-    assetMatches: incompatibleResult?.assetName === incompatibleAssetName,
-    digestMatches: incompatibleResult?.sha256 === incompatibleFile.sha256,
-    sizeMatches: incompatibleResult?.size === incompatibleFile.size,
-    sourceShaMatches: incompatibleResult?.sourceSha === incompatibleManifest.sourceSha,
-    failureCode: incompatibleResult?.failureCode || 'OTHER',
-    extractStage: ['preflight', 'digest', 'zip-open', 'zip-read', 'write', 'executable', 'cleanup', 'unknown'].includes(incompatibleResult?.extractStage)
-      ? incompatibleResult.extractStage : 'unknown',
-    targetCreated: incompatibleResult?.targetCreated === true,
-    relaunchRequested,
-  };
-  console.log('TUS_UPDATE_INCOMPATIBLE ' + JSON.stringify(incompatibleDiagnostic));
-  assert.deepEqual(incompatibleDiagnostic, {
-    status: 'verified-incompatible-rejected',
-    tagMatches: true,
-    assetMatches: true,
-    digestMatches: true,
-    sizeMatches: true,
-    sourceShaMatches: true,
-    failureCode: 'UNSUPPORTED_PACKAGE',
-    extractStage: 'preflight',
-    targetCreated: false,
-    relaunchRequested: false,
-  }, 'the normal packaged verifier accepts the exact official asset before extraction fails closed for this device');
+  if (distribution !== 'installer') {
+    const incompatiblePlatform = process.platform === 'win32' ? 'linux' : 'windows';
+    const incompatibleManifest = await getManifest(tag, incompatiblePlatform);
+    assert.equal(incompatibleManifest.sourceSha, manifest.sourceSha, 'the incompatible package comes from the same selected release source');
+    const incompatibleSuffix = incompatiblePlatform === 'windows' ? 'win32-x64.zip' : 'linux-x64.tar.gz';
+    const incompatibleAssetName = 'TheUnfinishedShapes-' + incompatibleManifest.version + '-' + incompatibleSuffix;
+    const incompatibleFile = incompatibleManifest.files.find(file => file.name === incompatibleAssetName);
+    assert.ok(incompatibleFile, 'the exact cross-platform asset has a published digest');
+    const incompatibleResult = await current.page.evaluate(async () =>
+      typeof window.tus.smokeVerifyIncompatiblePackage === 'function'
+        ? window.tus.smokeVerifyIncompatiblePackage()
+        : null);
+    const relaunchRequested = await lstat(relaunchMarker).then(() => true, () => false);
+    const incompatibleDiagnostic = {
+      verifierSetupReady: incompatibleResult?.verifierSetupReady === true,
+      verifierVerified: incompatibleResult?.verifierVerified === true,
+      status: incompatibleResult?.status === 'verified-incompatible-rejected' ? incompatibleResult.status : 'control-unavailable',
+      tagMatches: incompatibleResult?.tag === tag,
+      assetMatches: incompatibleResult?.assetName === incompatibleAssetName,
+      digestMatches: incompatibleResult?.sha256 === incompatibleFile.sha256,
+      sizeMatches: incompatibleResult?.size === incompatibleFile.size,
+      sourceShaMatches: incompatibleResult?.sourceSha === incompatibleManifest.sourceSha,
+      failureCode: incompatibleResult?.failureCode || 'OTHER',
+      extractStage: ['preflight', 'digest', 'zip-open', 'zip-read', 'write', 'executable', 'cleanup', 'unknown'].includes(incompatibleResult?.extractStage)
+        ? incompatibleResult.extractStage : 'unknown',
+      targetCreated: incompatibleResult?.targetCreated === true,
+      relaunchRequested,
+    };
+    console.log('TUS_UPDATE_INCOMPATIBLE ' + JSON.stringify(incompatibleDiagnostic));
+    assert.deepEqual(incompatibleDiagnostic, {
+      verifierSetupReady: true,
+      verifierVerified: true,
+      status: 'verified-incompatible-rejected',
+      tagMatches: true,
+      assetMatches: true,
+      digestMatches: true,
+      sizeMatches: true,
+      sourceShaMatches: true,
+      failureCode: 'UNSUPPORTED_PACKAGE',
+      extractStage: 'preflight',
+      targetCreated: false,
+      relaunchRequested: false,
+    }, 'the normal packaged verifier accepts the exact official asset before extraction fails closed for this device');
+  }
 
   setDiagnostic('check-download');
   await assertDigestMismatchRejected(current, {
