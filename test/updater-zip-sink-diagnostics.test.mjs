@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as diagnostics from '../scripts/updater-smoke-diagnostics.mjs';
+import { Readable, Writable } from 'node:stream';
 
 test('ZIP sink comparison reports the pinned entry and sanitized paired results', () => {
   assert.equal(typeof diagnostics.safeZipSinkComparison, 'function');
@@ -55,4 +56,35 @@ test('ZIP sink comparison reports the pinned entry and sanitized paired results'
   assert.equal(bounded.arms[0].outcome, 'unknown');
   assert.equal(bounded.arms[0].wallMs, null);
   assert.doesNotMatch(JSON.stringify(bounded), /C:\/private/);
+});
+
+
+test('ZIP pipeline diagnostic selects the production batcher or direct stream without changing bytes', async () => {
+  assert.equal(typeof diagnostics.runZipSinkPipeline, 'function');
+
+  const input = [
+    Buffer.alloc(160 * 1024, 0x31),
+    Buffer.alloc(160 * 1024, 0x62),
+  ];
+  const expected = Buffer.concat(input);
+  const collect = async mode => {
+    const chunks = [];
+    const sink = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+    });
+    await diagnostics.runZipSinkPipeline(Readable.from(input), sink, mode);
+    return chunks;
+  };
+
+  const productionBatcher = await collect('production-batcher');
+  const directStream = await collect('direct-stream');
+  assert.deepEqual(productionBatcher.map(chunk => chunk.length), [256 * 1024, 64 * 1024]);
+  assert.deepEqual(directStream.map(chunk => chunk.length), [160 * 1024, 160 * 1024]);
+  for (const chunks of [productionBatcher, directStream]) {
+    assert.equal(chunks.reduce((total, chunk) => total + chunk.length, 0), expected.length);
+    assert.deepEqual(Buffer.concat(chunks), expected);
+  }
 });
