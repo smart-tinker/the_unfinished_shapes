@@ -1025,5 +1025,6 @@ test('ZIP write batcher preserves bytes and uses only the requested bounded batc
   assert.deepEqual(Buffer.concat(defaultChunks), payload);
   assert.deepEqual(Buffer.concat(productionChunks), payload);
   assert.deepEqual(Buffer.concat(largerChunks), payload);
+  assert.throws(() => createZipWriteBatcher(0), /Invalid ZIP write batch size/);
   assert.throws(() => createZipWriteBatcher(2 * 1024 * 1024), /Invalid ZIP write batch size/);
 });
