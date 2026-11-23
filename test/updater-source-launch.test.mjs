@@ -85,7 +85,9 @@ test('pending ZIP extraction exposes per-entry read, decode and write state with
 
   const sourceText = await readFile(new URL('../src/update-package.mjs', import.meta.url), 'utf8');
   const smoke = await readFile(new URL('../scripts/updater-release-smoke.mjs', import.meta.url), 'utf8');
-  assert.ok(sourceText.includes('safeZipExtractionStreamSnapshot(stream, writeStream, count, entry, compressedReadStream)'));
+  assert.ok(sourceText.includes("platform === 'win32' && extraction.trackDiagnostics && !isAppAsar"));
+  assert.ok(sourceText.includes('trackZipWriteCallback(writeStream)'));
+  assert.ok(sourceText.includes('writeCallbackSnapshot?.()'));
   assert.ok(sourceText.includes("typeof zip.reader?.createReadStream !== 'function'"));
   assert.ok(smoke.includes('streamIntervalMs'));
   assert.ok(smoke.includes('previousStreamSnapshot: previousStreamSnapshot.snapshot'));
