@@ -190,6 +190,7 @@ async function focusByKeyboard(page, selector) {
 
 async function observeUpdaterKeyboardActions(page) {
   await page.evaluate(() => {
+    window.__tusUpdaterSmokeDiagnostic = true;
     window.__tusUpdaterKeyboardActions = [];
     window.__tusUpdateDialogWaiting = false;
     window.__tusUpdateDialogKey = null;
@@ -219,7 +220,7 @@ async function activateUpdaterButtonByKeyboard(page, id) {
   assert.equal(await lastUpdaterKeyboardAction(page), id, id + ' is activated by keyboard');
 }
 
-async function respondToUpdateLaunch(current, dialogMarker, key) {
+async function respondToUpdateLaunch(current, dialogMarker, key, manifestFile, assetName, tag) {
   const diagnostic = {
     button: 'not-started',
     prompt: 'not-started',
@@ -231,6 +232,8 @@ async function respondToUpdateLaunch(current, dialogMarker, key) {
     await activateUpdaterButtonByKeyboard(current.page, 'updates-launch');
     diagnostic.button = 'keyboard-activated';
     diagnostic.prompt = await waitForFile(dialogMarker, 5000) ? 'invoked' : 'missing';
+    const runtime = await updaterRuntimeBoundary(current, manifestFile, assetName, tag, 1000).catch(() => []);
+    diagnostic.launchBoundary = runtime.find(item => item.stage === 'update-launch') ?? null;
     assert.equal(diagnostic.prompt, 'invoked', 'the launch approval prompt was invoked');
     await current.page.evaluate(() => {
       window.__tusUpdateDialogKey = null;
@@ -274,15 +277,31 @@ async function fileDigest(filePath) {
   return hash.digest('hex');
 }
 
-async function updaterRuntimeBoundary(current, manifestFile, assetName, tag) {
-  const [main, rendererInvoke] = await Promise.all([
-    withTimeout(current.instance.evaluate(() => globalThis.__tusUpdaterSmokeBoundary || null), 'Updater main boundary snapshot', 5000).catch(() => null),
-    withTimeout(current.page.evaluate(() => document.querySelector('#updates-status')?.dataset.updateInvokeStatus || 'not-started'), 'Updater renderer invoke snapshot', 5000).catch(() => null),
+async function updaterRuntimeBoundary(current, manifestFile, assetName, tag, snapshotTimeoutMs = 5000) {
+  const [main, rendererInvoke, rendererLaunch] = await Promise.all([
+    withTimeout(current.instance.evaluate(() => globalThis.__tusUpdaterSmokeBoundary || null), 'Updater main boundary snapshot', snapshotTimeoutMs).catch(() => null),
+    withTimeout(current.page.evaluate(() => document.querySelector('#updates-status')?.dataset.updateInvokeStatus || 'not-started'), 'Updater renderer invoke snapshot', snapshotTimeoutMs).catch(() => null),
+    withTimeout(current.page.evaluate(() => {
+      const status = document.querySelector('#updates-status');
+      return {
+        clickStatus: status?.dataset.updateLaunchClickStatus || 'not-started',
+        invokeStatus: status?.dataset.updateLaunchInvokeStatus || 'not-started',
+      };
+    }), 'Updater launch invoke snapshot', snapshotTimeoutMs).catch(() => null),
   ]);
   return safeMainDiagnostics([
     { stage: 'updater-module-import', status: main?.moduleImport, moduleFailureCode: main?.moduleFailureCode, moduleFailureName: main?.moduleFailureName },
     { stage: 'download-verified-asset', status: main?.downloadVerifiedAsset },
     { stage: 'renderer-invoke', status: rendererInvoke },
+    {
+      stage: 'update-launch',
+      status: main?.launchStatus,
+      launchPhase: main?.launchPhase,
+      launchDialog: main?.launchDialog,
+      launchDecision: main?.launchDecision,
+      rendererClickStatus: rendererLaunch?.clickStatus,
+      rendererInvokeStatus: rendererLaunch?.invokeStatus,
+    },
   ], manifestFile, assetName, tag);
 }
 
@@ -520,10 +539,14 @@ async function configureUpdateDialogs(instance, { downloadsDir, extractDir, dial
       return { canceled: false, filePaths: [config.extractDir] };
     };
     dialog.showMessageBox = async (_window, options) => new Promise((resolve, reject) => {
+      const boundary = globalThis.__tusUpdaterSmokeBoundary;
+      if (boundary) boundary.launchDialog = 'invoked';
       globalThis.__tusUpdateDialogResolve = resolve;
       try {
         writeFileSync(config.dialogMarker, JSON.stringify({ title: options.title, buttons: options.buttons }));
+        if (boundary) boundary.launchDialog = 'marker-written';
       } catch (error) {
+        if (boundary) boundary.launchDialog = 'marker-write-failed';
         delete globalThis.__tusUpdateDialogResolve;
         reject(error);
       }
@@ -1613,10 +1636,13 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   }
 
   setDiagnostic(distribution === 'installer' ? 'relaunch-cancel' : 'relaunch');
-  await respondToUpdateLaunch(current, dialogMarker, 'Escape');
+  await respondToUpdateLaunch(current, dialogMarker, 'Escape', manifestFile, assetName, tag);
   let cancelStatus = 'cancelled';
   try {
     await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Update launch cancelled.');
+    const runtime = await updaterRuntimeBoundary(current, manifestFile, assetName, tag, 1000).catch(() => []);
+    const responseBoundary = runtime.find(item => item.stage === 'update-launch') ?? null;
+    console.log('TUS_UPDATE_LAUNCH_RESPONSE ' + JSON.stringify(responseBoundary));
   } catch (error) {
     cancelStatus = error?.name === 'TimeoutError' ? 'timeout' : 'unavailable';
     console.log('TUS_UPDATE_LAUNCH_CANCEL ' + JSON.stringify({ status: cancelStatus }));
@@ -1644,7 +1670,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     try {
       await runWindowsRelaunch({
       child,
-      click: () => respondToUpdateLaunch(closing, dialogMarker, 'Enter').catch(error => {
+      click: () => respondToUpdateLaunch(closing, dialogMarker, 'Enter', manifestFile, assetName, tag).catch(error => {
         if (child.exitCode === null) throw error;
       }),
       waitForExit,
@@ -1675,7 +1701,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     if (relaunchFailure) throw relaunchFailure;
   } else {
     const exit = waitForExit(closing.instance.process());
-    const approval = respondToUpdateLaunch(closing, dialogMarker, 'Enter').catch(error => {
+    const approval = respondToUpdateLaunch(closing, dialogMarker, 'Enter', manifestFile, assetName, tag).catch(error => {
       if (closing.instance.process().exitCode === null) throw error;
     });
     setDiagnostic('relaunch');

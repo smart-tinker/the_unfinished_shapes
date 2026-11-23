@@ -29,6 +29,11 @@ const safeExtractRendererStatuses = new Map([
   ['Folder selection cancelled.', 'cancelled'],
 ]);
 const safeExtractInvokeStatuses = new Set(['not-started', 'pending', 'fulfilled', 'rejected']);
+const safeUpdateLaunchPhases = new Set(['unknown', 'rehash', 'dialog', 'response']);
+const safeUpdateLaunchDialogs = new Set(['not-started', 'invoked', 'marker-written', 'marker-write-failed']);
+const safeUpdateLaunchDecisions = new Set(['not-started', 'cancelled', 'approved']);
+const safeUpdateLaunchClickStatuses = new Set(['not-started', 'received']);
+const safeUpdateLaunchInvokeStatuses = new Set(['not-started', 'pending', 'fulfilled', 'rejected']);
 const safeExtractMainStatuses = new Set(['not-started', 'starting', 'fulfilled', 'rejected']);
 const safeExtractPhases = new Set(['preflight', 'digest', 'zip-open', 'zip-read', 'write', 'executable', 'cleanup', 'fulfilled', 'rejected', 'unknown']);
 const safeExtractSubstages = new Set(['none', 'directory-mkdir', 'parent-mkdir', 'read-stream-open', 'pipeline', 'unknown']);
@@ -385,11 +390,11 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
   return (Array.isArray(live) ? live : []).slice(0, 40).map(item => ({
     bundleIndex: Number.isInteger(item?.bundleIndex) && item.bundleIndex >= 0 && item.bundleIndex < 20 ? item.bundleIndex : null,
     bundleSha256: typeof item?.bundleSha256 === 'string' && /^[a-f0-9]{64}$/.test(item.bundleSha256) ? item.bundleSha256 : null,
-    stage: ['updater-module-import', 'download-verified-asset', 'renderer-invoke', 'extract-archive', 'extract-failed', 'main-catch-fallback', 'verify-start', 'verify-result', 'verifier-setup', 'verifier-verify', 'verifier-tampered-control'].includes(item?.stage) ? item.stage : 'unknown',
+    stage: ['updater-module-import', 'download-verified-asset', 'renderer-invoke', 'extract-archive', 'extract-failed', 'main-catch-fallback', 'verify-start', 'verify-result', 'verifier-setup', 'verifier-verify', 'verifier-tampered-control', 'update-launch'].includes(item?.stage) ? item.stage : 'unknown',
     status: ['not-started', 'pending', 'fulfilled', 'starting', 'ready', 'synthetic-other', 'verified', 'rejected', 'tampered-rejected', 'tampered-accepted', 'tampered-unavailable'].includes(item?.status)
       ? item.status : item?.stage === 'verify-start' ? 'started' : 'unknown',
     assetMatches: item?.assetName === assetName && item?.assetSha256 === manifestFile.sha256 && item?.tag === tag,
-    ...(item?.status === 'rejected' && item?.stage !== 'updater-module-import' && item?.stage !== 'renderer-invoke' && item?.stage !== 'extract-failed' && item?.stage !== 'extract-archive' ? {
+    ...(item?.status === 'rejected' && item?.stage !== 'updater-module-import' && item?.stage !== 'renderer-invoke' && item?.stage !== 'extract-failed' && item?.stage !== 'extract-archive' && item?.stage !== 'update-launch' ? {
       failureCode: safeUpdaterFailureCode(item.failureCode),
       ...(item?.stage === 'verifier-setup' ? {
         verifierSetupStage: safeVerifierSetupStages.has(item.verifierSetupStage) ? item.verifierSetupStage : 'unknown',
@@ -403,6 +408,13 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
     ...(item?.stage === 'updater-module-import' && item?.status === 'rejected' ? {
       moduleFailureCode: safeModuleFailureCodes.has(item?.moduleFailureCode) ? item.moduleFailureCode : 'OTHER',
       moduleFailureName: safeUpdaterModuleName(item?.moduleFailureName),
+    } : {}),
+    ...(item?.stage === 'update-launch' ? {
+      launchPhase: safeUpdateLaunchPhases.has(item.launchPhase) ? item.launchPhase : 'unknown',
+      launchDialog: safeUpdateLaunchDialogs.has(item.launchDialog) ? item.launchDialog : 'unknown',
+      launchDecision: safeUpdateLaunchDecisions.has(item.launchDecision) ? item.launchDecision : 'unknown',
+      rendererClickStatus: safeUpdateLaunchClickStatuses.has(item.rendererClickStatus) ? item.rendererClickStatus : 'unknown',
+      rendererInvokeStatus: safeUpdateLaunchInvokeStatuses.has(item.rendererInvokeStatus) ? item.rendererInvokeStatus : 'unknown',
     } : {}),
     ...(item?.stage === 'extract-failed' && item?.status === 'rejected' ? {
       failureCode: typeof item.failureCode === 'string' ? safeArchiveFailureCode(item.failureCode) : null,

@@ -18,7 +18,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld, gameToolSession, fullscreenRestoreBounds;
 let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, extractedUpdate = null, updateDownloadController = null;
 const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic')
-  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null }
+  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null, launchStatus: 'not-started', launchPhase: 'unknown', launchDialog: 'not-started', launchDecision: 'not-started' }
   : null;
 if (updaterSmokeBoundary) {
   globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
@@ -337,26 +337,44 @@ app.whenReady().then(async()=>{
     return { extracted: true };
   });
   handle('updates:launch', async () => {
-    if (!downloadedUpdate) throw new Error('Download and verify the update first.');
-    let executable;
-    if (downloadedUpdate.distribution === 'installer') {
-      const { verifyDownloadedFile } = await import('./update-package.mjs');
-      await verifyDownloadedFile({ filePath: downloadedUpdate.filePath, sha256: downloadedUpdate.sha256 });
-      executable = downloadedUpdate.filePath;
-    } else {
-      if (!extractedUpdate) throw new Error('Extract the verified archive first.');
-      executable = extractedUpdate.executablePath;
+    if (updaterSmokeBoundary) {
+      updaterSmokeBoundary.launchStatus = 'starting';
+      updaterSmokeBoundary.launchPhase = 'unknown';
+      updaterSmokeBoundary.launchDialog = 'not-started';
+      updaterSmokeBoundary.launchDecision = 'not-started';
     }
-    const choice = await dialog.showMessageBox(win, {
-      type: 'info', title: 'Start verified update',
-      message: 'TUS will close and start the verified update package.',
-      detail: 'The Codex connection closes with this app. The saved world and settings remain in place.',
-      buttons: ['Cancel', 'Quit and launch'], defaultId: 0, cancelId: 0,
-    });
-    if (choice.response !== 1) return { started: false };
-    pendingRelaunch = executable;
-    app.quit();
-    return { started: true };
+    try {
+      if (!downloadedUpdate) throw new Error('Download and verify the update first.');
+      let executable;
+      if (downloadedUpdate.distribution === 'installer') {
+        if (updaterSmokeBoundary) updaterSmokeBoundary.launchPhase = 'rehash';
+        const { verifyDownloadedFile } = await import('./update-package.mjs');
+        await verifyDownloadedFile({ filePath: downloadedUpdate.filePath, sha256: downloadedUpdate.sha256 });
+        executable = downloadedUpdate.filePath;
+      } else {
+        if (!extractedUpdate) throw new Error('Extract the verified archive first.');
+        executable = extractedUpdate.executablePath;
+      }
+      if (updaterSmokeBoundary) updaterSmokeBoundary.launchPhase = 'dialog';
+      const choice = await dialog.showMessageBox(win, {
+        type: 'info', title: 'Start verified update',
+        message: 'TUS will close and start the verified update package.',
+        detail: 'The Codex connection closes with this app. The saved world and settings remain in place.',
+        buttons: ['Cancel', 'Quit and launch'], defaultId: 0, cancelId: 0,
+      });
+      if (updaterSmokeBoundary) {
+        updaterSmokeBoundary.launchPhase = 'response';
+        updaterSmokeBoundary.launchDecision = choice.response === 1 ? 'approved' : 'cancelled';
+        updaterSmokeBoundary.launchStatus = 'fulfilled';
+      }
+      if (choice.response !== 1) return { started: false };
+      pendingRelaunch = executable;
+      app.quit();
+      return { started: true };
+    } catch (error) {
+      if (updaterSmokeBoundary) updaterSmokeBoundary.launchStatus = 'rejected';
+      throw error;
+    }
   });
   handle('codex:find',()=>findCodex());
   handle('path:choose',async(kind)=>{if(!['workspace','codex'].includes(kind)) throw new Error('Unsupported path choice');const result=await dialog.showOpenDialog(win,{title:kind==='workspace'?'Choose game repository':'Choose Codex executable',properties:[kind==='workspace'?'openDirectory':'openFile']});return result.canceled?null:result.filePaths[0];});

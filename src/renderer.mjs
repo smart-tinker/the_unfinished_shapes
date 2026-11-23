@@ -1304,10 +1304,19 @@ $('updates-extract').addEventListener('click', async () => {
   finally { updateBusy = false; updateButtons(); }
 });
 $('updates-launch').addEventListener('click', async () => {
+  const status = $('updates-status');
+  if (window.__tusUpdaterSmokeDiagnostic === true) {
+    status.dataset.updateLaunchClickStatus = 'received';
+    status.dataset.updateLaunchInvokeStatus = 'pending';
+  }
   try {
     const result = await bridge.launchUpdate();
+    if (window.__tusUpdaterSmokeDiagnostic === true) status.dataset.updateLaunchInvokeStatus = 'fulfilled';
     updateStatus(result.started ? 'Waiting for the quit confirmation…' : 'Update launch cancelled.');
-  } catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
+  } catch (error) {
+    if (window.__tusUpdaterSmokeDiagnostic === true) status.dataset.updateLaunchInvokeStatus = 'rejected';
+    updateStatus(String(error?.message || error).slice(0, 300));
+  }
 });
 bridge?.onUpdateProgress(progress => {
   if (progress?.state === 'downloading') {
