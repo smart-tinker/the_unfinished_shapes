@@ -1,6 +1,7 @@
 import { createWriteStream } from 'node:fs';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import yauzl from 'yauzl';
 import { createZipWriteBatcher, openZipReadStream, safeArchiveExtractionOperation, safeArchiveExtractionStage, safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, zipReadChunkBytes, zipWriteBatchBytes } from '../src/update-package.mjs';
@@ -132,12 +133,12 @@ export function zipBatcherScratchPrefix(archivePath) {
   return path.join(path.dirname(archivePath), 'tus-zip-batcher-');
 }
 const zipBatcherArmPlan = Object.freeze([
-  { trial: 1, batchBytes: zipWriteBatchBytes },
-  { trial: 1, batchBytes: 1024 * 1024 },
-  { trial: 2, batchBytes: 1024 * 1024 },
-  { trial: 2, batchBytes: zipWriteBatchBytes },
+  { trial: 1, sink: 'count-discard' },
+  { trial: 1, sink: 'node-fs-file' },
+  { trial: 2, sink: 'node-fs-file' },
+  { trial: 2, sink: 'count-discard' },
 ]);
-const safeZipBatchBytes = new Set([zipWriteBatchBytes, 1024 * 1024]);
+const safeZipSinks = new Set(['count-discard', 'node-fs-file']);
 const safeZipBatcherOutcomes = new Set(['completed', 'time-limit', 'failed', 'unknown']);
 const safeZipCleanupStatuses = new Set(['removed', 'not-created', 'failed', 'unknown']);
 
@@ -153,19 +154,21 @@ export function safeZipBatcherComparison(value) {
   const entryUncompressedSize = safeZipSinkMetric(value?.entryUncompressedSize, 1_073_741_824);
   const entryNonAsar = value?.entryNonAsar === true;
   const arms = (Array.isArray(value?.arms) ? value.arms : []).slice(0, zipBatcherArmPlan.length).map(arm => {
+    const sink = safeZipSinks.has(arm?.sink) ? arm.sink : 'unknown';
     const decodedBytes = safeZipSinkMetric(arm?.decodedBytes, 1_073_741_824);
-    const sinkBytesWritten = safeZipSinkMetric(arm?.sinkBytesWritten, 1_073_741_824);
+    const sinkBytesProcessed = safeZipSinkMetric(arm?.sinkBytesProcessed, 1_073_741_824);
     return {
       trial: [1, 2].includes(arm?.trial) ? arm.trial : null,
-      batchBytes: safeZipBatchBytes.has(arm?.batchBytes) ? arm.batchBytes : null,
+      sink,
+      batchBytes: arm?.batchBytes === zipWriteBatchBytes ? zipWriteBatchBytes : null,
       outcome: safeZipBatcherOutcomes.has(arm?.outcome) ? arm.outcome : 'unknown',
       wallMs: safeZipSinkMetric(arm?.wallMs, 60_000),
       cpuUserMs: safeZipSinkMetric(arm?.cpuUserMs, 120_000),
       cpuSystemMs: safeZipSinkMetric(arm?.cpuSystemMs, 120_000),
       compressedBytesRead: safeZipSinkMetric(arm?.compressedBytesRead, 500_000_000),
       decodedBytes,
-      sinkBytesWritten,
-      countersMatch: decodedBytes !== null && sinkBytesWritten !== null ? decodedBytes === sinkBytesWritten : null,
+      sinkBytesProcessed,
+      countersMatch: decodedBytes !== null && sinkBytesProcessed !== null ? decodedBytes === sinkBytesProcessed : null,
       sourceReadableEnded: arm?.sourceReadableEnded === true,
       sinkWritableFinished: arm?.sinkWritableFinished === true,
       sinkClosed: arm?.sinkClosed === true,
@@ -182,11 +185,11 @@ export function safeZipBatcherComparison(value) {
     entryMatches: value?.entryMatches === true && entrySequence === zipSinkEntrySequence &&
       compression === 'deflate' && entryCompressedSize === zipSinkEntryCompressedSize &&
       entryUncompressedSize === zipSinkEntryUncompressedSize && entryNonAsar,
-    sink: value?.sink === 'wx-0600-file' ? value.sink : 'unknown',
+    batchBytes: value?.batchBytes === zipWriteBatchBytes ? zipWriteBatchBytes : null,
+    sinkOrder: arms.map(arm => arm.sink),
     readHighWaterMarkBytes: safeZipSinkMetric(value?.readHighWaterMarkBytes, 1_073_741_824),
     writeHighWaterMarkBytes: safeZipSinkMetric(value?.writeHighWaterMarkBytes, 1_073_741_824),
-    batchBytesOrder: arms.map(arm => arm.batchBytes),
-    cacheCaveat: 'batch-size-order-counterbalanced; filesystem-read-cache-not-reset',
+    cacheCaveat: 'sink-order-counterbalanced; filesystem-read-cache-not-reset',
     measurementScope: 'pipeline-only',
     arms,
   };
@@ -230,7 +233,7 @@ export function runZipSinkPipeline(source, sink, batchBytes, signal) {
   return pipeline(source, createZipWriteBatcher(batchBytes), sink, { signal });
 }
 
-async function measureZipBatcherArm(archivePath, batchBytes) {
+async function measureZipBatcherArm(archivePath, sinkType) {
   let entryInfo = {
     entrySequence: null, compression: 'unknown',
     entryCompressedSize: null, entryUncompressedSize: null,
@@ -238,10 +241,11 @@ async function measureZipBatcherArm(archivePath, batchBytes) {
   };
   const arm = {
     outcome: 'failed', wallMs: null, cpuUserMs: null, cpuSystemMs: null,
-    compressedBytesRead: null, decodedBytes: null, sinkBytesWritten: null,
+    compressedBytesRead: null, decodedBytes: null, sinkBytesProcessed: null,
     sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
     cleanupStatus: 'not-created',
   };
+  let sinkByteCount = 0;
   let zip, selected, source, compressedReadStream, sink, tempDirectory, filePath, timer, timedOut = false;
   try {
     zip = await yauzl.openPromise(archivePath, { strictFileNames: true, validateEntrySizes: true });
@@ -270,18 +274,28 @@ async function measureZipBatcherArm(archivePath, batchBytes) {
     const opened = await openZipReadStream(zip, entry, true, zipReadChunkBytes);
     source = opened.stream;
     compressedReadStream = opened.compressedReadStream;
-    tempDirectory = await mkdtemp(zipBatcherScratchPrefix(archivePath));
-    filePath = path.join(tempDirectory, 'entry.bin');
-    sink = createWriteStream(filePath, {
-      flags: 'wx', mode: 0o600, highWaterMark: zipBatcherWriteHighWaterMarkBytes,
-    });
+    if (sinkType === 'node-fs-file') {
+      tempDirectory = await mkdtemp(zipBatcherScratchPrefix(archivePath));
+      filePath = path.join(tempDirectory, 'entry.bin');
+      sink = createWriteStream(filePath, {
+        flags: 'wx', mode: 0o600, highWaterMark: zipBatcherWriteHighWaterMarkBytes,
+      });
+    } else {
+      sink = new Writable({
+        highWaterMark: zipBatcherWriteHighWaterMarkBytes,
+        write(chunk, _encoding, callback) {
+          sinkByteCount += chunk.length;
+          callback();
+        },
+      });
+    }
 
     const controller = new AbortController();
     const cpuStart = process.cpuUsage();
     const startedAt = performance.now();
     timer = setTimeout(() => { timedOut = true; controller.abort(); }, zipBatcherArmTimeoutMs);
     try {
-      await runZipSinkPipeline(source, sink, batchBytes, controller.signal);
+      await runZipSinkPipeline(source, sink, zipWriteBatchBytes, controller.signal);
       arm.outcome = 'completed';
     } catch {
       arm.outcome = timedOut ? 'time-limit' : 'failed';
@@ -299,8 +313,12 @@ async function measureZipBatcherArm(archivePath, batchBytes) {
       arm.sinkWritableFinished = sink?.writableFinished === true;
       arm.sinkClosed = sink?.closed === true;
       try {
-        const result = await stat(filePath);
-        arm.sinkBytesWritten = Number.isSafeInteger(result.size) ? result.size : null;
+        if (sinkType === 'node-fs-file') {
+          const result = await stat(filePath);
+          arm.sinkBytesProcessed = Number.isSafeInteger(result.size) ? result.size : null;
+        } else {
+          arm.sinkBytesProcessed = sinkByteCount;
+        }
       } catch {}
     }
   } catch {
@@ -332,8 +350,8 @@ export async function compareVerifiedWindowsZipBatcher(archivePath, assetMatches
   const arms = [];
   let entryInfo = null;
   let allEntriesMatch = true;
-  for (const { trial, batchBytes } of zipBatcherArmPlan) {
-    const measured = await measureZipBatcherArm(archivePath, batchBytes);
+  for (const { trial, sink } of zipBatcherArmPlan) {
+    const measured = await measureZipBatcherArm(archivePath, sink);
     if (entryInfo === null) {
       entryInfo = measured.entryInfo;
       allEntriesMatch = entryInfo.entryMatches;
@@ -345,14 +363,14 @@ export async function compareVerifiedWindowsZipBatcher(archivePath, assetMatches
         measured.entryInfo.entryNonAsar === entryInfo.entryNonAsar;
       allEntriesMatch = allEntriesMatch && measured.entryInfo.entryMatches && sameEntry;
     }
-    arms.push({ trial, batchBytes, ...measured.arm });
+    arms.push({ trial, sink, batchBytes: zipWriteBatchBytes, ...measured.arm });
     if (!allEntriesMatch) break;
   }
   return safeZipBatcherComparison({
     assetMatches: true,
     ...(entryInfo ?? {}),
     entryMatches: allEntriesMatch && arms.length === zipBatcherArmPlan.length,
-    sink: 'wx-0600-file',
+    batchBytes: zipWriteBatchBytes,
     readHighWaterMarkBytes: zipReadChunkBytes,
     writeHighWaterMarkBytes: zipBatcherWriteHighWaterMarkBytes,
     arms,

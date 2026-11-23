@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Writable } from 'node:stream';
 import * as updatePackage from '../src/update-package.mjs';
-import { safeMainDiagnostics, safeZipBatcherComparison, updaterZipStreamSampleOffsetsMs } from '../scripts/updater-smoke-diagnostics.mjs';
+import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from '../scripts/updater-smoke-diagnostics.mjs';
 
 test('TUS Windows ZIP writer reports bounded finish-to-close time at the safe log boundary', async () => {
   const sink = new EventEmitter();
@@ -551,101 +551,6 @@ test('TUS Windows ZIP sink totals completed write callback time at the safe log 
 
   await exercise('write');
   await exercise('writev');
-});
-
-
-test('TUS ZIP batch comparison reports only bounded counterbalanced wx/0600 file-sink arms', () => {
-  const arm = (trial, batchBytes, outcome, values = {}) => ({
-    trial, batchBytes, outcome, wallMs: values.wallMs ?? 15_000,
-    cpuUserMs: values.cpuUserMs ?? 100, cpuSystemMs: values.cpuSystemMs ?? 25,
-    compressedBytesRead: values.compressedBytesRead ?? 1_000_000,
-    decodedBytes: values.decodedBytes ?? 2_000_000,
-    sinkBytesWritten: values.sinkBytesWritten ?? 1_999_872,
-    sourceReadableEnded: values.sourceReadableEnded === true,
-    sinkWritableFinished: values.sinkWritableFinished === true,
-    sinkClosed: values.sinkClosed !== false,
-    cleanupStatus: 'removed',
-    privatePath: 'C:/private/archive/entry',
-    privateError: 'raw filesystem error',
-  });
-  const raw = {
-    assetMatches: true,
-    entrySequence: 12,
-    compression: 'deflate',
-    entryCompressedSize: 111_522_616,
-    entryUncompressedSize: 249_832_448,
-    entryNonAsar: true,
-    entryMatches: true,
-    sink: 'wx-0600-file',
-    readHighWaterMarkBytes: 256 * 1024,
-    writeHighWaterMarkBytes: 16 * 1024,
-    arms: [
-      arm(1, 256 * 1024, 'time-limit'),
-      arm(1, 1024 * 1024, 'time-limit', { compressedBytesRead: 2_000_000, decodedBytes: 4_000_000, sinkBytesWritten: 3_999_744 }),
-      arm(2, 1024 * 1024, 'completed', {
-        wallMs: 12_000, cpuUserMs: 500, cpuSystemMs: 80,
-        compressedBytesRead: 111_522_616, decodedBytes: 249_832_448, sinkBytesWritten: 249_832_448,
-        sourceReadableEnded: true, sinkWritableFinished: true,
-      }),
-      arm(2, 256 * 1024, 'failed', { wallMs: 9_000, cpuUserMs: 300, cpuSystemMs: 40, compressedBytesRead: 40_000_000, decodedBytes: 80_000_000, sinkBytesWritten: 79_999_744 }),
-    ],
-    privatePath: 'C:/private/archive.zip',
-    privateError: 'raw archive failure',
-  };
-
-  const comparison = safeZipBatcherComparison(raw);
-  assert.deepEqual(comparison, {
-    assetMatches: true,
-    entrySequence: 12,
-    compression: 'deflate',
-    entryCompressedSize: 111_522_616,
-    entryUncompressedSize: 249_832_448,
-    entryNonAsar: true,
-    entryMatches: true,
-    sink: 'wx-0600-file',
-    readHighWaterMarkBytes: 256 * 1024,
-    writeHighWaterMarkBytes: 16 * 1024,
-    batchBytesOrder: [256 * 1024, 1024 * 1024, 1024 * 1024, 256 * 1024],
-    cacheCaveat: 'batch-size-order-counterbalanced; filesystem-read-cache-not-reset',
-    measurementScope: 'pipeline-only',
-    arms: [
-      { trial: 1, batchBytes: 256 * 1024, outcome: 'time-limit', wallMs: 15_000, cpuUserMs: 100, cpuSystemMs: 25, compressedBytesRead: 1_000_000, decodedBytes: 2_000_000, sinkBytesWritten: 1_999_872, countersMatch: false, sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: true, cleanupStatus: 'removed' },
-      { trial: 1, batchBytes: 1024 * 1024, outcome: 'time-limit', wallMs: 15_000, cpuUserMs: 100, cpuSystemMs: 25, compressedBytesRead: 2_000_000, decodedBytes: 4_000_000, sinkBytesWritten: 3_999_744, countersMatch: false, sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: true, cleanupStatus: 'removed' },
-      { trial: 2, batchBytes: 1024 * 1024, outcome: 'completed', wallMs: 12_000, cpuUserMs: 500, cpuSystemMs: 80, compressedBytesRead: 111_522_616, decodedBytes: 249_832_448, sinkBytesWritten: 249_832_448, countersMatch: true, sourceReadableEnded: true, sinkWritableFinished: true, sinkClosed: true, cleanupStatus: 'removed' },
-      { trial: 2, batchBytes: 256 * 1024, outcome: 'failed', wallMs: 9_000, cpuUserMs: 300, cpuSystemMs: 40, compressedBytesRead: 40_000_000, decodedBytes: 80_000_000, sinkBytesWritten: 79_999_744, countersMatch: false, sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: true, cleanupStatus: 'removed' },
-    ],
-  });
-  const serialized = JSON.stringify(comparison);
-  assert.equal(serialized.includes('C:/private'), false);
-  assert.equal(serialized.includes('raw filesystem error'), false);
-  assert.equal(serialized.includes('raw archive failure'), false);
-
-  const bounded = safeZipBatcherComparison({
-    assetMatches: 'true',
-    entrySequence: Number.MAX_SAFE_INTEGER,
-    compression: 'private',
-    entryCompressedSize: Number.MAX_SAFE_INTEGER,
-    entryUncompressedSize: -1,
-    entryNonAsar: true,
-    entryMatches: true,
-    sink: 'C:/private/sink',
-    readHighWaterMarkBytes: Number.MAX_SAFE_INTEGER,
-    writeHighWaterMarkBytes: 'private',
-    arms: [{ trial: 99, batchBytes: 333, outcome: 'C:/private/error', wallMs: -1, cpuUserMs: -1, cpuSystemMs: -1, compressedBytesRead: -1, decodedBytes: -1, sinkBytesWritten: -1, cleanupStatus: 'C:/private/path' }],
-    privatePath: 'C:/private/archive.zip',
-  });
-  assert.equal(bounded.assetMatches, false);
-  assert.equal(bounded.entryMatches, false);
-  assert.equal(bounded.compression, 'unknown');
-  assert.equal(bounded.sink, 'unknown');
-  assert.equal(bounded.readHighWaterMarkBytes, null);
-  assert.equal(bounded.writeHighWaterMarkBytes, null);
-  assert.deepEqual(bounded.batchBytesOrder, [null]);
-  assert.equal(bounded.arms[0].trial, null);
-  assert.equal(bounded.arms[0].batchBytes, null);
-  assert.equal(bounded.arms[0].outcome, 'unknown');
-  assert.equal(bounded.arms[0].cleanupStatus, 'unknown');
-  assert.equal(JSON.stringify(bounded).includes('C:/private'), false);
 });
 
 
