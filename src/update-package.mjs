@@ -20,10 +20,13 @@ const maxExtractedBytes = 1_073_741_824;
 const maxArchiveEntries = 20_000;
 export const zipReadChunkBytes = 256 * 1024;
 
-const zipWriteBatchBytes = 256 * 1024;
+export const zipWriteBatchBytes = 256 * 1024;
 
-export function createZipWriteBatcher() {
-  let pending = Buffer.allocUnsafe(zipWriteBatchBytes);
+export function createZipWriteBatcher(batchBytes = zipWriteBatchBytes) {
+  if (!Number.isSafeInteger(batchBytes) || batchBytes < 1 || batchBytes > 1024 * 1024) {
+    throw new RangeError('Invalid ZIP write batch size');
+  }
+  let pending = Buffer.allocUnsafe(batchBytes);
   let pendingBytes = 0;
   return new Transform({
     transform(chunk, _encoding, callback) {
@@ -31,13 +34,13 @@ export function createZipWriteBatcher() {
         const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         let offset = 0;
         while (offset < input.length) {
-          const length = Math.min(zipWriteBatchBytes - pendingBytes, input.length - offset);
+          const length = Math.min(batchBytes - pendingBytes, input.length - offset);
           input.copy(pending, pendingBytes, offset, offset + length);
           pendingBytes += length;
           offset += length;
-          if (pendingBytes === zipWriteBatchBytes) {
+          if (pendingBytes === batchBytes) {
             this.push(pending);
-            pending = Buffer.allocUnsafe(zipWriteBatchBytes);
+            pending = Buffer.allocUnsafe(batchBytes);
             pendingBytes = 0;
           }
         }

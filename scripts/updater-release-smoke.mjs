@@ -1629,22 +1629,25 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   }
 
   if (zipBatcherComparison) {
-    assert.equal(zipBatcherComparison.assetMatches, true, 'batcher comparison uses the exact verified RC11 asset');
+    assert.equal(zipBatcherComparison.assetMatches, true, 'batch-size comparison uses the exact verified RC11 asset');
     assert.equal(zipBatcherComparison.entryMatches, true, 'each arm reads the exact published non-ASAR Deflate entry');
-    assert.equal(zipBatcherComparison.sink, 'count-discard');
+    assert.equal(zipBatcherComparison.sink, 'wx-0600-file');
+    assert.equal(zipBatcherComparison.readHighWaterMarkBytes, 256 * 1024);
+    assert.equal(zipBatcherComparison.writeHighWaterMarkBytes, 16 * 1024);
     assert.equal(zipBatcherComparison.measurementScope, 'pipeline-only');
     const expectedArms = [
-      { trial: 1, batcher: 'production-batcher' },
-      { trial: 1, batcher: 'direct-stream' },
-      { trial: 2, batcher: 'direct-stream' },
-      { trial: 2, batcher: 'production-batcher' },
+      { trial: 1, batchBytes: 256 * 1024 },
+      { trial: 1, batchBytes: 1024 * 1024 },
+      { trial: 2, batchBytes: 1024 * 1024 },
+      { trial: 2, batchBytes: 256 * 1024 },
     ];
-    assert.deepEqual(zipBatcherComparison.batcherOrder, expectedArms.map(arm => arm.batcher));
-    assert.deepEqual(zipBatcherComparison.arms.map(({ trial, batcher }) => ({ trial, batcher })), expectedArms);
+    assert.deepEqual(zipBatcherComparison.batchBytesOrder, expectedArms.map(arm => arm.batchBytes));
+    assert.deepEqual(zipBatcherComparison.arms.map(({ trial, batchBytes }) => ({ trial, batchBytes })), expectedArms);
     for (const arm of zipBatcherComparison.arms) {
-      assert.ok(['completed', 'time-limit'].includes(arm.outcome), 'each bounded batcher arm produced a measurement');
+      assert.ok(['completed', 'time-limit'].includes(arm.outcome), 'each bounded file-sink arm produced a measurement');
+      assert.equal(arm.cleanupStatus, 'removed', 'each private diagnostic file is removed');
       for (const key of ['wallMs', 'cpuUserMs', 'cpuSystemMs', 'compressedBytesRead', 'decodedBytes', 'sinkBytesWritten']) {
-        assert.ok(Number.isSafeInteger(arm[key]) && arm[key] >= 0, 'each batcher arm reports bounded ' + key);
+        assert.ok(Number.isSafeInteger(arm[key]) && arm[key] >= 0, 'each file-sink arm reports bounded ' + key);
       }
       if (arm.outcome === 'completed') {
         assert.equal(arm.compressedBytesRead, zipBatcherComparison.entryCompressedSize);
