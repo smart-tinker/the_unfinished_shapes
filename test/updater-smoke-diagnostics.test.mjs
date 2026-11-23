@@ -563,3 +563,35 @@ test('Windows ZIP comparison scratch prefix stays under the verified archive dir
   assert.equal(scratchPrefix, path.join(path.dirname(archivePath), 'tus-zip-batcher-'));
   assert.equal(path.relative(testRoot, scratchPrefix).split(path.sep)[0], 'downloads');
 });
+
+test('TUS launch boundary preserves only allowlisted renderer and main phases', () => {
+  const manifestFile = { sha256: 'a'.repeat(64) };
+  const assetName = 'candidate.exe';
+  const tag = 'v0.1.0-rc11';
+  const [rehash, dialog, response, unsafe] = safeMainDiagnostics([
+    { stage: 'update-launch', status: 'starting', launchPhase: 'rehash', launchDialog: 'not-started', launchDecision: 'not-started', rendererClickStatus: 'received', rendererInvokeStatus: 'pending' },
+    { stage: 'update-launch', status: 'starting', launchPhase: 'dialog', launchDialog: 'marker-written', launchDecision: 'not-started', rendererClickStatus: 'received', rendererInvokeStatus: 'pending' },
+    { stage: 'update-launch', status: 'fulfilled', launchPhase: 'response', launchDialog: 'marker-written', launchDecision: 'cancelled', rendererClickStatus: 'received', rendererInvokeStatus: 'fulfilled' },
+    { stage: 'update-launch', status: 'private/path', launchPhase: 'C:/private/path', launchDialog: 'raw error', launchDecision: 'private caption', rendererClickStatus: 'raw click', rendererInvokeStatus: 'C:/private/path', privateDetails: 'raw exception' },
+  ], manifestFile, assetName, tag);
+
+  assert.deepEqual(
+    [rehash.stage, rehash.status, rehash.launchPhase, rehash.launchDialog, rehash.launchDecision, rehash.rendererClickStatus, rehash.rendererInvokeStatus],
+    ['update-launch', 'starting', 'rehash', 'not-started', 'not-started', 'received', 'pending'],
+  );
+  assert.deepEqual(
+    [dialog.launchPhase, dialog.launchDialog, dialog.rendererInvokeStatus],
+    ['dialog', 'marker-written', 'pending'],
+  );
+  assert.deepEqual(
+    [response.status, response.launchPhase, response.launchDecision, response.rendererInvokeStatus],
+    ['fulfilled', 'response', 'cancelled', 'fulfilled'],
+  );
+  assert.deepEqual(
+    [unsafe.stage, unsafe.status, unsafe.launchPhase, unsafe.launchDialog, unsafe.launchDecision, unsafe.rendererClickStatus, unsafe.rendererInvokeStatus],
+    ['update-launch', 'unknown', 'unknown', 'unknown', 'unknown', 'unknown', 'unknown'],
+  );
+  assert.equal(JSON.stringify([rehash, dialog, response, unsafe]).includes('C:/private/path'), false);
+  assert.equal(JSON.stringify([rehash, dialog, response, unsafe]).includes('raw exception'), false);
+  assert.equal(JSON.stringify([rehash, dialog, response, unsafe]).includes('private caption'), false);
+});

@@ -48,3 +48,25 @@ test('startup release rate limit is explained from its safe category',()=>{
  assert.match(h.element('updates-notice').title,/rate limit/i);
  assert.match(h.element('updates-status').textContent,/rate limit/i);
 });
+
+test('launch click records bounded renderer invoke state', async () => {
+  const h = rendererHarness();
+  h.run(`let resolveLaunch;
+    const bridge = { launchUpdate: () => new Promise(resolve => { resolveLaunch = resolve; }) };
+    const updateStatus = text => { $('updates-status').textContent = text; };`);
+  h.load("$('updates-launch').addEventListener('click', async () => {", 'bridge?.onUpdateProgress(');
+
+  const status = h.element('updates-status');
+  const pending = h.element('updates-launch').listeners.click();
+  assert.equal(status.dataset.updateLaunchClickStatus, 'received');
+  assert.equal(status.dataset.updateLaunchInvokeStatus, 'pending');
+
+  h.run('resolveLaunch({ started: false })');
+  await pending;
+  assert.equal(status.dataset.updateLaunchInvokeStatus, 'fulfilled');
+
+  h.run(`bridge.launchUpdate = async () => { throw new Error('test rejection'); };`);
+  await h.element('updates-launch').listeners.click();
+  assert.equal(status.dataset.updateLaunchClickStatus, 'received');
+  assert.equal(status.dataset.updateLaunchInvokeStatus, 'rejected');
+});
