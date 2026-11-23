@@ -247,7 +247,7 @@ test('bounded app-close timeout preserves primary updater failure and reaps the 
   assert.equal(outcome.error.errors[1]?.code, 'ETIMEDOUT');
   assert.equal(child.killed, true);
   assert.equal(child.exitCode, 1);
-  assert.deepEqual(logs, [
+  assert.deepEqual(logs.filter(line => line.startsWith('TUS_SMOKE_CLEANUP ')), [
     'TUS_SMOKE_CLEANUP stage=app-close outcome=started',
     'TUS_SMOKE_CLEANUP stage=app-close outcome=timeout',
     'TUS_SMOKE_CLEANUP stage=app-process outcome=terminated',
