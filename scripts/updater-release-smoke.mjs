@@ -220,28 +220,42 @@ async function activateUpdaterButtonByKeyboard(page, id) {
 }
 
 async function respondToUpdateLaunch(current, dialogMarker, key) {
-  await rm(dialogMarker, { force: true });
-  await activateUpdaterButtonByKeyboard(current.page, 'updates-launch');
-  assert.equal(await waitForFile(dialogMarker, 5000), true, 'the launch approval prompt was invoked');
-  await current.page.evaluate(() => {
-    window.__tusUpdateDialogKey = null;
-    window.__tusUpdateDialogWaiting = true;
-  });
-  await current.page.keyboard.press(key);
-  const selectedKey = await current.page.evaluate(() => {
-    const value = window.__tusUpdateDialogKey;
-    window.__tusUpdateDialogKey = null;
-    return value;
-  });
-  assert.equal(selectedKey, key, 'the launch prompt choice comes from keyboard input');
-  const resolved = await current.instance.evaluate((_electron, response) => {
-    const resolve = globalThis.__tusUpdateDialogResolve;
-    if (typeof resolve !== 'function') return false;
-    delete globalThis.__tusUpdateDialogResolve;
-    resolve({ response });
-    return true;
-  }, key === 'Enter' ? 1 : 0);
-  assert.equal(resolved, true, 'the keyboard choice resolves the packaged dialog request');
+  const diagnostic = {
+    button: 'not-started',
+    prompt: 'not-started',
+    keyboardChoice: 'not-started',
+    dialogResponse: 'not-started',
+  };
+  try {
+    await rm(dialogMarker, { force: true });
+    await activateUpdaterButtonByKeyboard(current.page, 'updates-launch');
+    diagnostic.button = 'keyboard-activated';
+    diagnostic.prompt = await waitForFile(dialogMarker, 5000) ? 'invoked' : 'missing';
+    assert.equal(diagnostic.prompt, 'invoked', 'the launch approval prompt was invoked');
+    await current.page.evaluate(() => {
+      window.__tusUpdateDialogKey = null;
+      window.__tusUpdateDialogWaiting = true;
+    });
+    await current.page.keyboard.press(key);
+    const selectedKey = await current.page.evaluate(() => {
+      const value = window.__tusUpdateDialogKey;
+      window.__tusUpdateDialogKey = null;
+      return value;
+    });
+    diagnostic.keyboardChoice = selectedKey === key ? 'matched' : 'missing';
+    assert.equal(selectedKey, key, 'the launch prompt choice comes from keyboard input');
+    const resolved = await current.instance.evaluate((_electron, response) => {
+      const resolve = globalThis.__tusUpdateDialogResolve;
+      if (typeof resolve !== 'function') return false;
+      delete globalThis.__tusUpdateDialogResolve;
+      resolve({ response });
+      return true;
+    }, key === 'Enter' ? 1 : 0);
+    diagnostic.dialogResponse = resolved ? 'resolved' : 'missing';
+    assert.equal(resolved, true, 'the keyboard choice resolves the packaged dialog request');
+  } finally {
+    console.log('TUS_UPDATE_LAUNCH_KEYBOARD ' + JSON.stringify(diagnostic));
+  }
 }
 
 async function assertInstalledSourceIdentity(current, profile) {
@@ -1600,13 +1614,26 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
 
   setDiagnostic(distribution === 'installer' ? 'relaunch-cancel' : 'relaunch');
   await respondToUpdateLaunch(current, dialogMarker, 'Escape');
-  await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Update launch cancelled.');
+  let cancelStatus = 'cancelled';
+  try {
+    await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Update launch cancelled.');
+  } catch (error) {
+    cancelStatus = error?.name === 'TimeoutError' ? 'timeout' : 'unavailable';
+    console.log('TUS_UPDATE_LAUNCH_CANCEL ' + JSON.stringify({ status: cancelStatus }));
+    throw error;
+  }
   const relaunchAfterCancel = await lstat(relaunchMarker).then(() => true, error => {
     if (error?.code === 'ENOENT') return false;
     throw error;
   });
+  const sourceProcessAlive = current.instance.process().exitCode === null;
+  console.log('TUS_UPDATE_LAUNCH_CANCEL ' + JSON.stringify({
+    status: cancelStatus,
+    relaunchRequested: relaunchAfterCancel,
+    sourceProcessAlive,
+  }));
   assert.equal(relaunchAfterCancel, false, 'cancel never requests an update relaunch');
-  assert.equal(current.instance.process().exitCode, null, 'cancel leaves the game open and the verified update available');
+  assert.equal(sourceProcessAlive, true, 'cancel leaves the game open and the verified update available');
   setDiagnostic(distribution === 'installer' ? 'relaunch-approve' : 'relaunch');
 
   const closing = current;
