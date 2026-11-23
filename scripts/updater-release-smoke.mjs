@@ -188,6 +188,23 @@ async function focusByKeyboard(page, selector) {
   assert.fail('Keyboard tab order did not reach ' + selector);
 }
 
+async function observeUpdaterKeyboardActions(page) {
+  await page.evaluate(() => {
+    window.__tusUpdaterKeyboardActions = [];
+    document.addEventListener('keydown', event => {
+      const id = event.target instanceof HTMLElement ? event.target.id : '';
+      if (event.key === 'Enter' && ['updates-check', 'updates-download', 'updates-cancel', 'updates-launch'].includes(id) &&
+          window.__tusUpdaterKeyboardActions.length < 40) {
+        window.__tusUpdaterKeyboardActions.push(id);
+      }
+    }, true);
+  });
+}
+
+async function lastUpdaterKeyboardAction(page) {
+  return page.evaluate(() => window.__tusUpdaterKeyboardActions?.at(-1) ?? null);
+}
+
 async function assertInstalledSourceIdentity(current, profile) {
   if (!profile) return;
   const identity = await current.instance.evaluate(({ app }) => ({
@@ -1231,7 +1248,9 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   assert.ok(startupTag, 'startup check identifies the published prerelease');
   assert.ok(compareReleaseVersions(startupTag, baselineVersion) > 0, 'startup check identifies a newer prerelease');
 
+  await observeUpdaterKeyboardActions(current.page);
   await current.page.locator('#updates-check').click();
+  assert.equal(await lastUpdaterKeyboardAction(current.page), 'updates-check', 'manual update check is activated by keyboard');
   await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.includes(' is available.'), null, { timeout: 30000 });
   const availability = await current.page.locator('#updates-status').innerText();
   assert.match(availability, /^Prerelease · may be unstable: /, 'manual check uses the saved prerelease channel');
