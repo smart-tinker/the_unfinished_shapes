@@ -93,8 +93,10 @@ test('pending ZIP extraction exposes per-entry read, decode and write state with
   assert.ok(sourceText.includes("if (smokeBoundary) smokeBoundary.extractStreamSnapshot = typeof value === 'function' ? value : null;"));
 });
 
-test('incompatible package verifier IPC is exposed only to the packaged smoke process', async () => {
+test('incompatible package verifier IPC is forwarded only to the packaged smoke process', async () => {
+  const main = await readFile(new URL('../src/main.mjs', import.meta.url), 'utf8');
   const preload = await readFile(new URL('../src/preload.cjs', import.meta.url), 'utf8');
+  assert.ok(main.includes("additionalArguments:updaterSmokeBoundary?['--tus-smoke-provenance-diagnostic']:[]"), 'the packaged smoke flag reaches the sandboxed preload');
   const load = argv => {
     let exposedName, exposedApi;
     const calls = [];

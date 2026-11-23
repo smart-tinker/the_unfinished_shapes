@@ -472,7 +472,7 @@ app.whenReady().then(async()=>{
   });
   handle('codex:interrupt',()=>bridge?.interrupt());
   handle('codex:respond',(id,result)=>bridge?.respond(id,result));
-  win=new BrowserWindow({width:1440,height:940,minWidth:1000,minHeight:700,backgroundColor:'#131c24',webPreferences:{preload:path.join(here,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  win=new BrowserWindow({width:1440,height:940,minWidth:1000,minHeight:700,backgroundColor:'#131c24',webPreferences:{preload:path.join(here,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,additionalArguments:updaterSmokeBoundary?['--tus-smoke-provenance-diagnostic']:[]}});
   attachQuitGuard(win);
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',(event)=>event.preventDefault());
