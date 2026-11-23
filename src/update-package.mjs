@@ -114,12 +114,14 @@ export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, ent
     sinkClosed: sink?.closed === true,
     sinkBytesWritten: count(sink?.bytesWritten),
     sinkWritableLength: count(sink?.writableLength),
-    writeCallbackState: ['idle', 'write', 'writev'].includes(writeCallback?.state) ? writeCallback.state : 'unknown',
-    writeCallbackAgeMs: count(writeCallback?.writeCallbackAgeMs, 120_000),
-    writeCallbackWaitMs: count(writeCallback?.writeCallbackWaitMs, 120_000),
-    writeCallbackCount: count(writeCallback?.writeCallbackCount, 0xffffffff),
-    writeCallCount: count(writeCallback?.writeCallCount, 0xffffffff),
-    writevCallCount: count(writeCallback?.writevCallCount, 0xffffffff),
+    ...(writeCallback ? {
+      writeCallbackState: ['idle', 'write', 'writev'].includes(writeCallback.state) ? writeCallback.state : 'unknown',
+      writeCallbackAgeMs: count(writeCallback.writeCallbackAgeMs, 120_000),
+      writeCallbackWaitMs: count(writeCallback.writeCallbackWaitMs, 120_000),
+      writeCallbackCount: count(writeCallback.writeCallbackCount, 0xffffffff),
+      writeCallCount: count(writeCallback.writeCallCount, 0xffffffff),
+      writevCallCount: count(writeCallback.writevCallCount, 0xffffffff),
+    } : {}),
   };
 }
 const sigstoreVerifierCodes = new Set([

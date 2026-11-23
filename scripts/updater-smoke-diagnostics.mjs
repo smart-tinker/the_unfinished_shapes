@@ -52,12 +52,14 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
   const compressedBytesRead = safeExtractStreamCount(value.compressedBytesRead);
   const decodedBytes = safeExtractStreamCount(value.decodedBytes);
   const sinkBytesWritten = safeExtractStreamCount(value.sinkBytesWritten);
-  const writeCallbackState = ['idle', 'write', 'writev'].includes(value.writeCallbackState) ? value.writeCallbackState : 'unknown';
-  const writeCallbackAgeMs = safeExtractStreamCount(value.writeCallbackAgeMs, 120_000);
-  const writeCallbackWaitMs = safeExtractStreamCount(value.writeCallbackWaitMs, 120_000);
-  const writeCallbackCount = safeExtractStreamCount(value.writeCallbackCount);
-  const writeCallCount = safeExtractStreamCount(value.writeCallCount);
-  const writevCallCount = safeExtractStreamCount(value.writevCallCount);
+  const writeCallback = Object.hasOwn(value, 'writeCallbackState') ? {
+    state: ['idle', 'write', 'writev'].includes(value.writeCallbackState) ? value.writeCallbackState : 'unknown',
+    ageMs: safeExtractStreamCount(value.writeCallbackAgeMs, 120_000),
+    waitMs: safeExtractStreamCount(value.writeCallbackWaitMs, 120_000),
+    callbackCount: safeExtractStreamCount(value.writeCallbackCount),
+    writeCount: safeExtractStreamCount(value.writeCallCount),
+    writevCount: safeExtractStreamCount(value.writevCallCount),
+  } : null;
   const sameEntry = entrySequence !== null && entrySequence === previous?.entrySequence;
   const intervalMs = sameEntry && Number.isSafeInteger(elapsedMs) && elapsedMs >= 1 && elapsedMs <= 60_000
     ? elapsedMs : null;
@@ -92,16 +94,18 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
     sinkClosed: value.sinkClosed === true,
     sinkBytesWritten,
     sinkWritableLength: safeExtractStreamCount(value.sinkWritableLength),
-    writeCallbackState,
-    writeCallbackAgeMs,
-    writeCallbackWaitMs,
-    writeCallbackWaitMsDelta: delta(writeCallbackWaitMs, previous?.writeCallbackWaitMs, 120_000),
-    writeCallbackCount,
-    writeCallbackCountDelta: delta(writeCallbackCount, previous?.writeCallbackCount),
-    writeCallCount,
-    writeCallCountDelta: delta(writeCallCount, previous?.writeCallCount),
-    writevCallCount,
-    writevCallCountDelta: delta(writevCallCount, previous?.writevCallCount),
+    ...(writeCallback ? {
+      writeCallbackState: writeCallback.state,
+      writeCallbackAgeMs: writeCallback.ageMs,
+      writeCallbackWaitMs: writeCallback.waitMs,
+      writeCallbackWaitMsDelta: delta(writeCallback.waitMs, previous?.writeCallbackWaitMs, 120_000),
+      writeCallbackCount: writeCallback.callbackCount,
+      writeCallbackCountDelta: delta(writeCallback.callbackCount, previous?.writeCallbackCount),
+      writeCallCount: writeCallback.writeCount,
+      writeCallCountDelta: delta(writeCallback.writeCount, previous?.writeCallCount),
+      writevCallCount: writeCallback.writevCount,
+      writevCallCountDelta: delta(writeCallback.writevCount, previous?.writevCallCount),
+    } : {}),
     byteProgress,
     intervalMs,
     compressedReadBytesPerSecond: rate(compressedBytesRead, previous?.compressedBytesRead),
