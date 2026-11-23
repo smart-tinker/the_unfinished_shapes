@@ -59,6 +59,49 @@ test('TUS Windows ZIP writer reports bounded finish-to-close time at the safe lo
   assert.equal(JSON.stringify([pendingSafe, closedSafe, bounded]).includes('C:/private/path'), false);
 });
 
+test('TUS Windows ZIP samples report capped main-process CPU deltas at the safe log boundary', async () => {
+  const sink = new EventEmitter();
+  sink._write = (_chunk, _encoding, callback) => callback();
+  const readSample = updatePackage.trackZipWriteCallback(sink);
+  readSample();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sample = readSample();
+
+  for (const field of ['mainCpuUserMsDelta', 'mainCpuSystemMsDelta']) {
+    assert.ok(Number.isSafeInteger(sample[field]) && sample[field] >= 0 && sample[field] <= 120_000);
+  }
+
+  const manifestFile = { sha256: 'a'.repeat(64) };
+  const raw = updatePackage.safeZipExtractionStreamSnapshot(
+    { readableEnded: false, actualByteCount: 1 },
+    { writableFinished: false, closed: false, bytesWritten: 1, writableLength: 0 },
+    12,
+    { compressionMethod: 8, compressedSize: 4, uncompressedSize: 8 },
+    null,
+    sample,
+  );
+  const [diagnostic] = safeMainDiagnostics([{
+    stage: 'extract-archive',
+    status: 'starting',
+    extractStreamSnapshot: { ...raw, privatePath: 'C:/private/path', privateError: 'raw error' },
+  }], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+  assert.equal(diagnostic.streamSnapshot.mainCpuUserMsDelta, sample.mainCpuUserMsDelta);
+  assert.equal(diagnostic.streamSnapshot.mainCpuSystemMsDelta, sample.mainCpuSystemMsDelta);
+
+  const [bounded] = safeMainDiagnostics([{
+    stage: 'extract-archive',
+    status: 'starting',
+    extractStreamSnapshot: {
+      ...raw,
+      mainCpuUserMsDelta: Number.MAX_SAFE_INTEGER,
+      mainCpuSystemMsDelta: 'C:/private/path',
+    },
+  }], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+  assert.equal(bounded.streamSnapshot.mainCpuUserMsDelta, 120_000);
+  assert.equal(bounded.streamSnapshot.mainCpuSystemMsDelta, null);
+  assert.doesNotMatch(JSON.stringify([diagnostic, bounded]), /C:\/private\/path|raw error/);
+});
+
 test('TUS main diagnostic preserves only safe verifier setup stages at the log boundary', () => {
   const assetName = 'candidate.zip';
   const tag = 'v0.1.0-rc11';
