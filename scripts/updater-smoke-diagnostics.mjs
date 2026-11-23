@@ -54,6 +54,7 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
   const sinkBytesWritten = safeExtractStreamCount(value.sinkBytesWritten);
   const writeCallback = Object.hasOwn(value, 'writeCallbackState') ? {
     state: ['idle', 'write', 'writev'].includes(value.writeCallbackState) ? value.writeCallbackState : 'unknown',
+    finishToCloseMs: safeExtractStreamCount(value.writeFinishToCloseMs, 120_000),
     ageMs: safeExtractStreamCount(value.writeCallbackAgeMs, 120_000),
     waitMs: safeExtractStreamCount(value.writeCallbackWaitMs, 120_000),
     callbackCount: safeExtractStreamCount(value.writeCallbackCount),
@@ -96,6 +97,7 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
     sinkWritableLength: safeExtractStreamCount(value.sinkWritableLength),
     ...(writeCallback ? {
       writeCallbackState: writeCallback.state,
+      writeFinishToCloseMs: writeCallback.finishToCloseMs,
       writeCallbackAgeMs: writeCallback.ageMs,
       writeCallbackWaitMs: writeCallback.waitMs,
       writeCallbackWaitMsDelta: delta(writeCallback.waitMs, previous?.writeCallbackWaitMs, 120_000),

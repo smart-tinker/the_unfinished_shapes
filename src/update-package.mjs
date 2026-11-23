@@ -56,6 +56,7 @@ export function createZipWriteBatcher() {
 export function trackZipWriteCallback(sink) {
   const maxCount = 0xffffffff;
   let writeCallCount = 0, writevCallCount = 0, writeCallbackCount = 0, writeCallbackWaitMs = 0;
+  let finishedAt = null, closedAt = null;
   const pending = new Set();
   const wrap = (method, state) => function (...args) {
     const callbackIndex = args.length - 1;
@@ -76,8 +77,12 @@ export function trackZipWriteCallback(sink) {
   };
   if (!sink || typeof sink._write !== 'function') return () => ({
     state: 'unknown', writeCallbackAgeMs: null, writeCallbackWaitMs: null,
-    writeCallbackCount: null, writeCallCount: null, writevCallCount: null,
+    writeCallbackCount: null, writeCallCount: null, writevCallCount: null, writeFinishToCloseMs: null,
   });
+  if (typeof sink.once === 'function') {
+    sink.once('finish', () => { finishedAt = performance.now(); });
+    sink.once('close', () => { closedAt = performance.now(); });
+  }
   sink._write = wrap(sink._write, 'write');
   if (typeof sink._writev === 'function') sink._writev = wrap(sink._writev, 'writev');
   return () => {
@@ -89,6 +94,7 @@ export function trackZipWriteCallback(sink) {
       writeCallbackCount,
       writeCallCount,
       writevCallCount,
+      writeFinishToCloseMs: finishedAt === null ? null : Math.min(120_000, Math.max(0, Math.round((closedAt ?? performance.now()) - finishedAt))),
     };
   };
 }
@@ -116,6 +122,7 @@ export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, ent
     sinkWritableLength: count(sink?.writableLength),
     ...(writeCallback ? {
       writeCallbackState: ['idle', 'write', 'writev'].includes(writeCallback.state) ? writeCallback.state : 'unknown',
+      writeFinishToCloseMs: count(writeCallback.writeFinishToCloseMs, 120_000),
       writeCallbackAgeMs: count(writeCallback.writeCallbackAgeMs, 120_000),
       writeCallbackWaitMs: count(writeCallback.writeCallbackWaitMs, 120_000),
       writeCallbackCount: count(writeCallback.writeCallbackCount, 0xffffffff),
