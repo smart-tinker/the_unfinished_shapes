@@ -205,6 +205,19 @@ async function lastUpdaterKeyboardAction(page) {
   return page.evaluate(() => window.__tusUpdaterKeyboardActions?.at(-1) ?? null);
 }
 
+async function activateUpdaterButtonByKeyboard(page, id) {
+  await focusByKeyboard(page, '#' + id);
+  await page.keyboard.press('Enter');
+  assert.equal(await lastUpdaterKeyboardAction(page), id, id + ' is activated by keyboard');
+}
+
+async function respondToUpdateLaunch(page, dialogMarker, key) {
+  await rm(dialogMarker, { force: true });
+  await activateUpdaterButtonByKeyboard(page, 'updates-launch');
+  assert.equal(await waitForFile(dialogMarker, 5000), true, 'the launch approval prompt was invoked');
+  await page.keyboard.press(key);
+}
+
 async function assertInstalledSourceIdentity(current, profile) {
   if (!profile) return;
   const identity = await current.instance.evaluate(({ app }) => ({
@@ -458,18 +471,37 @@ function expectedAssetName(version, distribution) {
 }
 
 async function configureUpdateDialogs(instance, { downloadsDir, extractDir, dialogMarker, extractMarker, relaunchMarker, executeRelaunch = false }) {
-  await instance.evaluate(({ app, dialog }, config) => {
+  await instance.evaluate(({ app, dialog, BrowserWindow }, config) => {
     const { writeFileSync } = process.getBuiltinModule('node:fs');
     const productionRelaunch = app.relaunch;
     app.setPath('downloads', config.downloadsDir);
-    globalThis.__tusUpdateChoice = 0;
     dialog.showOpenDialog = async () => {
       writeFileSync(config.extractMarker, JSON.stringify({ invoked: true, selected: true }));
       return { canceled: false, filePaths: [config.extractDir] };
     };
     dialog.showMessageBox = async (_window, options) => {
-      writeFileSync(config.dialogMarker, JSON.stringify({ title: options.title, buttons: options.buttons }));
-      return { response: globalThis.__tusUpdateChoice };
+      const webContents = BrowserWindow.getAllWindows()[0]?.webContents;
+      if (!webContents) throw new Error('Update approval window is unavailable.');
+      return new Promise((resolve, reject) => {
+        let response = null;
+        const onInput = (event, input) => {
+          if (input.type === 'keyDown' && ['Escape', 'Enter'].includes(input.key)) {
+            event.preventDefault();
+            response = input.key === 'Enter' ? 1 : 0;
+          } else if (input.type === 'keyUp' && response !== null) {
+            event.preventDefault();
+            webContents.removeListener('before-input-event', onInput);
+            resolve({ response });
+          }
+        };
+        webContents.on('before-input-event', onInput);
+        try {
+          writeFileSync(config.dialogMarker, JSON.stringify({ title: options.title, buttons: options.buttons }));
+        } catch (error) {
+          webContents.removeListener('before-input-event', onInput);
+          reject(error);
+        }
+      });
     };
     app.relaunch = options => {
       writeFileSync(config.relaunchMarker, JSON.stringify(options));
@@ -708,7 +740,7 @@ async function assertDigestMismatchRejected(current, {
 
   let fetchRestored = false;
   try {
-    await current.page.locator('#updates-download').click({ noWaitAfter: true });
+    await activateUpdaterButtonByKeyboard(current.page, 'updates-download');
     await current.page.waitForFunction(() => {
       const status = document.querySelector('#updates-status');
       return (status?.dataset.updateFailure === 'true' && status.dataset.updateInvokeStatus === 'rejected') ||
@@ -918,7 +950,7 @@ async function assertPartialDownloadAbortCleaned(current, {
   let fetchRestored = false;
   try {
     const updateDir = path.join(downloadsDir, 'TheUnfinishedShapes-Updates');
-    await current.page.locator('#updates-download').click({ noWaitAfter: true });
+    await activateUpdaterButtonByKeyboard(current.page, 'updates-download');
     let partialFiles = 0, partialBytes = 0;
     const deadline = Date.now() + 30000;
     while (Date.now() < deadline && partialBytes === 0) {
@@ -933,8 +965,7 @@ async function assertPartialDownloadAbortCleaned(current, {
     }
     const partialBodyWritten = partialFiles === 1 && partialBytes > 0 && partialBytes < expectedSize;
     await current.page.waitForFunction(() => !document.querySelector('#updates-cancel')?.disabled, null, { timeout: 5000 });
-    await focusByKeyboard(current.page, '#updates-cancel');
-    await current.page.keyboard.press('Enter');
+    await activateUpdaterButtonByKeyboard(current.page, 'updates-cancel');
     await current.page.waitForFunction(() => {
       const status = document.querySelector('#updates-status');
       return status?.textContent === 'Download cancelled. You can try again.' &&
@@ -1021,7 +1052,7 @@ async function assertPartialDownloadAbortCleaned(current, {
     }, 'a mid-body cancel removes the partial package and preserves the source for retry');
   } finally {
     if (!cancelSettled) {
-      await current.page.locator('#updates-cancel').click({ noWaitAfter: true }).catch(() => {});
+      await activateUpdaterButtonByKeyboard(current.page, 'updates-cancel').catch(() => {});
       await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Download cancelled. You can try again.', null, { timeout: 5000 }).catch(() => {});
     }
     fetchRestored = await current.instance.evaluate(() => {
@@ -1244,8 +1275,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     console.log('Updater startup release diagnostic ' + JSON.stringify({ status: 'error', errorCode }));
   }
   await observeUpdaterKeyboardActions(current.page);
-  await current.page.locator('#updates-check').click();
-  assert.equal(await lastUpdaterKeyboardAction(current.page), 'updates-check', 'manual update check is activated by keyboard');
+  await activateUpdaterButtonByKeyboard(current.page, 'updates-check');
 
   assert.match(startupNotice || '', /available\./, 'startup checks expose a published update without installing it');
   const startupTag = startupNotice?.match(/Prerelease (v\d+\.\d+\.\d+-rc\.?\d+) is available\./)?.[1];
@@ -1266,9 +1296,10 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   assert.ok(manifestFile, 'the exact platform and distribution package appears in the published manifest');
 
   const relaunchMarker = path.join(workDir, 'relaunch.json');
+  const dialogMarker = path.join(workDir, 'update-dialog.json');
   await configureUpdateDialogs(current.instance, {
     downloadsDir, extractDir,
-    dialogMarker: path.join(workDir, 'update-dialog.json'),
+    dialogMarker,
     extractMarker: path.join(workDir, 'extract-folder-chooser.json'),
     relaunchMarker,
     executeRelaunch: Boolean(handoffProfile),
@@ -1336,7 +1367,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     tag, assetName, expectedSize: manifestFile.size, expectedSha256: manifestFile.sha256,
     downloadsDir, extractDir, relaunchMarker, handoffProfile,
   });
-  await current.page.locator('#updates-download').click({ noWaitAfter: true });
+  await activateUpdaterButtonByKeyboard(current.page, 'updates-download');
   try {
     await current.page.waitForFunction(() => {
       const status = document.querySelector('#updates-status');
@@ -1557,11 +1588,15 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   }
 
   setDiagnostic(distribution === 'installer' ? 'relaunch-cancel' : 'relaunch');
-  await current.page.locator('#updates-launch').click();
+  await respondToUpdateLaunch(current.page, dialogMarker, 'Escape');
   await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Update launch cancelled.');
+  const relaunchAfterCancel = await lstat(relaunchMarker).then(() => true, error => {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  });
+  assert.equal(relaunchAfterCancel, false, 'cancel never requests an update relaunch');
   assert.equal(current.instance.process().exitCode, null, 'cancel leaves the game open and the verified update available');
   setDiagnostic(distribution === 'installer' ? 'relaunch-approve' : 'relaunch');
-  await current.instance.evaluate(() => { globalThis.__tusUpdateChoice = 1; });
 
   const closing = current;
   if (distribution === 'installer') {
@@ -1571,7 +1606,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     try {
       await runWindowsRelaunch({
       child,
-      click: () => closing.page.locator('#updates-launch').click({ timeout: 10000, noWaitAfter: true }).catch(error => {
+      click: () => respondToUpdateLaunch(closing.page, dialogMarker, 'Enter').catch(error => {
         if (child.exitCode === null) throw error;
       }),
       waitForExit,
@@ -1602,11 +1637,11 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     if (relaunchFailure) throw relaunchFailure;
   } else {
     const exit = waitForExit(closing.instance.process());
-    const click = closing.page.locator('#updates-launch').click({ timeout: 10000 }).catch(error => {
+    const approval = respondToUpdateLaunch(closing.page, dialogMarker, 'Enter').catch(error => {
       if (closing.instance.process().exitCode === null) throw error;
     });
     setDiagnostic('relaunch');
-    await Promise.all([click, closeAfterQuit(closing, exit)]);
+    await Promise.all([approval, closeAfterQuit(closing, exit)]);
   }
 
   setDiagnostic(distribution === 'installer' ? 'relaunch-prompt' : 'relaunch');
