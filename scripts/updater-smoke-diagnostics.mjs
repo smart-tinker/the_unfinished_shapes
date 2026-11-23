@@ -39,7 +39,8 @@ const safeArchiveFailureCodes = new Set([
   'TAR_ENTRY_ERROR', 'TAR_ENTRY_INFO', 'TAR_ENTRY_INVALID', 'TAR_ENTRY_UNSUPPORTED', 'OTHER',
 ]);
 const safeArchiveFailureCode = value => safeArchiveFailureCodes.has(value) ? value : 'OTHER';
-const safeExtractStreamCount = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, 0xffffffff) : null;
+const safeExtractStreamCount = (value, max = 0xffffffff) =>
+  Number.isSafeInteger(value) && value >= 0 ? Math.min(value, max) : null;
 
 function safeExtractStreamSnapshot(value, previous, elapsedMs) {
   if (!value || typeof value !== 'object') return null;
@@ -51,6 +52,12 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
   const compressedBytesRead = safeExtractStreamCount(value.compressedBytesRead);
   const decodedBytes = safeExtractStreamCount(value.decodedBytes);
   const sinkBytesWritten = safeExtractStreamCount(value.sinkBytesWritten);
+  const writeCallbackState = ['idle', 'write', 'writev'].includes(value.writeCallbackState) ? value.writeCallbackState : 'unknown';
+  const writeCallbackAgeMs = safeExtractStreamCount(value.writeCallbackAgeMs, 120_000);
+  const writeCallbackWaitMs = safeExtractStreamCount(value.writeCallbackWaitMs, 120_000);
+  const writeCallbackCount = safeExtractStreamCount(value.writeCallbackCount);
+  const writeCallCount = safeExtractStreamCount(value.writeCallCount);
+  const writevCallCount = safeExtractStreamCount(value.writevCallCount);
   const sameEntry = entrySequence !== null && entrySequence === previous?.entrySequence;
   const intervalMs = sameEntry && Number.isSafeInteger(elapsedMs) && elapsedMs >= 1 && elapsedMs <= 60_000
     ? elapsedMs : null;
@@ -58,6 +65,9 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
     if (intervalMs === null || current === null || !Number.isSafeInteger(before) || current < before) return null;
     return Math.min(0xffffffff, Math.round((current - before) * 1000 / intervalMs));
   };
+  const delta = (current, before, max = 0xffffffff) =>
+    intervalMs !== null && current !== null && Number.isSafeInteger(before) && current >= before
+      ? Math.min(max, current - before) : null;
   let byteProgress = 'unknown';
   if (entrySequence !== null) {
     if (!Number.isSafeInteger(previous?.entrySequence)) byteProgress = 'baseline';
@@ -82,6 +92,16 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
     sinkClosed: value.sinkClosed === true,
     sinkBytesWritten,
     sinkWritableLength: safeExtractStreamCount(value.sinkWritableLength),
+    writeCallbackState,
+    writeCallbackAgeMs,
+    writeCallbackWaitMs,
+    writeCallbackWaitMsDelta: delta(writeCallbackWaitMs, previous?.writeCallbackWaitMs, 120_000),
+    writeCallbackCount,
+    writeCallbackCountDelta: delta(writeCallbackCount, previous?.writeCallbackCount),
+    writeCallCount,
+    writeCallCountDelta: delta(writeCallCount, previous?.writeCallCount),
+    writevCallCount,
+    writevCallCountDelta: delta(writevCallCount, previous?.writevCallCount),
     byteProgress,
     intervalMs,
     compressedReadBytesPerSecond: rate(compressedBytesRead, previous?.compressedBytesRead),

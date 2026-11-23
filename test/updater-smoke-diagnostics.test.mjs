@@ -422,8 +422,30 @@ test('TUS Windows ZIP sink totals completed write callback time at the safe log 
     }], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
     assert.equal(second.streamSnapshot.writeCallbackWaitMsDelta, 7);
     assert.equal(second.streamSnapshot.writeCallbackCountDelta, 1);
-    assert.equal(JSON.stringify([first, second]).includes('C:/private/path'), false);
-    assert.equal(JSON.stringify([first, second]).includes('raw error'), false);
+    assert.equal(second.streamSnapshot.writeCallCountDelta, expectedState === 'write' ? 1 : 0);
+    assert.equal(second.streamSnapshot.writevCallCountDelta, expectedState === 'writev' ? 1 : 0);
+    const [unsafe] = safeMainDiagnostics([{
+      stage: 'extract-archive',
+      status: 'starting',
+      extractStreamSnapshot: {
+        ...raw,
+        writeCallbackState: 'C:/private/path',
+        writeCallbackAgeMs: -1,
+        writeCallbackWaitMs: 'private',
+        writeCallbackCount: Number.MAX_SAFE_INTEGER,
+        writeCallCount: 'private',
+        writevCallCount: -1,
+      },
+    }], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+    assert.equal(unsafe.streamSnapshot.writeCallbackState, 'unknown');
+    assert.equal(unsafe.streamSnapshot.writeCallbackAgeMs, null);
+    assert.equal(unsafe.streamSnapshot.writeCallbackWaitMs, null);
+    assert.equal(unsafe.streamSnapshot.writeCallbackCount, 0xffffffff);
+    assert.equal(unsafe.streamSnapshot.writeCallCount, null);
+    assert.equal(unsafe.streamSnapshot.writevCallCount, null);
+    assert.equal(JSON.stringify([first, second, unsafe]).includes('C:/private/path'), false);
+    assert.equal(JSON.stringify([first, second, unsafe]).includes('raw error'), false);
+    assert.equal(JSON.stringify([first, second, unsafe]).includes('private'), false);
     await new Promise(resolve => sink.end(resolve));
   };
 

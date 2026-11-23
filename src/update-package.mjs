@@ -53,7 +53,47 @@ export function createZipWriteBatcher() {
   });
 }
 
-export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, entry, compressedSource) {
+export function trackZipWriteCallback(sink) {
+  const maxCount = 0xffffffff;
+  let writeCallCount = 0, writevCallCount = 0, writeCallbackCount = 0, writeCallbackWaitMs = 0;
+  const pending = new Set();
+  const wrap = (method, state) => function (...args) {
+    const callbackIndex = args.length - 1;
+    const callback = args[callbackIndex];
+    if (typeof callback !== 'function') return method.apply(this, args);
+    if (state === 'write') writeCallCount = Math.min(maxCount, writeCallCount + 1);
+    else writevCallCount = Math.min(maxCount, writevCallCount + 1);
+    const call = { state, startedAt: performance.now() };
+    pending.add(call);
+    args[callbackIndex] = function (...callbackArgs) {
+      pending.delete(call);
+      writeCallbackCount = Math.min(maxCount, writeCallbackCount + 1);
+      writeCallbackWaitMs = Math.min(120_000, writeCallbackWaitMs + Math.max(0, Math.round(performance.now() - call.startedAt)));
+      return callback.apply(this, callbackArgs);
+    };
+    try { return method.apply(this, args); }
+    catch (error) { pending.delete(call); throw error; }
+  };
+  if (!sink || typeof sink._write !== 'function') return () => ({
+    state: 'unknown', writeCallbackAgeMs: null, writeCallbackWaitMs: null,
+    writeCallbackCount: null, writeCallCount: null, writevCallCount: null,
+  });
+  sink._write = wrap(sink._write, 'write');
+  if (typeof sink._writev === 'function') sink._writev = wrap(sink._writev, 'writev');
+  return () => {
+    const active = pending.size === 1 ? pending.values().next().value : null;
+    return {
+      state: pending.size === 0 ? 'idle' : active?.state ?? 'unknown',
+      writeCallbackAgeMs: active ? Math.min(120_000, Math.max(0, Math.round(performance.now() - active.startedAt))) : null,
+      writeCallbackWaitMs,
+      writeCallbackCount,
+      writeCallCount,
+      writevCallCount,
+    };
+  };
+}
+
+export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, entry, compressedSource, writeCallback = null) {
   const count = (value, limit = maxExtractedBytes) =>
     Number.isSafeInteger(value) && value >= 0 ? Math.min(value, limit) : null;
   const position = (value, limit) => Number.isSafeInteger(value?.start) && Number.isSafeInteger(value?.pos) && value.pos >= value.start
@@ -74,6 +114,12 @@ export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, ent
     sinkClosed: sink?.closed === true,
     sinkBytesWritten: count(sink?.bytesWritten),
     sinkWritableLength: count(sink?.writableLength),
+    writeCallbackState: ['idle', 'write', 'writev'].includes(writeCallback?.state) ? writeCallback.state : 'unknown',
+    writeCallbackAgeMs: count(writeCallback?.writeCallbackAgeMs, 120_000),
+    writeCallbackWaitMs: count(writeCallback?.writeCallbackWaitMs, 120_000),
+    writeCallbackCount: count(writeCallback?.writeCallbackCount, 0xffffffff),
+    writeCallCount: count(writeCallback?.writeCallCount, 0xffffffff),
+    writevCallCount: count(writeCallback?.writevCallCount, 0xffffffff),
   };
 }
 const sigstoreVerifierCodes = new Set([
@@ -794,7 +840,11 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
       writeStream = isAppAsar && electronFs
         ? electronFs.createWriteStream(output, { flags: 'wx', mode: fileMode })
         : createWriteStream(output, { flags: 'wx', mode: fileMode });
-      extraction.streamSnapshot = () => safeZipExtractionStreamSnapshot(stream, writeStream, count, entry, compressedReadStream);
+      const writeCallbackSnapshot = platform === 'win32' && extraction.trackDiagnostics && !isAppAsar
+        ? trackZipWriteCallback(writeStream) : null;
+      extraction.streamSnapshot = () => safeZipExtractionStreamSnapshot(
+        stream, writeStream, count, entry, compressedReadStream, writeCallbackSnapshot?.(),
+      );
       await pipeline(...(platform === 'win32' && !isAppAsar
         ? [stream, createZipWriteBatcher(), writeStream]
         : [stream, writeStream]));
