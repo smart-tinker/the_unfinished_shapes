@@ -418,8 +418,8 @@ async function comparePinnedAttestation(electronMain, manifestFile, assetName, t
     assert.equal(verifyEvents.length, 0, 'bundle verification does not start when setup fails');
   }
 }
-async function getManifest(tag) {
-  const filename = 'candidate-' + platform + '.json';
+async function getManifest(tag, targetPlatform = platform) {
+  const filename = 'candidate-' + targetPlatform + '.json';
   const url = 'https://github.com/smart-tinker/the_unfinished_shapes/releases/download/' +
     encodeURIComponent(tag) + '/' + encodeURIComponent(filename);
   const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
@@ -430,7 +430,7 @@ async function getManifest(tag) {
   const manifest = JSON.parse(body);
   assert.equal(manifest.repository, 'smart-tinker/the_unfinished_shapes');
   assert.equal(manifest.tag, tag);
-  assert.equal(manifest.platform, platform);
+  assert.equal(manifest.platform, targetPlatform);
   assert.match(manifest.sourceSha || '', /^[a-f0-9]{40}$/);
   return manifest;
 }
@@ -1247,6 +1247,46 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
       }
     });
   });
+
+  const incompatiblePlatform = process.platform === 'win32' ? 'linux' : 'windows';
+  const incompatibleManifest = await getManifest(tag, incompatiblePlatform);
+  assert.equal(incompatibleManifest.sourceSha, manifest.sourceSha, 'the incompatible package comes from the same selected release source');
+  const incompatibleSuffix = incompatiblePlatform === 'windows' ? 'win32-x64.zip' : 'linux-x64.tar.gz';
+  const incompatibleAssetName = 'TheUnfinishedShapes-' + incompatibleManifest.version + '-' + incompatibleSuffix;
+  const incompatibleFile = incompatibleManifest.files.find(file => file.name === incompatibleAssetName);
+  assert.ok(incompatibleFile, 'the exact cross-platform asset has a published digest');
+  const incompatibleResult = await current.page.evaluate(async () =>
+    typeof window.tus.smokeVerifyIncompatiblePackage === 'function'
+      ? window.tus.smokeVerifyIncompatiblePackage()
+      : null);
+  const relaunchRequested = await lstat(relaunchMarker).then(() => true, () => false);
+  const incompatibleDiagnostic = {
+    status: incompatibleResult?.status === 'verified-incompatible-rejected' ? incompatibleResult.status : 'control-unavailable',
+    tagMatches: incompatibleResult?.tag === tag,
+    assetMatches: incompatibleResult?.assetName === incompatibleAssetName,
+    digestMatches: incompatibleResult?.sha256 === incompatibleFile.sha256,
+    sizeMatches: incompatibleResult?.size === incompatibleFile.size,
+    sourceShaMatches: incompatibleResult?.sourceSha === incompatibleManifest.sourceSha,
+    failureCode: incompatibleResult?.failureCode || 'OTHER',
+    extractStage: ['preflight', 'digest', 'zip-open', 'zip-read', 'write', 'executable', 'cleanup', 'unknown'].includes(incompatibleResult?.extractStage)
+      ? incompatibleResult.extractStage : 'unknown',
+    targetCreated: incompatibleResult?.targetCreated === true,
+    relaunchRequested,
+  };
+  console.log('TUS_UPDATE_INCOMPATIBLE ' + JSON.stringify(incompatibleDiagnostic));
+  assert.deepEqual(incompatibleDiagnostic, {
+    status: 'verified-incompatible-rejected',
+    tagMatches: true,
+    assetMatches: true,
+    digestMatches: true,
+    sizeMatches: true,
+    sourceShaMatches: true,
+    failureCode: 'UNSUPPORTED_PACKAGE',
+    extractStage: 'preflight',
+    targetCreated: false,
+    relaunchRequested: false,
+  }, 'the normal packaged verifier accepts the exact official asset before extraction fails closed for this device');
+
   setDiagnostic('check-download');
   await assertDigestMismatchRejected(current, {
     tag, assetName, expectedSize: manifestFile.size, expectedSha256: manifestFile.sha256,
