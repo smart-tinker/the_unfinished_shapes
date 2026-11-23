@@ -30,6 +30,7 @@ const safeExtractRendererStatuses = new Map([
 ]);
 const safeExtractInvokeStatuses = new Set(['not-started', 'pending', 'fulfilled', 'rejected']);
 const safeUpdateLaunchPhases = new Set(['unknown', 'rehash', 'dialog', 'response']);
+const safeUpdateLaunchSubstages = new Set(['unknown', 'not-started', 'module-import', 'file-rehash', 'verified', 'not-applicable']);
 const safeUpdateLaunchDialogs = new Set(['not-started', 'invoked', 'marker-written', 'marker-write-failed']);
 const safeUpdateLaunchDecisions = new Set(['not-started', 'cancelled', 'approved']);
 const safeUpdateLaunchClickStatuses = new Set(['not-started', 'received']);
@@ -411,6 +412,7 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
     } : {}),
     ...(item?.stage === 'update-launch' ? {
       launchPhase: safeUpdateLaunchPhases.has(item.launchPhase) ? item.launchPhase : 'unknown',
+      launchSubstage: safeUpdateLaunchSubstages.has(item.launchSubstage) ? item.launchSubstage : 'unknown',
       launchDialog: safeUpdateLaunchDialogs.has(item.launchDialog) ? item.launchDialog : 'unknown',
       launchDecision: safeUpdateLaunchDecisions.has(item.launchDecision) ? item.launchDecision : 'unknown',
       rendererClickStatus: safeUpdateLaunchClickStatuses.has(item.rendererClickStatus) ? item.rendererClickStatus : 'unknown',

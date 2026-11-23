@@ -297,6 +297,7 @@ async function updaterRuntimeBoundary(current, manifestFile, assetName, tag, sna
       stage: 'update-launch',
       status: main?.launchStatus,
       launchPhase: main?.launchPhase,
+      launchSubstage: main?.launchSubstage,
       launchDialog: main?.launchDialog,
       launchDecision: main?.launchDecision,
       rendererClickStatus: rendererLaunch?.clickStatus,

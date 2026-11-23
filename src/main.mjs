@@ -18,7 +18,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld, gameToolSession, fullscreenRestoreBounds;
 let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, extractedUpdate = null, updateDownloadController = null;
 const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic')
-  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null, launchStatus: 'not-started', launchPhase: 'unknown', launchDialog: 'not-started', launchDecision: 'not-started' }
+  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null, launchStatus: 'not-started', launchPhase: 'unknown', launchSubstage: 'not-started', launchDialog: 'not-started', launchDecision: 'not-started' }
   : null;
 if (updaterSmokeBoundary) {
   globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
@@ -340,6 +340,7 @@ app.whenReady().then(async()=>{
     if (updaterSmokeBoundary) {
       updaterSmokeBoundary.launchStatus = 'starting';
       updaterSmokeBoundary.launchPhase = 'unknown';
+      updaterSmokeBoundary.launchSubstage = 'not-started';
       updaterSmokeBoundary.launchDialog = 'not-started';
       updaterSmokeBoundary.launchDecision = 'not-started';
     }
@@ -347,13 +348,19 @@ app.whenReady().then(async()=>{
       if (!downloadedUpdate) throw new Error('Download and verify the update first.');
       let executable;
       if (downloadedUpdate.distribution === 'installer') {
-        if (updaterSmokeBoundary) updaterSmokeBoundary.launchPhase = 'rehash';
+        if (updaterSmokeBoundary) {
+          updaterSmokeBoundary.launchPhase = 'rehash';
+          updaterSmokeBoundary.launchSubstage = 'module-import';
+        }
         const { verifyDownloadedFile } = await import('./update-package.mjs');
+        if (updaterSmokeBoundary) updaterSmokeBoundary.launchSubstage = 'file-rehash';
         await verifyDownloadedFile({ filePath: downloadedUpdate.filePath, sha256: downloadedUpdate.sha256 });
+        if (updaterSmokeBoundary) updaterSmokeBoundary.launchSubstage = 'verified';
         executable = downloadedUpdate.filePath;
       } else {
         if (!extractedUpdate) throw new Error('Extract the verified archive first.');
         executable = extractedUpdate.executablePath;
+        if (updaterSmokeBoundary) updaterSmokeBoundary.launchSubstage = 'not-applicable';
       }
       if (updaterSmokeBoundary) updaterSmokeBoundary.launchPhase = 'dialog';
       const choice = await dialog.showMessageBox(win, {
