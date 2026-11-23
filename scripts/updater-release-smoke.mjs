@@ -17,6 +17,8 @@ import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEve
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
 const updateHttpStatusPattern = /\bHTTP (\d{3})\b/;
+// Four 15s pipeline arms plus one setup/cleanup reserve; timeout fails before production extraction can overlap.
+const zipBatcherComparisonTimeoutMs = 75_000;
 assert.deepEqual(
   'Downloading release package: 1.5 / 42.0 MB.'.match(updateProgressPattern)?.slice(1),
   ['1.5', '42.0'],
@@ -1421,10 +1423,11 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   console.log('TUS_UPDATE_ABORT_RETRY status=verified package=' + distribution);
   let zipBatcherComparison = null;
   if (process.platform === 'win32' && distribution === 'portable') {
-    const rawComparison = await current.instance.evaluate(async (_electron, expected) => {
+    const rawComparison = await withTimeout(current.instance.evaluate(async (_electron, expected) => {
       const compare = globalThis.__tusUpdaterSmokeZipBatcherCompare;
       return typeof compare === 'function' ? compare(expected) : null;
-    }, { tag, assetName, size: manifestFile.size, sha256: manifestFile.sha256 }).catch(() => null);
+    }, { tag, assetName, size: manifestFile.size, sha256: manifestFile.sha256 }),
+    'Verified ZIP file-sink batch comparison', zipBatcherComparisonTimeoutMs);
     zipBatcherComparison = safeZipBatcherComparison(rawComparison);
     console.log('TUS_UPDATE_ZIP_BATCHER_COMPARISON ' + JSON.stringify(zipBatcherComparison));
   }
