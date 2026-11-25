@@ -161,7 +161,7 @@ test('Windows quit prompt acceptance mutates message and detail independently', 
   assert.match(automation, /fromhandle/);
   assert.match(automation, /-ms=\\d\{1,6\}/);
   assert.match(automation, /const apartmentOrder = modifiedField === 'detail' \? \['STA', 'MTA'\] : \['MTA', 'STA'\]/);
-  assert.match(automation, /prompt-window-(?:not-found|title-mismatch|ambiguous)/);
+  assert.match(automation, /window-title-mismatch/);
   assert.match(automation, /quit-dialog-not-found/);
   assert.match(automation, /automation-error-\[a-z0-9\]\+-at-\[a-z0-9-\]\+/i);
   assert.match(windowsUI, /TUS_UIA: prompt-\$status/);
