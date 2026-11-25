@@ -768,10 +768,13 @@ function platformArchive(platform, assetName, tag) {
   return value;
 }
 
-export async function openZipReadStream(zip, entry, trackCompressedRead, readHighWaterMark) {
+export async function openZipReadStream(zip, entry, trackCompressedRead, readHighWaterMark, decodeFileData = true) {
+  const openReadStream = () => decodeFileData === false
+    ? zip.openReadStreamPromise(entry, { decodeFileData: false })
+    : zip.openReadStreamPromise(entry);
   const configureReadHighWaterMark = Number.isSafeInteger(readHighWaterMark) && readHighWaterMark > 0;
   if ((!trackCompressedRead && !configureReadHighWaterMark) || typeof zip.reader?.createReadStream !== 'function') {
-    return { stream: await zip.openReadStreamPromise(entry), compressedReadStream: null };
+    return { stream: await openReadStream(), compressedReadStream: null };
   }
   const reader = zip.reader;
   const descriptor = Object.getOwnPropertyDescriptor(reader, 'createReadStream');
@@ -790,7 +793,7 @@ export async function openZipReadStream(zip, entry, trackCompressedRead, readHig
     return stream;
   };
   try {
-    return { stream: await zip.openReadStreamPromise(entry), compressedReadStream };
+    return { stream: await openReadStream(), compressedReadStream };
   } finally {
     if (descriptor) Object.defineProperty(reader, 'createReadStream', descriptor);
     else delete reader.createReadStream;

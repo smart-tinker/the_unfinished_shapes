@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { create as createTar } from 'tar';
 import yauzl from 'yauzl';
-import { createZipWriteBatcher, downloadVerifiedAsset, extractVerifiedArchive, safeArchiveEntryPath, safeUpdaterFailureCode, safeVerifierErrorType, safeVerifierSetupStage, safeZipExtractionStreamSnapshot, verifyDownloadedFile, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { createZipWriteBatcher, downloadVerifiedAsset, extractVerifiedArchive, openZipReadStream, safeArchiveEntryPath, safeUpdaterFailureCode, safeVerifierErrorType, safeVerifierSetupStage, safeZipExtractionStreamSnapshot, verifyDownloadedFile, verifyReleaseAttestation } from '../src/update-package.mjs';
 
 const tag = 'v0.1.0-rc11';
 const asset = {
@@ -1091,4 +1091,20 @@ test('download hash mismatch remains rejected when its read-progress callback th
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
+});
+
+test('openZipReadStream uses raw mode only when explicitly requested', async () => {
+  const entry = {};
+  const opened = [];
+  const streams = [{ mode: 'raw' }, { mode: 'default' }];
+  const zip = {
+    async openReadStreamPromise(...args) {
+      opened.push(args);
+      return streams[opened.length - 1];
+    },
+  };
+
+  assert.equal((await openZipReadStream(zip, entry, false, null, false)).stream, streams[0]);
+  assert.equal((await openZipReadStream(zip, entry, false, null)).stream, streams[1]);
+  assert.deepEqual(opened, [[entry, { decodeFileData: false }], [entry]]);
 });
