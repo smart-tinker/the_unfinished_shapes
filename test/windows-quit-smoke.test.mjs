@@ -140,7 +140,7 @@ test('bounded UIA child overflow is unavailable, not a definite mismatch', async
   assert.ok(uia.indexOf('exit 1', traversalStart) < traversalEnd,
     'overflow exits before the complete-scan mismatch path');
   assert.ok(uia.indexOf("TUS_UIA_CHILD: mismatch") > traversalEnd);
-  assert.match(uia, /if \(\$process\.ExitCode -eq 0 && \$results\.Count -gt 0\)[\s\S]*return 'unavailable'/,
+  assert.match(uia, /if \(\$process\.ExitCode -eq 0 -and \$results\.Count -gt 0\)[\s\S]*return 'unavailable'/,
     'overflow failure remains unavailable at the parent-reader boundary');
 });
 
