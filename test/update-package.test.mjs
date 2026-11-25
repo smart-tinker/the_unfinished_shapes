@@ -1053,3 +1053,33 @@ test('download verification reports hash bytes only after a real file read begin
     await rm(parent, { recursive: true, force: true });
   }
 });
+
+
+test('download hash mismatch remains rejected when its read-progress callback throws', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-file-hash-callback-'));
+  const filePath = path.join(parent, 'candidate.zip');
+  const payload = Buffer.alloc(128 * 1024, 0x5a);
+  const actualSha256 = createHash('sha256').update(payload).digest('hex');
+  const expectedSha256 = (actualSha256[0] === '0' ? '1' : '0') + actualSha256.slice(1);
+  const progress = [];
+  try {
+    await writeFile(filePath, payload);
+    await assert.rejects(
+      verifyDownloadedFile({
+        filePath,
+        sha256: expectedSha256,
+        onReadProgress: value => {
+          progress.push(value.phase);
+          throw new Error('private callback detail');
+        },
+      }),
+      /Downloaded update file failed its SHA-256 integrity check/,
+    );
+    assert.equal(progress[0], 'waiting-before-read');
+    assert.ok(progress.includes('reading'));
+    assert.equal(JSON.stringify(progress).includes('private callback detail'), false);
+    assert.equal(JSON.stringify(progress).includes(filePath), false);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
