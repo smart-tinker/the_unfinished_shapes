@@ -84,12 +84,19 @@ try {
     [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-child-name-done')
     [Console]::Out.Flush()
     $elements += [pscustomobject]@{ Element = $element; Name = $elementName }
-    if ($childOrdinal -eq 63) { break }
     [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-next-sibling-start')
     [Console]::Out.Flush()
-    $element = $walker.GetNextSibling($element)
+    $nextElement = $walker.GetNextSibling($element)
     [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-next-sibling-done')
     [Console]::Out.Flush()
+    if ($childOrdinal -eq 63) {
+      if ($null -ne $nextElement) {
+        [Console]::Out.WriteLine('unavailable')
+        exit 1
+      }
+      break
+    }
+    $element = $nextElement
   }
   for ($index = 0; $index -lt $expected.Length; $index++) {
     $messageChildIndex = -1

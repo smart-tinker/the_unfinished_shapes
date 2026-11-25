@@ -123,6 +123,28 @@ test('Windows quit UI reports its latest safe phase when native automation times
 });
 
 
+test('bounded UIA child overflow is unavailable, not a definite mismatch', async () => {
+  const uia = await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8');
+  const traversalStart = uia.indexOf('for ($childOrdinal');
+  const traversalEnd = uia.indexOf('for ($index', traversalStart);
+  const traversal = uia.slice(traversalStart, traversalEnd);
+  const cap = traversal.indexOf('if ($childOrdinal -eq 63) {');
+  const overflow = traversal.slice(cap);
+  assert.ok(cap >= 0, 'the reader reaches its bound after 64 entries');
+  assert.ok(traversal.indexOf('$nextElement = $walker.GetNextSibling($element)') < cap,
+    'the reader checks whether a 65th sibling exists');
+  assert.ok(overflow.indexOf('if ($null -ne $nextElement)') <
+    overflow.indexOf("[Console]::Out.WriteLine('unavailable')"));
+  assert.ok(overflow.indexOf("[Console]::Out.WriteLine('unavailable')") <
+    overflow.indexOf('exit 1'));
+  assert.ok(uia.indexOf('exit 1', traversalStart) < traversalEnd,
+    'overflow exits before the complete-scan mismatch path');
+  assert.ok(uia.indexOf("TUS_UIA_CHILD: mismatch") > traversalEnd);
+  assert.match(uia, /if \(\$process\.ExitCode -eq 0 && \$results\.Count -gt 0\)[\s\S]*return 'unavailable'/,
+    'overflow failure remains unavailable at the parent-reader boundary');
+});
+
+
 test('native quit prompt body uses exact message text and bounded STA UI Automation', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
   const expectedBlock = windowsUI.slice(windowsUI.indexOf('$expectedMessages ='), windowsUI.indexOf('switch ($Action)'));
