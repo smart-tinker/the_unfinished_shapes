@@ -20,8 +20,16 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(windowsUI, /TUS_UIA: automation-error-/);
   assert.match(windowsUI, /GetForegroundWindow/);
   assert.doesNotMatch(windowsUI, /GetForegroundOwnedWindow|foreground-window-not-owned/);
+  assert.match(windowsUI, /TUS_UIA: prompt-window-matched/);
 
-  assert.match(windowsUI, /\$foregroundHandle = \[TusWindowLookup\]::GetForegroundWindow\(\)/);
+  assert.match(windowsUI, /function Find-ExpectedPromptWindowBounded/);
+  assert.match(windowsUI, /FindExpectedPromptWindow\(\$ProcessId\)/);
+  const boundedFinderStart = windowsUI.indexOf('function Find-ExpectedPromptWindowBounded');
+  const boundedFinderEnd = windowsUI.indexOf('function Write-PromptEvidence', boundedFinderStart);
+  const boundedFinder = windowsUI.slice(boundedFinderStart, boundedFinderEnd);
+  assert.match(boundedFinder, /AddSeconds\(15\)/);
+  assert.match(boundedFinder, /Start-Sleep -Milliseconds 100/);
+  assert.match(windowsUI, /Find-ExpectedPromptWindowBounded/);
   const titleStart = windowsUI.indexOf('public static string GetWindowTitle');
   const titleEnd = windowsUI.indexOf('private static string NormalizePromptText', titleStart);
   const titleReader = windowsUI.slice(titleStart, titleEnd);
@@ -33,19 +41,37 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(windowsUI, /FindExpectedQuitButton/);
   assert.match(windowsUI, /ClickNativePromptButton/);
   assert.match(windowsUI, /buttons\.Count != 2/);
-  const foregroundStart = windowsUI.indexOf('$foregroundHandle = [TusWindowLookup]::GetForegroundWindow()');
-  const foregroundEnd = windowsUI.indexOf("\n  'file-menu-open' {", foregroundStart);
-  const foregroundLookup = windowsUI.slice(foregroundStart, foregroundEnd);
-  const exactTitleGate = foregroundLookup.indexOf("GetWindowTitle($foregroundHandle) -eq 'Codex activity may continue'");
-  const nativeButtonFind = foregroundLookup.indexOf('Find-ValidatedPromptButton');
-  const nativeButtonClick = foregroundLookup.indexOf('[TusWindowLookup]::ClickNativePromptButton');
-  assert.ok(exactTitleGate >= 0 && exactTitleGate < nativeButtonFind && nativeButtonFind < nativeButtonClick,
-    'only the exact TUS dialog title and native prompt match reach the click');
+  const finderStart = windowsUI.indexOf('public static IntPtr FindExpectedPromptWindow');
+  const finderEnd = windowsUI.indexOf('public static bool ActivateExpectedPromptWindow', finderStart);
+  const finder = windowsUI.slice(finderStart, finderEnd);
+  assert.match(finder, /EnumWindows\(/);
+  assert.match(finder, /GetWindowProcessId\(window\) != expectedProcessId/);
+  assert.match(finder, /IsWindowVisible\(window\)/);
+  assert.match(finder, /IsWindowEnabled\(window\)/);
+  assert.match(finder, /GetWindowTitle\(window\) == "Codex activity may continue"/);
+  assert.match(finder, /window-ambiguous/);
   assert.match(windowsUI, /TUS_UIA: exact-foreground-prompt-matched/);
-  assert.doesNotMatch(foregroundLookup, /GetProcessWindows|GetWindowThreadProcessId/);
-
-  assert.doesNotMatch(windowsUI, /GetProcessWindows|EnumWindows\(|IsWindowVisible/);
+  const promptStart = windowsUI.indexOf("  { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {");
+  const promptEnd = windowsUI.indexOf("\n  'assert-exact-body-recognized' {", promptStart);
+  const prompt = windowsUI.slice(promptStart, promptEnd);
+  const firstMatcher = prompt.indexOf('Find-ValidatedPromptButton');
+  const foreground = prompt.indexOf('ActivateExpectedPromptWindow');
+  const secondMatcher = prompt.indexOf('Find-ValidatedPromptButton', firstMatcher + 1);
+  const nativeButtonClick = prompt.indexOf('[TusWindowLookup]::ClickNativePromptButton');
+  assert.ok(firstMatcher >= 0 && firstMatcher < foreground && foreground < secondMatcher && secondMatcher < nativeButtonClick,
+    'the process-owned exact prompt is matched, foregrounded, revalidated and only then clicked');
+  const activationStart = windowsUI.indexOf('public static bool ActivateExpectedPromptWindow');
+  const activationEnd = windowsUI.indexOf('public static IntPtr FindExpectedQuitButton', activationStart);
+  const activation = windowsUI.slice(activationStart, activationEnd);
+  assert.match(activation, /SetForegroundWindow\(dialog\)/);
+  assert.match(activation, /GetForegroundWindow\(\) == dialog/);
   assert.match(windowsUI, /GetWindowThreadProcessId/);
+  const mismatchStart = windowsUI.indexOf("  'assert-body-mismatch-rejected' {");
+  const mismatchEnd = windowsUI.indexOf("\n  'dismiss-test-prompt' {", mismatchStart);
+  const mismatchAction = windowsUI.slice(mismatchStart, mismatchEnd);
+  assert.match(mismatchAction, /Find-ExpectedPromptWindowBounded/);
+  assert.doesNotMatch(mismatchAction, /ActivateExpectedPromptWindow|ClickNativePromptButton/,
+    'a changed body is rejected without foregrounding or clicking');
   assert.doesNotMatch(windowsUI, /FindWindow\(/);
 });
 
@@ -73,14 +99,14 @@ test('Windows quit UI reports its latest safe phase when native automation times
   const timeout = Number(automation.match(/timeout:\s*(\d+)/)?.[1]);
   assert.ok(timeout >= 25000, 'PowerShell timeout includes startup plus the full 15-second dialog wait');
   for (const marker of [
-    'script-start', 'window-api-ready', 'locating-foreground-dialog',
+    'script-start', 'window-api-ready', 'locating-process-dialog', 'prompt-window-matched',
     'foreground-title-matched', 'exact-foreground-prompt-matched', 'dialog-accessible', 'quit-dialog-not-found',
   ]) {
     assert.ok(windowsUI.includes('TUS_UIA: ' + marker), 'PowerShell reports ' + marker);
   }
   assert.match(windowsUI, /automation-error-\$errorType-at-\$script:uiPhase/);
-  assert.match(windowsUI, /\$script:uiPhase = 'checking-foreground-window'/);
-  assert.match(windowsUI, /\$script:uiPhase = 'reading-foreground-title'/);
+  assert.match(windowsUI, /\$script:uiPhase = 'checking-process-owned-prompt-window'/);
+  assert.match(windowsUI, /\$script:uiPhase = 'foregrounding-exact-prompt'/);
   assert.match(windowsUI, /\$script:uiPhase = 'checking-exact-dialog-buttons'/);
   assert.match(windowsUI, /TUS_UIA: prompt-\$promptStatus/);
   assert.doesNotMatch(windowsUI, /GetProcessWindows|reading-owned-window/);
@@ -135,7 +161,7 @@ test('Windows quit prompt acceptance mutates message and detail independently', 
   assert.match(automation, /fromhandle/);
   assert.match(automation, /-ms=\\d\{1,6\}/);
   assert.match(automation, /const apartmentOrder = modifiedField === 'detail' \? \['STA', 'MTA'\] : \['MTA', 'STA'\]/);
-  assert.match(automation, /expected-foreground-prompt-unavailable/);
+  assert.match(automation, /prompt-window-(?:not-found|title-mismatch|ambiguous)/);
   assert.match(automation, /quit-dialog-not-found/);
   assert.match(automation, /automation-error-\[a-z0-9\]\+-at-\[a-z0-9-\]\+/i);
   assert.match(windowsUI, /TUS_UIA: prompt-\$status/);
@@ -249,6 +275,9 @@ test('safe UIA failure classification distinguishes a child that reached the win
   assert.equal(safeUiFailureOutcome(['window-api-ready', 'automation-error-invalidoperationexception-at-dismissing-test-prompt']),
     'automation-error-invalidoperationexception-at-dismissing-test-prompt');
   assert.equal(safeUiFailureOutcome(['window-api-ready', 'test-prompt-not-found']), 'test-prompt-not-found');
+  for (const status of ['window-not-found', 'window-title-mismatch', 'window-ambiguous', 'foreground-activation-rejected']) {
+    assert.equal(safeUiFailureOutcome(['prompt-' + status]), 'prompt-' + status, 'the fixed prompt status is preserved');
+  }
   assert.equal(safeUiFailureOutcome(['script-start', 'window-api-ready', 'private dialog text']) === 'window-api-ready-no-status', true,
     'only allowlisted tokens can become CI evidence');
 });

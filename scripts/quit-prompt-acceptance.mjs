@@ -20,6 +20,7 @@ const safeUiPromptStatuses = new Set([
   'title-mismatch', 'button-count-mismatch', 'expected-buttons-missing',
   'requested-button-missing', 'expected-message-mismatch', 'expected-message-unavailable',
   'expected-body-mismatch', 'expected-body-timeout', 'expected-body-unavailable',
+  'window-not-found', 'window-title-mismatch', 'window-ambiguous', 'foreground-activation-rejected',
 ]);
 const safeUiTimeoutPhase = /^prompt-reader-timeout-phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-[01]-(?:start|done)|current-name-[01](?:-[0-7])?-(?:start|done)|next-sibling-[01]-[0-7]-(?:start|done))$/;
 const safeUiActions = new Set([
@@ -112,7 +113,7 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
       outcome = /^TUS_UIA: modified-body-rejected$/m.test(result) ? 'mismatch'
         : /^TUS_UIA: modified-body-button-returned$/m.test(result) ? 'unexpected-match' : 'unexpected-result';
     } catch (error) {
-      const safeOutcome = /exit-[a-z0-9_-]+|timeout-[a-z0-9-]+|(?:script-start|window-api-ready)-no-status|ui-(?:child-(?:starting|started|waiting|finished|killing|kill-waiting|exit-checking|output-draining|finally-exit-checking|finally-killing|finally-waiting|disposing)|payload-(?:preparing|ready|writing|written))|prompt-reader-timeout-[a-z0-9-]+|expected-foreground-prompt-unavailable|quit-dialog-not-found|automation-error-[a-z0-9]+-at-[a-z0-9-]+|modified-body-(?:button-returned|unverified|rejected)|expected-body-(?:mismatch|unavailable|timeout)|test-prompt-not-found|test-prompt-dismissed|prompt-(?:foreground-window-unavailable|foreground-title-mismatch|expected-body-(?:mismatch|unavailable|timeout)|(?:invalid-window|title-mismatch|button-count-mismatch|expected-buttons-missing|requested-button-missing|expected-message-mismatch|expected-message-unavailable|matched))/gi;
+      const safeOutcome = /exit-[a-z0-9_-]+|timeout-[a-z0-9-]+|(?:script-start|window-api-ready)-no-status|ui-(?:child-(?:starting|started|waiting|finished|killing|kill-waiting|exit-checking|output-draining|finally-exit-checking|finally-killing|finally-waiting|disposing)|payload-(?:preparing|ready|writing|written))|prompt-reader-timeout-[a-z0-9-]+|prompt-window-(?:not-found|title-mismatch|ambiguous)|prompt-foreground-activation-rejected|expected-foreground-prompt-unavailable|quit-dialog-not-found|automation-error-[a-z0-9]+-at-[a-z0-9-]+|modified-body-(?:button-returned|unverified|rejected)|expected-body-(?:mismatch|unavailable|timeout)|test-prompt-not-found|test-prompt-dismissed|prompt-(?:foreground-window-unavailable|foreground-title-mismatch|expected-body-(?:mismatch|unavailable|timeout)|(?:invalid-window|title-mismatch|button-count-mismatch|expected-buttons-missing|requested-button-missing|expected-message-mismatch|expected-message-unavailable|matched))/gi;
       const outcomeTokens = [...String(error?.message || '').matchAll(safeOutcome)];
       const safeFailure = outcomeTokens.length ? outcomeTokens[outcomeTokens.length - 1][0].toLowerCase() : 'probe-failed';
       const timeout = safeFailure.match(/^prompt-reader-timeout-phase-([a-z0-9-]+)$/);
