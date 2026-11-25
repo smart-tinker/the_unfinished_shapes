@@ -62,6 +62,11 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
   const compressedBytesRead = safeExtractStreamCount(value.compressedBytesRead);
   const decodedBytes = safeExtractStreamCount(value.decodedBytes);
   const sinkBytesWritten = safeExtractStreamCount(value.sinkBytesWritten);
+  const streamTiming = Object.hasOwn(value, 'streamTimingStage') ? {
+    stage: ['before-pipeline', 'pipeline', 'complete'].includes(value.streamTimingStage) ? value.streamTimingStage : 'unknown',
+    prePipelineMs: safeExtractStreamCount(value.prePipelineMs, 120_000),
+    pipelineMs: safeExtractStreamCount(value.pipelineMs, 120_000),
+  } : null;
   const writeCallback = Object.hasOwn(value, 'writeCallbackState') ? {
     state: ['idle', 'write', 'writev'].includes(value.writeCallbackState) ? value.writeCallbackState : 'unknown',
     finishToCloseMs: safeExtractStreamCount(value.writeFinishToCloseMs, 120_000),
@@ -107,6 +112,11 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
     sinkClosed: value.sinkClosed === true,
     sinkBytesWritten,
     sinkWritableLength: safeExtractStreamCount(value.sinkWritableLength),
+    ...(streamTiming ? {
+      streamTimingStage: streamTiming.stage,
+      prePipelineMs: streamTiming.prePipelineMs,
+      pipelineMs: streamTiming.pipelineMs,
+    } : {}),
     ...(writeCallback ? {
       writeCallbackState: writeCallback.state,
       writeFinishToCloseMs: writeCallback.finishToCloseMs,

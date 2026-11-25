@@ -113,7 +113,7 @@ export function trackZipWriteCallback(sink) {
   };
 }
 
-export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, entry, compressedSource, writeCallback = null) {
+export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, entry, compressedSource, writeCallback = null, streamTiming = null) {
   const count = (value, limit = maxExtractedBytes) =>
     Number.isSafeInteger(value) && value >= 0 ? Math.min(value, limit) : null;
   const position = (value, limit) => Number.isSafeInteger(value?.start) && Number.isSafeInteger(value?.pos) && value.pos >= value.start
@@ -134,6 +134,11 @@ export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, ent
     sinkClosed: sink?.closed === true,
     sinkBytesWritten: count(sink?.bytesWritten),
     sinkWritableLength: count(sink?.writableLength),
+    ...(streamTiming ? {
+      streamTimingStage: ['before-pipeline', 'pipeline', 'complete'].includes(streamTiming.stage) ? streamTiming.stage : 'unknown',
+      prePipelineMs: count(streamTiming.prePipelineMs, 120_000),
+      pipelineMs: count(streamTiming.pipelineMs, 120_000),
+    } : {}),
     ...(writeCallback ? {
       writeCallbackState: ['idle', 'write', 'writev'].includes(writeCallback.state) ? writeCallback.state : 'unknown',
       writeFinishToCloseMs: count(writeCallback.writeFinishToCloseMs, 120_000),
@@ -860,13 +865,33 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
     extraction.value = 'write';
     extraction.substage = 'read-stream-open';
     extraction.appAsarEntry = isAppAsar;
-    const { stream, compressedReadStream } = await openZipReadStream(
-      zip, entry, extraction.trackDiagnostics, platform === 'win32' ? zipReadChunkBytes : null,
+    const streamTiming = extraction.trackDiagnostics ? {
+      stage: 'before-pipeline', prePipelineMs: null, pipelineStartedAt: null, pipelineMs: null,
+    } : null;
+    const entryStartedAt = streamTiming ? performance.now() : null;
+    const elapsedMs = startedAt => Math.min(120_000, Math.max(0, Math.round(performance.now() - startedAt)));
+    let stream, compressedReadStream, writeStream, writeCallbackSnapshot = null;
+    const timingSnapshot = () => streamTiming ? {
+      stage: streamTiming.stage,
+      prePipelineMs: streamTiming.prePipelineMs ?? elapsedMs(entryStartedAt),
+      pipelineMs: streamTiming.pipelineStartedAt === null
+        ? null : streamTiming.pipelineMs ?? elapsedMs(streamTiming.pipelineStartedAt),
+    } : null;
+    const snapshot = () => safeZipExtractionStreamSnapshot(
+      stream, writeStream, count, entry, compressedReadStream, writeCallbackSnapshot?.(), timingSnapshot(),
     );
+    extraction.streamSnapshot = snapshot;
+    try {
+      ({ stream, compressedReadStream } = await openZipReadStream(
+        zip, entry, extraction.trackDiagnostics, platform === 'win32' ? zipReadChunkBytes : null,
+      ));
+    } catch (error) {
+      extraction.streamSnapshot = null;
+      throw error;
+    }
     extraction.substage = 'none';
     extraction.appAsarEntry = false;
     const fileMode = ((entry.externalFileAttributes >>> 16) & 0o777) || 0o600;
-    let writeStream;
     let restoreSmokeWriteFailure = () => {};
     try {
       restoreSmokeWriteFailure = installSmokeArchiveWriteFailure(destination, smokeBoundary, output);
@@ -875,14 +900,21 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
       writeStream = isAppAsar && electronFs
         ? electronFs.createWriteStream(output, { flags: 'wx', mode: fileMode })
         : createWriteStream(output, { flags: 'wx', mode: fileMode });
-      const writeCallbackSnapshot = platform === 'win32' && extraction.trackDiagnostics && !isAppAsar
+      writeCallbackSnapshot = platform === 'win32' && extraction.trackDiagnostics && !isAppAsar
         ? trackZipWriteCallback(writeStream) : null;
-      extraction.streamSnapshot = () => safeZipExtractionStreamSnapshot(
-        stream, writeStream, count, entry, compressedReadStream, writeCallbackSnapshot?.(),
-      );
-      await pipeline(...(platform === 'win32' && !isAppAsar
+      const pipelineStreams = platform === 'win32' && !isAppAsar
         ? [stream, createZipWriteBatcher(), writeStream]
-        : [stream, writeStream]));
+        : [stream, writeStream];
+      if (streamTiming) {
+        streamTiming.prePipelineMs = elapsedMs(entryStartedAt);
+        streamTiming.stage = 'pipeline';
+        streamTiming.pipelineStartedAt = performance.now();
+      }
+      await pipeline(...pipelineStreams);
+      if (streamTiming) {
+        streamTiming.pipelineMs = elapsedMs(streamTiming.pipelineStartedAt);
+        streamTiming.stage = 'complete';
+      }
       extraction.substage = 'none';
       extraction.appAsarEntry = false;
     } catch (error) {
