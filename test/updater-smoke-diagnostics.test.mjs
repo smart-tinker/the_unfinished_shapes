@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Writable } from 'node:stream';
 import * as updatePackage from '../src/update-package.mjs';
-import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from '../scripts/updater-smoke-diagnostics.mjs';
+import { safeMainDiagnostics, safeZipBatcherComparison, updaterZipStreamSampleOffsetsMs } from '../scripts/updater-smoke-diagnostics.mjs';
 
 test('TUS Windows ZIP writer reports bounded finish-to-close time at the safe log boundary', async () => {
   const sink = new EventEmitter();
@@ -663,4 +663,134 @@ test('TUS launch snapshot keeps bounded file rehash read state', () => {
     ['reading', 0xffff_ffff],
   ]);
   assert.equal(JSON.stringify(diagnostics).includes('C:/private/path'), false);
+});
+
+test('TUS verified ZIP comparison distinguishes raw reads, Deflate and file sink at the safe boundary', () => {
+  const comparison = safeZipBatcherComparison({
+    assetMatches: true,
+    entrySequence: 12,
+    compression: 'deflate',
+    entryCompressedSize: 111_522_616,
+    entryUncompressedSize: 249_832_448,
+    entryNonAsar: true,
+    entryMatches: true,
+    batchBytes: 262_144,
+    readHighWaterMarkBytes: 262_144,
+    writeHighWaterMarkBytes: 16_384,
+    arms: [
+      {
+        trial: 1, arm: 'raw-read', sink: 'count-discard', outcome: 'time-limit',
+        wallMs: 15_000, cpuUserMs: 20, cpuSystemMs: 10,
+        compressedBytesRead: 12_345, decodedBytes: null, sinkBytesProcessed: 12_345,
+        sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 0,
+        sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: true,
+        cleanupStatus: 'not-created', sourcePath: 'C:/private/archive.zip',
+        entryName: 'private-entry', error: 'private read error',
+      },
+      {
+        trial: 1, arm: 'deflate-discard', sink: 'count-discard', outcome: 'time-limit',
+        wallMs: 15_000, cpuUserMs: 30, cpuSystemMs: 20,
+        compressedBytesRead: 5_432, decodedBytes: 20_000, sinkBytesProcessed: 20_000,
+        sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 0,
+        sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: true,
+        cleanupStatus: 'not-created',
+      },
+      {
+        trial: 1, arm: 'deflate-file', sink: 'node-fs-file', outcome: 'time-limit',
+        wallMs: 15_000, cpuUserMs: 40, cpuSystemMs: 30,
+        compressedBytesRead: 5_432, decodedBytes: 20_000, sinkBytesProcessed: 19_000,
+        sinkWritableLength: 16_384, sinkNeedDrain: true, writeCallbackWaitMs: 900,
+        sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: true,
+        cleanupStatus: 'removed', filePath: 'C:/private/archive/entry.bin',
+      },
+      {
+        trial: 2, arm: 'deflate-discard', sink: 'count-discard', outcome: 'time-limit',
+        wallMs: 15_000, cpuUserMs: 50, cpuSystemMs: 40,
+        compressedBytesRead: 5_432, decodedBytes: 20_000, sinkBytesProcessed: 20_000,
+        sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 0,
+        sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: true,
+        cleanupStatus: 'not-created',
+      },
+    ],
+  });
+
+  assert.equal(comparison.entryMatches, true);
+  assert.deepEqual(comparison.arms.map((arm) => ({
+    arm: arm.arm,
+    trial: arm.trial,
+    compressedBytesRead: arm.compressedBytesRead,
+    decodedBytes: arm.decodedBytes,
+    sinkBytesProcessed: arm.sinkBytesProcessed,
+    sinkWritableLength: arm.sinkWritableLength,
+    sinkNeedDrain: arm.sinkNeedDrain,
+    writeCallbackWaitMs: arm.writeCallbackWaitMs,
+    cleanupStatus: arm.cleanupStatus,
+  })), [
+    {
+      arm: 'raw-read', trial: 1,
+      compressedBytesRead: 12_345, decodedBytes: null, sinkBytesProcessed: 12_345,
+      sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 0,
+      cleanupStatus: 'not-created',
+    },
+    {
+      arm: 'deflate-discard', trial: 1,
+      compressedBytesRead: 5_432, decodedBytes: 20_000, sinkBytesProcessed: 20_000,
+      sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 0,
+      cleanupStatus: 'not-created',
+    },
+    {
+      arm: 'deflate-file', trial: 1,
+      compressedBytesRead: 5_432, decodedBytes: 20_000, sinkBytesProcessed: 19_000,
+      sinkWritableLength: 16_384, sinkNeedDrain: true, writeCallbackWaitMs: 900,
+      cleanupStatus: 'removed',
+    },
+    {
+      arm: 'deflate-discard', trial: 2,
+      compressedBytesRead: 5_432, decodedBytes: 20_000, sinkBytesProcessed: 20_000,
+      sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 0,
+      cleanupStatus: 'not-created',
+    },
+  ]);
+  const [bounded] = safeZipBatcherComparison({
+    assetMatches: true,
+    entrySequence: 12,
+    compression: 'deflate',
+    entryCompressedSize: 111_522_616,
+    entryUncompressedSize: 249_832_448,
+    entryNonAsar: true,
+    entryMatches: true,
+    arms: [{
+      trial: 1, arm: 'C:/private/untrusted-arm', sink: 'count-discard', outcome: 'time-limit',
+      wallMs: 60_001, cpuUserMs: Number.MAX_SAFE_INTEGER, cpuSystemMs: 'private',
+      compressedBytesRead: 500_000_001, decodedBytes: 1_073_741_825, sinkBytesProcessed: 1_073_741_825,
+      sinkWritableLength: Number.MAX_SAFE_INTEGER, sinkNeedDrain: 'private', writeCallbackWaitMs: 120_001,
+      sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: true,
+      cleanupStatus: 'private', sourcePath: 'C:/private/archive.zip', error: 'private error',
+    }],
+  }).arms;
+  assert.deepEqual({
+    arm: bounded.arm,
+    wallMs: bounded.wallMs,
+    cpuUserMs: bounded.cpuUserMs,
+    cpuSystemMs: bounded.cpuSystemMs,
+    compressedBytesRead: bounded.compressedBytesRead,
+    decodedBytes: bounded.decodedBytes,
+    sinkBytesProcessed: bounded.sinkBytesProcessed,
+    sinkWritableLength: bounded.sinkWritableLength,
+    sinkNeedDrain: bounded.sinkNeedDrain,
+    writeCallbackWaitMs: bounded.writeCallbackWaitMs,
+    cleanupStatus: bounded.cleanupStatus,
+  }, {
+    arm: 'unknown', wallMs: null, cpuUserMs: null, cpuSystemMs: null,
+    compressedBytesRead: null, decodedBytes: null, sinkBytesProcessed: null,
+    sinkWritableLength: null, sinkNeedDrain: null, writeCallbackWaitMs: null,
+    cleanupStatus: 'unknown',
+  });
+  const serialized = JSON.stringify(comparison) + JSON.stringify(bounded);
+  assert.equal(serialized.includes('C:/private/archive.zip'), false);
+  assert.equal(serialized.includes('C:/private/archive/entry.bin'), false);
+  assert.equal(serialized.includes('private-entry'), false);
+  assert.equal(serialized.includes('private read error'), false);
+  assert.equal(serialized.includes('C:/private/untrusted-arm'), false);
+  assert.equal(serialized.includes('private error'), false);
 });
