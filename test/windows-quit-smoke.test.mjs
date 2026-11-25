@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const runPowerShell = promisify(execFile);
 
 test('real native quit prompt runs without CI auto-confirm and skips closed-app cleanup', async () => {
   const source = await readFile(new URL('../scripts/windows-installer-smoke.mjs', import.meta.url), 'utf8');
@@ -142,6 +146,50 @@ test('bounded UIA child overflow is unavailable, not a definite mismatch', async
   assert.ok(uia.indexOf("TUS_UIA_CHILD: mismatch") > traversalEnd);
   assert.match(uia, /if \(\$process\.ExitCode -eq 0 -and \$results\.Count -gt 0\)[\s\S]*return 'unavailable'/,
     'overflow failure remains unavailable at the parent-reader boundary');
+});
+
+
+test('Windows UIA child scan treats a 65th sibling as unavailable', { skip: process.platform !== 'win32' }, async () => {
+  const source = (await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8'))
+    .replace(/\r\n/g, '\n');
+  const childStart = source.indexOf("$childScript = @'\n");
+  const childEnd = source.indexOf("\n'@", childStart);
+  assert.ok(childStart >= 0 && childEnd > childStart, 'the production child script is present');
+  const childScript = source.slice(childStart + "$childScript = @'\n".length, childEnd);
+  const scanStart = childScript.indexOf('$elements = @()');
+  const scanEnd = childScript.indexOf('  for ($index = 0; $index -lt $expected.Length;', scanStart);
+  const productionScan = childScript.slice(scanStart, scanEnd);
+  assert.ok(scanStart >= 0 && scanEnd > scanStart, 'the production child scan is present');
+
+  const powershell = [
+    'Add-Type -AssemblyName UIAutomationTypes',
+    '$nodes = @()',
+    'for ($index = 0; $index -lt 65; $index++) {',
+    "  $node = [pscustomobject]@{ Name = 'child-' + $index }",
+    '  $node | Add-Member -MemberType ScriptMethod -Name GetCurrentPropertyValue -Value { param($property) return $this.Name }',
+    '  $nodes += $node',
+    '}',
+    '$walker = [pscustomobject]@{ Nodes = $nodes }',
+    '$walker | Add-Member -MemberType ScriptMethod -Name GetFirstChild -Value { param($root) return $this.Nodes[0] }',
+    '$walker | Add-Member -MemberType ScriptMethod -Name GetNextSibling -Value { param($current) $index = [array]::IndexOf($this.Nodes, $current); if ($index + 1 -lt $this.Nodes.Count) { return $this.Nodes[$index + 1] }; return $null }',
+    '$root = [pscustomobject]@{}',
+    productionScan,
+  ].join('\n');
+  const encodedCommand = Buffer.from(powershell, 'utf16le').toString('base64');
+  let exitCode = 0;
+  let stdout = '';
+  try {
+    ({ stdout } = await runPowerShell('powershell.exe', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedCommand,
+    ], { timeout: 15000, windowsHide: true }));
+  } catch (error) {
+    exitCode = error?.code;
+    stdout = String(error?.stdout ?? '');
+  }
+  const output = stdout.split(/\r?\n/);
+  assert.equal(exitCode, 1, 'overflow exits through the unavailable path');
+  assert.ok(output.includes('unavailable'), 'the 65th sibling emits unavailable');
+  assert.ok(!output.includes('TUS_UIA_CHILD: mismatch'), 'overflow is never reported as a complete mismatch');
 });
 
 
