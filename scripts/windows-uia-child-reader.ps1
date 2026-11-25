@@ -69,40 +69,41 @@ try {
     }
     return $false
   }
-  for ($index = 0; $index -lt $expected.Length; $index++) {
-    $condition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::NameProperty,
-      [string]$expected[$index])
-    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-findfirst-' + $index + '-start')
+  $elements = @()
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-first-child-start')
+  [Console]::Out.Flush()
+  $element = $walker.GetFirstChild($root)
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-first-child-done')
+  [Console]::Out.Flush()
+  # shortcut: 64 direct children, raise only if packaged evidence exceeds this bound.
+  for ($childOrdinal = 0; $null -ne $element -and $childOrdinal -lt 64; $childOrdinal++) {
+    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-child-name-start')
     [Console]::Out.Flush()
-    $messageElement = $root.FindFirst(
-      [System.Windows.Automation.TreeScope]::Children,
-      $condition)
-    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-findfirst-' + $index + '-done')
-    [Console]::Out.Flush()
-    if ($null -eq $messageElement) { continue }
-    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-current-name-' + $index + '-start')
-    [Console]::Out.Flush()
-    $messageName = [string]$messageElement.GetCurrentPropertyValue(
+    $elementName = [string]$element.GetCurrentPropertyValue(
       [System.Windows.Automation.AutomationElement]::NameProperty)
-    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-current-name-' + $index + '-done')
+    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-child-name-done')
     [Console]::Out.Flush()
-    if (-not [string]::Equals($messageName, [string]$expected[$index], [StringComparison]::Ordinal)) { continue }
-    $detailElement = $messageElement
-    for ($detailIndex = 0; $detailIndex -lt 8; $detailIndex++) {
-      [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-next-sibling-' + $index + '-' + $detailIndex + '-start')
-      [Console]::Out.Flush()
-      $detailElement = $walker.GetNextSibling($detailElement)
-      [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-next-sibling-' + $index + '-' + $detailIndex + '-done')
-      [Console]::Out.Flush()
-      if ($null -eq $detailElement) { break }
-      [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-current-name-' + $index + '-' + $detailIndex + '-start')
-      [Console]::Out.Flush()
-      $detailName = [string]$detailElement.GetCurrentPropertyValue(
-        [System.Windows.Automation.AutomationElement]::NameProperty)
-      [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-current-name-' + $index + '-' + $detailIndex + '-done')
-      [Console]::Out.Flush()
-      if (Test-ExpectedPromptDetail $index $detailName) {
+    $elements += [pscustomobject]@{ Element = $element; Name = $elementName }
+    if ($childOrdinal -eq 63) { break }
+    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-next-sibling-start')
+    [Console]::Out.Flush()
+    $element = $walker.GetNextSibling($element)
+    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-next-sibling-done')
+    [Console]::Out.Flush()
+  }
+  for ($index = 0; $index -lt $expected.Length; $index++) {
+    $messageChildIndex = -1
+    for ($childIndex = 0; $childIndex -lt $elements.Count; $childIndex++) {
+      if ([string]::Equals([string]$elements[$childIndex].Name, [string]$expected[$index], [StringComparison]::Ordinal)) {
+        $messageChildIndex = $childIndex
+        break
+      }
+    }
+    if ($messageChildIndex -lt 0) { continue }
+    for ($detailIndex = $messageChildIndex + 1;
+         $detailIndex -lt ($messageChildIndex + 9) -and $detailIndex -lt $elements.Count;
+         $detailIndex++) {
+      if (Test-ExpectedPromptDetail $index ([string]$elements[$detailIndex].Name)) {
         [Console]::Out.WriteLine('TUS_UIA_CHILD: matched-' + $index)
         exit 0
       }
@@ -150,7 +151,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 public sealed class TusUiaOutputCapture
 {
-    private static readonly Regex TokenMatcher = new Regex(@"^TUS_UIA_CHILD: (phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-\d+-(?:start|done)|current-name-\d+(?:-\d+)?-(?:start|done)|next-sibling-\d+-\d+-(?:start|done))|matched-[01]|mismatch)$", RegexOptions.CultureInvariant);
+    private static readonly Regex TokenMatcher = new Regex(@"^TUS_UIA_CHILD: (phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|first-child-(?:start|done)|child-name-(?:start|done)|next-sibling-(?:start|done))|matched-[01]|mismatch)$", RegexOptions.CultureInvariant);
     public readonly List<string> Tokens = new List<string>();
     private Stopwatch fromHandleWatch;
     public long FromHandleMilliseconds

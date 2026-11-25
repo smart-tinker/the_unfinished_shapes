@@ -24,7 +24,7 @@ const safeUiPromptStatuses = new Set([
   'expected-body-mismatch', 'expected-body-timeout', 'expected-body-unavailable',
   'owner-window-unavailable', 'window-not-found', 'window-title-mismatch', 'window-owner-mismatch', 'window-process-mismatch', 'window-ambiguous', 'foreground-activation-rejected',
 ]);
-const safeUiTimeoutPhase = /^prompt-reader-timeout-phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-[01]-(?:start|done)|current-name-[01](?:-[0-7])?-(?:start|done)|next-sibling-[01]-[0-7]-(?:start|done))$/;
+const safeUiTimeoutPhase = /^prompt-reader-timeout-phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|first-child-(?:start|done)|child-name-(?:start|done)|next-sibling-(?:start|done))$/;
 const safeUiActions = new Set([
   'keep-open', 'quit-anyway', 'assert-body-mismatch-rejected',
   'assert-exact-body-recognized', 'dismiss-test-prompt', 'file-menu-open', 'file-menu-exit',
@@ -209,10 +209,10 @@ async function assertModifiedPromptIsNotClicked(app, pid, modifiedField, ownerWi
         keepOpenRejected = /expected-body-mismatch/.test(error?.message || '');
       }
     }
-    const beforeDismissal = await app.evaluate(() => {
+    const beforeDismissal = await app.evaluate(({ app }, expectedPid) => {
       const state = globalThis.__tusPromptTest;
       return {
-        mainProcessId: process.pid,
+        mainProcessMatches: app.isReady() && process.pid === expectedPid,
         invoked: state?.invoked === true,
         processMatches: state?.processMatches === true,
         ownerWindowMatches: state?.ownerWindowMatches === true,
@@ -223,7 +223,7 @@ async function assertModifiedPromptIsNotClicked(app, pid, modifiedField, ownerWi
         detailMutated: state?.detail === 'Modified activity detail.',
         buttonsMatch: JSON.stringify(state?.buttons) === JSON.stringify(['Keep the game open', 'Quit anyway']),
       };
-    });
+    }, pid);
     let dismissal = { resolved: beforeDismissal.resolved, responseWasSafe: beforeDismissal.responseWasSafe };
     if (beforeDismissal.invoked && beforeDismissal.processMatches && beforeDismissal.ownerWindowMatches && !beforeDismissal.resolved) {
       await ui('dismiss-test-prompt', pid, undefined, 'MTA', ownerWindow.handleHex);
@@ -237,7 +237,7 @@ async function assertModifiedPromptIsNotClicked(app, pid, modifiedField, ownerWi
     assert.equal(matcherRejected, true, 'the native matcher rejects the modified field as a definite body mismatch; safe outcome: ' + matcherOutcome);
     assert.equal(keepOpenRejected, true, 'keep-open refuses a changed body without clicking the button');
     assert.deepEqual(beforeDismissal, {
-      mainProcessId: pid,
+      mainProcessMatches: true,
       invoked: true,
       processMatches: true,
       ownerWindowMatches: true,
@@ -249,7 +249,7 @@ async function assertModifiedPromptIsNotClicked(app, pid, modifiedField, ownerWi
       buttonsMatch: true,
     }, 'the modified native prompt remains open while keep-open is checked');
     assert.deepEqual(dismissal, { resolved: true, responseWasSafe: true }, 'test cleanup cancels the prompt with its safe default');
-    assert.equal(await app.evaluate(() => process.pid), pid, 'rejecting a modified prompt leaves the same TUS main process running');
+    assert.equal(await app.evaluate(({ app }, expectedPid) => app.isReady() && process.pid === expectedPid, pid), true, 'rejecting a modified prompt leaves the same TUS main process running');
   } finally {
     const pending = await app.evaluate(() => {
       const state = globalThis.__tusPromptTest;
@@ -304,13 +304,13 @@ async function assertKnownStatusDetailIsRecognized(app, pid, ownerWindow) {
     const result = await ui('assert-exact-body-recognized', pid, undefined, 'MTA', ownerWindow.handleHex);
     assert.match(result, /^TUS_UIA: expected-body-recognized$/m,
       'a known prompt with the native Goal status prefix is recognized');
-    const snapshot = await app.evaluate(() => {
+    const snapshot = await app.evaluate(({ app }, expectedPid) => {
       const state = globalThis.__tusKnownPromptTest;
-      return { mainProcessId: process.pid, invoked: state?.invoked === true, processMatches: state?.processMatches === true, ownerWindowMatches: state?.ownerWindowMatches === true };
-    });
-    assert.deepEqual(snapshot, { mainProcessId: pid, invoked: true, processMatches: true, ownerWindowMatches: true },
+      return { mainProcessMatches: app.isReady() && process.pid === expectedPid, invoked: state?.invoked === true, processMatches: state?.processMatches === true, ownerWindowMatches: state?.ownerWindowMatches === true };
+    }, pid);
+    assert.deepEqual(snapshot, { mainProcessMatches: true, invoked: true, processMatches: true, ownerWindowMatches: true },
       'the production dialog belongs to the exact packaged process and BrowserWindow');
-    assert.equal(await app.evaluate(() => process.pid), pid, 'recognizing the known prompt leaves the same TUS main process running');
+    assert.equal(await app.evaluate(({ app }, expectedPid) => app.isReady() && process.pid === expectedPid, pid), true, 'recognizing the known prompt leaves the same TUS main process running');
     await ui('dismiss-test-prompt', pid, undefined, 'MTA', ownerWindow.handleHex);
     const dismissed = await app.evaluate(async () => {
       const state = globalThis.__tusKnownPromptTest;
@@ -373,7 +373,7 @@ export async function quitPromptAcceptance(app, page, graphics, expectedExecutab
     assert.match(exactPromptEvidence, /^TUS_UIA: expected-body-recognized$/m, 'the exact production message and detail are recognized before clicking');
     const closePrompt = await ui('keep-open', pid, undefined, 'MTA', ownerWindow.handleHex);
     assert.match(closePrompt, /^TUS_UIA: exact-foreground-prompt-matched$/m, 'window-close prompt is the exact TUS dialog');
-    assert.equal(await app.evaluate(() => process.pid), pid, 'Keep the game open leaves the same TUS main process running');
+    assert.equal(await app.evaluate(({ app }, expectedPid) => app.isReady() && process.pid === expectedPid, pid), true, 'Keep the game open leaves the same TUS main process running');
     await page.waitForFunction(() => document.querySelector('#connection')?.textContent.includes('World connected'), null, { timeout: 10000 });
     const afterCancel = await page.evaluate(async () => {
       const settings = await window.tus.loadSettings();

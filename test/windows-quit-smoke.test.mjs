@@ -133,17 +133,19 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
   assert.match(expectedBlock, /Native Goal status:/);
 
   const uia = await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8');
-  assert.match(uia, /TreeScope\]::Children/);
-  assert.match(uia, /\.FindFirst\(/);
+  assert.match(uia, /TreeWalker\]::ControlViewWalker/);
+  assert.match(uia, /\.GetFirstChild\(\$root\)/);
+  assert.doesNotMatch(uia, /\.FindFirst\(/);
+  assert.match(uia, /\$childOrdinal -lt 64/);
   assert.match(uia, /GetNextSibling/);
   assert.match(uia, /detail/);
   assert.match(uia, /TUS_UIA_CHILD: phase-fromhandle-start/);
-  for (const marker of ['phase-child-start', 'phase-payload-read-start', 'phase-payload-parse-start', 'phase-payload-decode-start', 'phase-payload-decode-done', 'phase-payload-json-start', 'phase-payload-json-done', 'phase-addtype-types-start', 'phase-addtype-client-start']) {
+  for (const marker of ['phase-child-start', 'phase-payload-read-start', 'phase-payload-parse-start', 'phase-payload-decode-start', 'phase-payload-decode-done', 'phase-payload-json-start', 'phase-payload-json-done', 'phase-addtype-types-start', 'phase-addtype-client-start', 'phase-first-child-start', 'phase-child-name-start', 'phase-next-sibling-start']) {
     assert.ok(uia.includes('TUS_UIA_CHILD: ' + marker), 'UIA child reports ' + marker);
   }
-  assert.match(uia, /TUS_UIA_CHILD: phase-findfirst-\' \+ \$index \+ \'-start/);
-  assert.match(uia, /TUS_UIA_CHILD: phase-current-name-\' \+ \$index \+ \'-start/);
-  assert.match(uia, /TUS_UIA_CHILD: phase-next-sibling-/);
+  assert.match(uia, /TUS_UIA_CHILD: phase-first-child-start/);
+  assert.match(uia, /TUS_UIA_CHILD: phase-child-name-start/);
+  assert.match(uia, /TUS_UIA_CHILD: phase-next-sibling-start/);
   assert.match(uia, /Test-ExpectedPromptDetail/);
   assert.match(uia, /\[ValidateSet\('STA','MTA'\)\]\[string\]\$Apartment = 'MTA'/);
   assert.match(uia, /NonInteractive -' \+ \$Apartment \+ ' -EncodedCommand/);
@@ -164,7 +166,9 @@ test('Windows quit prompt acceptance mutates message and detail independently', 
   assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, 'message', ownerWindow\)/);
   assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, 'detail', ownerWindow\)/);
   assert.match(automation, /Modified activity detail\./);
-  assert.match(automation, /mainProcessId: process\.pid/);
+  assert.match(automation, /mainProcessMatches: app\.isReady\(\) && process\.pid === expectedPid/);
+  assert.doesNotMatch(automation, /mainProcessId/);
+  assert.doesNotMatch(automation, /assert\.equal\(await app\.evaluate\(\(\) => process\.pid\), pid/);
   assert.match(automation, /rejecting a modified prompt leaves the same TUS main process running/);
   assert.match(automation, /TUS_QUIT_TEST: ' \+ modifiedField \+ '-probe-'/);
   assert.match(automation, /if \(matcherRejected\)\s*\{\s*try\s*\{\s*await ui\('keep-open', pid, undefined, 'MTA', ownerWindow\.handleHex\)/);
@@ -193,9 +197,9 @@ test('Windows quit acceptance recognizes the status-prefixed known detail', asyn
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
   assert.match(automation, /assertKnownStatusDetailIsRecognized\(app, pid, ownerWindow\)/);
   assert.match(automation, /Native Goal status: active\./);
-  assert.match(automation, /mainProcessId: process\.pid/);
+  assert.match(automation, /mainProcessMatches: app\.isReady\(\) && process\.pid === expectedPid/);
   assert.match(automation, /recognizing the known prompt leaves the same TUS main process running/);
-  assert.match(automation, /assert\.equal\(await app\.evaluate\(\(\) => process\.pid\), pid, 'recognizing the known prompt leaves the same TUS main process running'\)/);
+  assert.match(automation, /assert\.equal\(await app\.evaluate\(\(\{ app \}, expectedPid\) => app\.isReady\(\) && process\.pid === expectedPid, pid\), true,/);
 });
 
 
@@ -295,10 +299,13 @@ test('safe UIA failure classification distinguishes a child that reached the win
   const { safeUiFailureOutcome } = await import('../scripts/quit-prompt-acceptance.mjs');
   assert.equal(typeof safeUiFailureOutcome, 'function', 'failure classification is available');
   assert.equal(safeUiFailureOutcome(['script-start', 'window-api-ready']) === 'window-api-ready-no-status', true);
-  assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-findfirst-0-start']) === 'prompt-reader-timeout-phase-findfirst-0-start', true);
-  assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-findfirst-0-start', 'prompt-expected-body-timeout']),
-    'prompt-reader-timeout-phase-findfirst-0-start', 'the reader timeout phase wins over the generic body-timeout status');
-  assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-findfirst-0-start', 'prompt-expected-body-mismatch']),
+  for (const phase of ['first-child-start', 'child-name-start', 'next-sibling-start']) {
+    const outcome = 'prompt-reader-timeout-phase-' + phase;
+    assert.equal(safeUiFailureOutcome([outcome]), outcome);
+  }
+  assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-first-child-start', 'prompt-expected-body-timeout']),
+    'prompt-reader-timeout-phase-first-child-start', 'the reader timeout phase wins over the generic body-timeout status');
+  assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-first-child-start', 'prompt-expected-body-mismatch']),
     'prompt-expected-body-mismatch', 'a definite mismatch remains stronger than an earlier reader timeout');
   assert.equal(safeUiFailureOutcome(['prompt-expected-body-unavailable', 'modified-body-unverified']),
     'prompt-expected-body-unavailable', 'specific body status wins over the generic unverified marker');
