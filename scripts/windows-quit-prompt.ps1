@@ -512,6 +512,9 @@ switch ($Action) {
     Write-Output 'TUS_UIA: prompt-dialog-process-match'
     $button = Find-ValidatedPromptButton $promptWindowHandle $expectedMessages $expectedDetails $goalStatusPrefix 'Keep the game open'
     if ([TusWindowLookup]::LastPromptStatus -notin @('expected-body-mismatch', 'matched')) {
+      if ($script:uiaPromptTimeoutPhase -ne 'none') {
+        Write-Output "TUS_UIA: prompt-reader-timeout-$script:uiaPromptTimeoutPhase"
+      }
       Write-Output 'TUS_UIA: test-prompt-not-found'
       Write-Output "TUS_UIA: prompt-$([TusWindowLookup]::LastPromptStatus)"
       exit 2
@@ -529,6 +532,10 @@ switch ($Action) {
         [TusWindowLookup]::GetWindowTitle($promptWindowHandle) -ne 'Codex activity may continue') {
       Write-Output 'TUS_UIA: test-prompt-not-found'
       Write-Output 'TUS_UIA: prompt-foreground-activation-rejected'
+      if ($script:uiaPromptTimeoutPhase -ne 'none') {
+        Write-Output "TUS_UIA: prompt-reader-timeout-$script:uiaPromptTimeoutPhase"
+        Write-Output "TUS_UIA: prompt-$([TusWindowLookup]::LastPromptStatus)"
+      }
       exit 2
     }
     Add-Type -AssemblyName System.Windows.Forms

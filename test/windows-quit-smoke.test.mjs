@@ -161,9 +161,11 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
 test('Windows quit prompt acceptance mutates message and detail independently', async () => {
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
-  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, launcher, 'message', ownerWindow\)/);
-  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, launcher, 'detail', ownerWindow\)/);
+  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, 'message', ownerWindow\)/);
+  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, 'detail', ownerWindow\)/);
   assert.match(automation, /Modified activity detail\./);
+  assert.match(automation, /mainProcessId: process\.pid/);
+  assert.match(automation, /rejecting a modified prompt leaves the same TUS main process running/);
   assert.match(automation, /TUS_QUIT_TEST: ' \+ modifiedField \+ '-probe-'/);
   assert.match(automation, /if \(matcherRejected\)\s*\{\s*try\s*\{\s*await ui\('keep-open', pid, undefined, 'MTA', ownerWindow\.handleHex\)/);
   assert.match(automation, /prompt-reader-timeout-phase-\(\[a-z0-9-\]\+\)/);
@@ -175,13 +177,25 @@ test('Windows quit prompt acceptance mutates message and detail independently', 
   assert.match(automation, /quit-dialog-not-found/);
   assert.match(automation, /automation-error-\[a-z0-9\]\+-at-\[a-z0-9-\]\+/i);
   assert.match(windowsUI, /TUS_UIA: prompt-\$status/);
+  const dismissStart = windowsUI.indexOf("  'dismiss-test-prompt' {");
+  const dismissEnd = windowsUI.indexOf("  'file-menu-open' {", dismissStart);
+  const dismiss = windowsUI.slice(dismissStart, dismissEnd);
+  assert.equal((dismiss.match(/prompt-reader-timeout-\$script:uiaPromptTimeoutPhase/g) ?? []).length, 2,
+    'both prompt-dismissal failure boundaries retain the bounded UIA reader phase');
+  const postActivationStart = dismiss.indexOf("if ([TusWindowLookup]::LastPromptStatus -notin @('expected-body-mismatch', 'matched') -or");
+  const foregroundFailure = dismiss.indexOf("Write-Output 'TUS_UIA: prompt-foreground-activation-rejected'", postActivationStart);
+  const timeoutPhase = dismiss.indexOf('TUS_UIA: prompt-reader-timeout-', postActivationStart);
+  assert.ok(foregroundFailure >= 0 && timeoutPhase > foregroundFailure,
+    'the bounded marker tail preserves post-activation reader failures');
 });
 
 test('Windows quit acceptance recognizes the status-prefixed known detail', async () => {
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
-  assert.match(automation, /assertKnownStatusDetailIsRecognized\(app, pid, launcher, ownerWindow\)/);
+  assert.match(automation, /assertKnownStatusDetailIsRecognized\(app, pid, ownerWindow\)/);
   assert.match(automation, /Native Goal status: active\./);
-  assert.match(automation, /assert\.equal\(launcher\.exitCode, null, 'recognizing the known prompt does not click either button'\)/);
+  assert.match(automation, /mainProcessId: process\.pid/);
+  assert.match(automation, /recognizing the known prompt leaves the same TUS main process running/);
+  assert.match(automation, /assert\.equal\(await app\.evaluate\(\(\) => process\.pid\), pid, 'recognizing the known prompt leaves the same TUS main process running'\)/);
 });
 
 
@@ -282,6 +296,10 @@ test('safe UIA failure classification distinguishes a child that reached the win
   assert.equal(typeof safeUiFailureOutcome, 'function', 'failure classification is available');
   assert.equal(safeUiFailureOutcome(['script-start', 'window-api-ready']) === 'window-api-ready-no-status', true);
   assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-findfirst-0-start']) === 'prompt-reader-timeout-phase-findfirst-0-start', true);
+  assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-findfirst-0-start', 'prompt-expected-body-timeout']),
+    'prompt-reader-timeout-phase-findfirst-0-start', 'the reader timeout phase wins over the generic body-timeout status');
+  assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-findfirst-0-start', 'prompt-expected-body-mismatch']),
+    'prompt-expected-body-mismatch', 'a definite mismatch remains stronger than an earlier reader timeout');
   assert.equal(safeUiFailureOutcome(['prompt-expected-body-unavailable', 'modified-body-unverified']),
     'prompt-expected-body-unavailable', 'specific body status wins over the generic unverified marker');
   assert.equal(safeUiFailureOutcome(['window-api-ready', 'automation-error-invalidoperationexception-at-dismissing-test-prompt']),
