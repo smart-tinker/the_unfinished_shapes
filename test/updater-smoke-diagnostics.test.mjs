@@ -339,6 +339,42 @@ test('TUS extraction snapshot preserves only fixed ZIP write substages and exact
 });
 
 
+test('TUS ZIP entry timing separates pre-pipeline setup from pipeline and keeps only bounded values', () => {
+  const raw = updatePackage.safeZipExtractionStreamSnapshot(
+    null, null, 12,
+    { compressionMethod: 8, compressedSize: 10, uncompressedSize: 20 },
+    null, null,
+    {
+      stage: 'pipeline', prePipelineMs: 31, pipelineMs: 47,
+      sourcePath: 'C:/private/archive.zip', entryName: 'private-entry',
+    },
+  );
+  const [diagnostic] = safeMainDiagnostics([{
+    stage: 'extract-archive', status: 'starting', extractStreamSnapshot: raw,
+  }], { sha256: 'a'.repeat(64) }, 'candidate.zip', 'v0.1.0-rc11');
+  assert.deepEqual({
+    stage: diagnostic.streamSnapshot.streamTimingStage,
+    prePipelineMs: diagnostic.streamSnapshot.prePipelineMs,
+    pipelineMs: diagnostic.streamSnapshot.pipelineMs,
+  }, { stage: 'pipeline', prePipelineMs: 31, pipelineMs: 47 });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /C:\/private\/archive\.zip|private-entry/);
+
+  const [bounded] = safeMainDiagnostics([{
+    stage: 'extract-archive', status: 'starting',
+    extractStreamSnapshot: {
+      ...raw, streamTimingStage: 'private-stage',
+      prePipelineMs: 120_001, pipelineMs: -1, privateField: 'C:/private/path',
+    },
+  }], { sha256: 'a'.repeat(64) }, 'candidate.zip', 'v0.1.0-rc11');
+  assert.deepEqual({
+    stage: bounded.streamSnapshot.streamTimingStage,
+    prePipelineMs: bounded.streamSnapshot.prePipelineMs,
+    pipelineMs: bounded.streamSnapshot.pipelineMs,
+  }, { stage: 'unknown', prePipelineMs: 120_000, pipelineMs: null });
+  assert.doesNotMatch(JSON.stringify(bounded), /private-stage|privateField|C:\/private\/path/);
+});
+
+
 test('TUS extraction snapshots localize bounded read, decode and write throughput per ZIP entry', () => {
   const manifestFile = { sha256: 'a'.repeat(64) };
   const assetName = 'candidate.zip';
