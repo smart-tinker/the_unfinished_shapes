@@ -161,8 +161,8 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
 test('Windows quit prompt acceptance mutates message and detail independently', async () => {
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
-  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'message', ownerWindow\)/);
-  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'detail', ownerWindow\)/);
+  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, launcher, 'message', ownerWindow\)/);
+  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, launcher, 'detail', ownerWindow\)/);
   assert.match(automation, /Modified activity detail\./);
   assert.match(automation, /TUS_QUIT_TEST: ' \+ modifiedField \+ '-probe-'/);
   assert.match(automation, /if \(matcherRejected\)\s*\{\s*try\s*\{\s*await ui\('keep-open', pid, undefined, 'MTA', ownerWindow\.handleHex\)/);
@@ -181,6 +181,7 @@ test('Windows quit acceptance recognizes the status-prefixed known detail', asyn
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
   assert.match(automation, /assertKnownStatusDetailIsRecognized\(app, pid, launcher, ownerWindow\)/);
   assert.match(automation, /Native Goal status: active\./);
+  assert.match(automation, /assert\.equal\(launcher\.exitCode, null, 'recognizing the known prompt does not click either button'\)/);
 });
 
 

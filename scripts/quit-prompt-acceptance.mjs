@@ -301,7 +301,7 @@ async function assertKnownStatusDetailIsRecognized(app, pid, launcher, ownerWind
     });
     assert.deepEqual(snapshot, { invoked: true, processMatches: true, ownerWindowMatches: true },
       'the production dialog belongs to the exact packaged process and BrowserWindow');
-    assert.equal(process.exitCode, null, 'recognizing the known prompt does not click either button');
+    assert.equal(launcher.exitCode, null, 'recognizing the known prompt does not click either button');
     await ui('dismiss-test-prompt', pid, undefined, 'MTA', ownerWindow.handleHex);
     const dismissed = await app.evaluate(async () => {
       const state = globalThis.__tusKnownPromptTest;
