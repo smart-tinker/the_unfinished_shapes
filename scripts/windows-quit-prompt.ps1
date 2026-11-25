@@ -2,7 +2,8 @@ param(
   [Parameter(Mandatory=$true)][ValidateSet('keep-open','quit-anyway','assert-body-mismatch-rejected','assert-exact-body-recognized','dismiss-test-prompt','file-menu-open','file-menu-exit')][string]$Action,
   [Parameter(Mandatory=$true)][int]$ProcessId,
   [ValidateSet('STA','MTA')][string]$Apartment = 'MTA',
-  [string]$MenuKey
+  [string]$MenuKey,
+  [string]$OwnerWindowHandle
 )
 $ErrorActionPreference = 'Stop'
 $script:uiPhase = 'startup'
@@ -18,6 +19,7 @@ Write-Output 'TUS_UIA: script-start'
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 public static class TusWindowLookup {
@@ -29,6 +31,8 @@ public static class TusWindowLookup {
   private const uint BM_CLICK = 0x00F5;
   private const uint SMTO_ABORTIFHUNG = 0x0002;
   private const uint SMTO_BLOCK = 0x0001;
+  private const uint GW_OWNER = 4;
+  private const uint GA_ROOTOWNER = 3;
   private delegate bool EnumWindowsCallback(IntPtr window, IntPtr extraData);
   private sealed class PromptControl {
     public int Index;
@@ -60,6 +64,10 @@ public static class TusWindowLookup {
   private static extern uint GetWindowThreadProcessId(IntPtr window, out int processId);
   [DllImport("user32.dll")]
   private static extern bool IsChild(IntPtr parent, IntPtr child);
+  [DllImport("user32.dll")]
+  private static extern IntPtr GetWindow(IntPtr window, uint command);
+  [DllImport("user32.dll")]
+  private static extern IntPtr GetAncestor(IntPtr window, uint flags);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)]
   private static extern int GetClassName(IntPtr window, StringBuilder className, int maximumLength);
   [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode)]
@@ -108,14 +116,42 @@ public static class TusWindowLookup {
     int processId;
     return GetWindowThreadProcessId(window, out processId) == 0 ? 0 : processId;
   }
-  public static IntPtr FindExpectedPromptWindow(int expectedProcessId) {
-    LastWindowLookupStatus = "window-not-found";
+  private static IntPtr ParseWindowHandle(string value) {
+    UInt64 parsed;
+    if (String.IsNullOrEmpty(value) || value.Length > 16 ||
+        !UInt64.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out parsed)) return IntPtr.Zero;
+    return new IntPtr(unchecked((long)parsed));
+  }
+  private static bool IsOwnedByExpectedWindow(IntPtr window, IntPtr expectedOwner) {
+    return window != IntPtr.Zero && expectedOwner != IntPtr.Zero &&
+      (GetWindow(window, GW_OWNER) == expectedOwner ||
+       GetAncestor(window, GA_ROOTOWNER) == expectedOwner);
+  }
+  private static bool IsExpectedPromptWindow(IntPtr dialog, int expectedProcessId, IntPtr expectedOwner) {
+    return dialog != IntPtr.Zero && expectedProcessId > 0 && expectedOwner != IntPtr.Zero &&
+      GetWindowProcessId(expectedOwner) == expectedProcessId &&
+      GetWindowProcessId(dialog) == expectedProcessId &&
+      IsOwnedByExpectedWindow(dialog, expectedOwner) &&
+      IsWindowVisible(dialog) && IsWindowEnabled(dialog);
+  }
+  public static IntPtr FindExpectedPromptWindow(int expectedProcessId, string expectedOwnerHandle) {
+    LastWindowLookupStatus = "owner-window-unavailable";
     if (expectedProcessId <= 0) return IntPtr.Zero;
+    IntPtr expectedOwner = ParseWindowHandle(expectedOwnerHandle);
+    if (expectedOwner == IntPtr.Zero || GetWindowProcessId(expectedOwner) != expectedProcessId) return IntPtr.Zero;
     var matches = new List<IntPtr>();
-    int eligibleWindows = 0;
+    int sameProcessWindows = 0, ownedWindows = 0, foreignPromptWindows = 0;
     EnumWindows((window, extraData) => {
-      if (GetWindowProcessId(window) != expectedProcessId || !IsWindowVisible(window) || !IsWindowEnabled(window)) return true;
-      eligibleWindows++;
+      if (window == expectedOwner || !IsWindowVisible(window) || !IsWindowEnabled(window)) return true;
+      int processId = GetWindowProcessId(window);
+      bool ownedByExpectedWindow = IsOwnedByExpectedWindow(window, expectedOwner);
+      if (processId != expectedProcessId) {
+        if (ownedByExpectedWindow && GetWindowTitle(window) == "Codex activity may continue") foreignPromptWindows++;
+        return true;
+      }
+      sameProcessWindows++;
+      if (!ownedByExpectedWindow) return true;
+      ownedWindows++;
       if (GetWindowTitle(window) == "Codex activity may continue") matches.Add(window);
       return true;
     }, IntPtr.Zero);
@@ -124,21 +160,25 @@ public static class TusWindowLookup {
       return matches[0];
     }
     LastWindowLookupStatus = matches.Count > 1 ? "window-ambiguous" :
-      eligibleWindows > 0 ? "window-title-mismatch" : "window-not-found";
+      foreignPromptWindows > 0 ? "window-process-mismatch" :
+      ownedWindows > 0 ? "window-title-mismatch" :
+      sameProcessWindows > 0 ? "window-owner-mismatch" : "window-not-found";
     return IntPtr.Zero;
   }
-  public static bool ActivateExpectedPromptWindow(IntPtr dialog, int expectedProcessId) {
-    if (dialog == IntPtr.Zero || expectedProcessId <= 0 || GetWindowProcessId(dialog) != expectedProcessId ||
-        !IsWindowVisible(dialog) || !IsWindowEnabled(dialog) || GetWindowTitle(dialog) != "Codex activity may continue") return false;
+  public static bool ActivateExpectedPromptWindow(IntPtr dialog, int expectedProcessId, string expectedOwnerHandle) {
+    IntPtr expectedOwner = ParseWindowHandle(expectedOwnerHandle);
+    if (!IsExpectedPromptWindow(dialog, expectedProcessId, expectedOwner) ||
+        GetWindowTitle(dialog) != "Codex activity may continue") return false;
     if (GetForegroundWindow() != dialog) SetForegroundWindow(dialog);
-    return GetForegroundWindow() == dialog && GetWindowProcessId(dialog) == expectedProcessId &&
-      IsWindowVisible(dialog) && IsWindowEnabled(dialog) && GetWindowTitle(dialog) == "Codex activity may continue";
+    return GetForegroundWindow() == dialog && IsExpectedPromptWindow(dialog, expectedProcessId, expectedOwner) &&
+      GetWindowTitle(dialog) == "Codex activity may continue";
   }
-  public static IntPtr FindExpectedQuitButton(IntPtr dialog, int expectedProcessId, string[] expectedMessages, string[] expectedDetails, string goalStatusPrefix, string requestedButton, int uiaPromptIndex) {
+  public static IntPtr FindExpectedQuitButton(IntPtr dialog, int expectedProcessId, string expectedOwnerHandle, string[] expectedMessages, string[] expectedDetails, string goalStatusPrefix, string requestedButton, int uiaPromptIndex) {
     LastPromptStatus = "invalid-window";
     LastPromptEvidence.Clear();
     LastPromptEvidenceText = "";
-    if (dialog == IntPtr.Zero || expectedProcessId <= 0 || GetWindowProcessId(dialog) != expectedProcessId) return IntPtr.Zero;
+    IntPtr expectedOwner = ParseWindowHandle(expectedOwnerHandle);
+    if (!IsExpectedPromptWindow(dialog, expectedProcessId, expectedOwner)) return IntPtr.Zero;
     if (GetWindowTitle(dialog) != "Codex activity may continue") {
       LastPromptStatus = "title-mismatch";
       return IntPtr.Zero;
@@ -256,10 +296,12 @@ public static class TusWindowLookup {
     LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
     return IntPtr.Zero;
   }
-  public static bool ClickNativePromptButton(IntPtr dialog, int expectedProcessId, IntPtr button, string requestedButton) {
-    if (dialog == IntPtr.Zero || button == IntPtr.Zero || expectedProcessId <= 0 ||
-        GetForegroundWindow() != dialog || GetWindowProcessId(dialog) != expectedProcessId ||
-        GetWindowProcessId(button) != expectedProcessId || !IsChild(dialog, button) ||
+  public static bool ClickNativePromptButton(IntPtr dialog, int expectedProcessId, string expectedOwnerHandle, IntPtr button, string requestedButton) {
+    IntPtr expectedOwner = ParseWindowHandle(expectedOwnerHandle);
+    int dialogProcessId = GetWindowProcessId(dialog);
+    if (button == IntPtr.Zero || dialogProcessId <= 0 ||
+        GetForegroundWindow() != dialog || !IsExpectedPromptWindow(dialog, expectedProcessId, expectedOwner) ||
+        GetWindowProcessId(button) != dialogProcessId || !IsChild(dialog, button) ||
         GetWindowTitle(dialog) != "Codex activity may continue" || GetWindowTitle(button) != requestedButton) return false;
     IntPtr ignored;
     return SendMessageTimeoutCommand(button, BM_CLICK, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out ignored) != IntPtr.Zero;
@@ -287,8 +329,9 @@ function Write-UiaPhaseMarker {
 function Find-ExpectedPromptWindowBounded {
   $deadline = [DateTime]::UtcNow.AddSeconds(15)
   do {
-    $window = [TusWindowLookup]::FindExpectedPromptWindow($ProcessId)
+    $window = [TusWindowLookup]::FindExpectedPromptWindow($ProcessId, $OwnerWindowHandle)
     if ($window -ne [IntPtr]::Zero) { return $window }
+    if ([TusWindowLookup]::LastWindowLookupStatus -eq 'owner-window-unavailable') { return [IntPtr]::Zero }
     Start-Sleep -Milliseconds 100
   } while ([DateTime]::UtcNow -lt $deadline)
   return [IntPtr]::Zero
@@ -311,7 +354,7 @@ function Find-ValidatedPromptButton {
   )
   $script:uiPhase = 'checking-exact-dialog-buttons'
   $button = [TusWindowLookup]::FindExpectedQuitButton(
-    $WindowHandle, $ProcessId, $ExpectedMessages, $ExpectedDetails, $GoalStatusPrefix, $RequestedButton, -1)
+    $WindowHandle, $ProcessId, $OwnerWindowHandle, $ExpectedMessages, $ExpectedDetails, $GoalStatusPrefix, $RequestedButton, -1)
   if ($button -ne [IntPtr]::Zero -or [TusWindowLookup]::LastPromptStatus -ne 'expected-body-unavailable') {
     return $button
   }
@@ -329,7 +372,7 @@ function Find-ValidatedPromptButton {
   }
   if ($uiaResult -match '^matched-([01])$') {
     return [TusWindowLookup]::FindExpectedQuitButton(
-      $WindowHandle, $ProcessId, $ExpectedMessages, $ExpectedDetails, $GoalStatusPrefix, $RequestedButton, [int]$Matches[1])
+      $WindowHandle, $ProcessId, $OwnerWindowHandle, $ExpectedMessages, $ExpectedDetails, $GoalStatusPrefix, $RequestedButton, [int]$Matches[1])
   }
   if ($uiaResult -eq 'mismatch') {
     [TusWindowLookup]::LastPromptStatus = 'expected-body-mismatch'
@@ -357,12 +400,14 @@ switch ($Action) {
     Write-Output 'TUS_UIA: locating-process-dialog'
     while ([DateTime]::UtcNow -lt $deadline) {
       $script:uiPhase = 'checking-process-owned-prompt-window'
-      $promptWindowHandle = [TusWindowLookup]::FindExpectedPromptWindow($ProcessId)
+      $promptWindowHandle = [TusWindowLookup]::FindExpectedPromptWindow($ProcessId, $OwnerWindowHandle)
       if ($promptWindowHandle -eq [IntPtr]::Zero) {
         $promptStatus = [TusWindowLookup]::LastWindowLookupStatus
+        if ($promptStatus -eq 'owner-window-unavailable') { break }
       } else {
         if (-not $reportedWindowMatch) {
           Write-Output 'TUS_UIA: prompt-window-matched'
+          Write-Output 'TUS_UIA: prompt-dialog-process-match'
           $reportedWindowMatch = $true
         }
         $script:uiPhase = 'checking-exact-dialog-buttons'
@@ -372,7 +417,7 @@ switch ($Action) {
         if ($quitButton -ne [IntPtr]::Zero) {
           Write-PromptEvidence
           $script:uiPhase = 'foregrounding-exact-prompt'
-          if (-not [TusWindowLookup]::ActivateExpectedPromptWindow($promptWindowHandle, $ProcessId)) {
+          if (-not [TusWindowLookup]::ActivateExpectedPromptWindow($promptWindowHandle, $ProcessId, $OwnerWindowHandle)) {
             $promptStatus = 'foreground-activation-rejected'
             break
           }
@@ -390,7 +435,7 @@ switch ($Action) {
             Write-Output 'TUS_UIA: exact-foreground-prompt-matched'
             Write-Output 'TUS_UIA: dialog-accessible'
             $script:uiPhase = 'clicking-native-button'
-            if (-not [TusWindowLookup]::ClickNativePromptButton($promptWindowHandle, $ProcessId, $quitButton, $buttonName)) { Write-Output 'TUS_UIA: quit-button-click-failed'; exit 2 }
+            if (-not [TusWindowLookup]::ClickNativePromptButton($promptWindowHandle, $ProcessId, $OwnerWindowHandle, $quitButton, $buttonName)) { Write-Output 'TUS_UIA: quit-button-click-failed'; exit 2 }
             Write-Output "Clicked native '$buttonName' button."
             exit 0
           }
@@ -415,6 +460,7 @@ switch ($Action) {
       exit 2
     }
     Write-Output 'TUS_UIA: prompt-window-matched'
+    Write-Output 'TUS_UIA: prompt-dialog-process-match'
     $button = Find-ValidatedPromptButton $promptWindowHandle $expectedMessages $expectedDetails $goalStatusPrefix 'Keep the game open'
     Write-PromptEvidence
     if ($button -eq [IntPtr]::Zero) {
@@ -435,6 +481,7 @@ switch ($Action) {
       exit 2
     }
     Write-Output 'TUS_UIA: prompt-window-matched'
+    Write-Output 'TUS_UIA: prompt-dialog-process-match'
     $button = Find-ValidatedPromptButton $promptWindowHandle $expectedMessages $expectedDetails $goalStatusPrefix 'Keep the game open'
     Write-PromptEvidence
     if ($button -ne [IntPtr]::Zero) {
@@ -462,13 +509,14 @@ switch ($Action) {
       exit 2
     }
     Write-Output 'TUS_UIA: prompt-window-matched'
+    Write-Output 'TUS_UIA: prompt-dialog-process-match'
     $button = Find-ValidatedPromptButton $promptWindowHandle $expectedMessages $expectedDetails $goalStatusPrefix 'Keep the game open'
     if ([TusWindowLookup]::LastPromptStatus -notin @('expected-body-mismatch', 'matched')) {
       Write-Output 'TUS_UIA: test-prompt-not-found'
       Write-Output "TUS_UIA: prompt-$([TusWindowLookup]::LastPromptStatus)"
       exit 2
     }
-    if (-not [TusWindowLookup]::ActivateExpectedPromptWindow($promptWindowHandle, $ProcessId)) {
+    if (-not [TusWindowLookup]::ActivateExpectedPromptWindow($promptWindowHandle, $ProcessId, $OwnerWindowHandle)) {
       Write-Output 'TUS_UIA: test-prompt-not-found'
       Write-Output 'TUS_UIA: prompt-foreground-activation-rejected'
       exit 2

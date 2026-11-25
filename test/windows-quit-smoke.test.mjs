@@ -21,11 +21,12 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(windowsUI, /GetForegroundWindow/);
   assert.doesNotMatch(windowsUI, /GetForegroundOwnedWindow|foreground-window-not-owned/);
   assert.match(windowsUI, /TUS_UIA: prompt-window-matched/);
+  assert.match(windowsUI, /TUS_UIA: prompt-dialog-process-match/);
   const powershellActions = windowsUI.slice(windowsUI.indexOf('switch ($Action) {'));
   assert.doesNotMatch(powershellActions, /\|\|/, 'PowerShell branches use PowerShell logical operators');
 
   assert.match(windowsUI, /function Find-ExpectedPromptWindowBounded/);
-  assert.match(windowsUI, /FindExpectedPromptWindow\(\$ProcessId\)/);
+  assert.match(windowsUI, /FindExpectedPromptWindow\(\$ProcessId, \$OwnerWindowHandle\)/);
   const boundedFinderStart = windowsUI.indexOf('function Find-ExpectedPromptWindowBounded');
   const boundedFinderEnd = windowsUI.indexOf('function Write-PromptEvidence', boundedFinderStart);
   const boundedFinder = windowsUI.slice(boundedFinderStart, boundedFinderEnd);
@@ -47,10 +48,17 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   const finderEnd = windowsUI.indexOf('public static bool ActivateExpectedPromptWindow', finderStart);
   const finder = windowsUI.slice(finderStart, finderEnd);
   assert.match(finder, /EnumWindows\(/);
-  assert.match(finder, /GetWindowProcessId\(window\) != expectedProcessId/);
+  assert.match(finder, /IsOwnedByExpectedWindow\(window, expectedOwner\)/);
+  assert.match(finder, /if \(processId != expectedProcessId\)/);
+  assert.match(finder, /window-process-mismatch/);
+  assert.match(windowsUI, /GetWindowProcessId\(expectedOwner\) == expectedProcessId/);
+  assert.match(windowsUI, /GetWindowProcessId\(dialog\) == expectedProcessId/);
   assert.match(finder, /IsWindowVisible\(window\)/);
   assert.match(finder, /IsWindowEnabled\(window\)/);
   assert.match(finder, /GetWindowTitle\(window\) == "Codex activity may continue"/);
+  assert.match(windowsUI, /GetWindow\(window, GW_OWNER\)/);
+  assert.match(windowsUI, /GetAncestor\(window, GA_ROOTOWNER\)/);
+  assert.match(windowsUI, /IsExpectedPromptWindow\(dialog, expectedProcessId, expectedOwner\)/);
   assert.match(finder, /window-ambiguous/);
   assert.match(windowsUI, /TUS_UIA: exact-foreground-prompt-matched/);
   const promptStart = windowsUI.indexOf("  { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {");
@@ -153,11 +161,11 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
 test('Windows quit prompt acceptance mutates message and detail independently', async () => {
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
-  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'message'\)/);
-  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'detail'\)/);
+  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'message', ownerWindow\)/);
+  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'detail', ownerWindow\)/);
   assert.match(automation, /Modified activity detail\./);
   assert.match(automation, /TUS_QUIT_TEST: ' \+ modifiedField \+ '-probe-'/);
-  assert.match(automation, /if \(matcherRejected\)\s*\{\s*try\s*\{\s*await ui\('keep-open', pid\)/);
+  assert.match(automation, /if \(matcherRejected\)\s*\{\s*try\s*\{\s*await ui\('keep-open', pid, undefined, 'MTA', ownerWindow\.handleHex\)/);
   assert.match(automation, /prompt-reader-timeout-phase-\(\[a-z0-9-\]\+\)/);
   assert.match(automation, /TUS_QUIT_COMPARE: /);
   assert.match(automation, /fromhandle/);
@@ -171,7 +179,7 @@ test('Windows quit prompt acceptance mutates message and detail independently', 
 
 test('Windows quit acceptance recognizes the status-prefixed known detail', async () => {
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
-  assert.match(automation, /assertKnownStatusDetailIsRecognized\(app, pid, process\)/);
+  assert.match(automation, /assertKnownStatusDetailIsRecognized\(app, pid, process, ownerWindow\)/);
   assert.match(automation, /Native Goal status: active\./);
 });
 
@@ -196,7 +204,7 @@ test('native prompt acceptance uses bounded exact title, text and button checks'
   const prompt = windowsUI.slice(promptStart, promptEnd);
   assert.match(windowsUI, /SMTO_ABORTIFHUNG\s*\|\s*SMTO_BLOCK,\s*1000/);
   assert.match(windowsUI, /GetWindowTitle\(dialog\) != "Codex activity may continue"/);
-  assert.match(windowsUI, /GetWindowProcessId\(dialog\) != expectedProcessId/);
+  assert.match(windowsUI, /GetWindowProcessId\(dialog\) == expectedProcessId/);
   assert.match(windowsUI, /expectedDetails/);
   assert.match(windowsUI, /MatchesExpectedPromptDetail/);
   assert.match(windowsUI, /buttons\.Count != 2/);
@@ -232,7 +240,8 @@ test('native prompt click revalidates the same foreground child', async () => {
   const clickEnd = windowsUI.indexOf('\n  }', clickStart);
   const click = windowsUI.slice(clickStart, clickEnd);
   assert.match(click, /GetForegroundWindow\(\) != dialog/);
-  assert.match(click, /GetWindowProcessId\(button\) != expectedProcessId/);
+  assert.match(click, /GetWindowProcessId\(button\) != dialogProcessId/);
+  assert.match(click, /IsExpectedPromptWindow\(dialog, expectedProcessId, expectedOwner\)/);
   assert.match(click, /IsChild\(dialog, button\)/);
   assert.match(click, /GetWindowTitle\(dialog\) != "Codex activity may continue"/);
   assert.match(click, /GetWindowTitle\(button\) != requestedButton/);
@@ -277,7 +286,7 @@ test('safe UIA failure classification distinguishes a child that reached the win
   assert.equal(safeUiFailureOutcome(['window-api-ready', 'automation-error-invalidoperationexception-at-dismissing-test-prompt']),
     'automation-error-invalidoperationexception-at-dismissing-test-prompt');
   assert.equal(safeUiFailureOutcome(['window-api-ready', 'test-prompt-not-found']), 'test-prompt-not-found');
-  for (const status of ['window-not-found', 'window-title-mismatch', 'window-ambiguous', 'foreground-activation-rejected']) {
+  for (const status of ['owner-window-unavailable', 'window-not-found', 'window-title-mismatch', 'window-owner-mismatch', 'window-process-mismatch', 'window-ambiguous', 'foreground-activation-rejected']) {
     assert.equal(safeUiFailureOutcome(['prompt-' + status]), 'prompt-' + status, 'the fixed prompt status is preserved');
   }
   assert.equal(safeUiFailureOutcome(['script-start', 'window-api-ready', 'private dialog text']) === 'window-api-ready-no-status', true,
@@ -330,6 +339,16 @@ test('UIA wrapper phases are flushed and safely reach mutation evidence', async 
     'prompt-reader-timeout-phase-payload-decode-start', 'prompt-reader-timeout-phase-payload-json-start',
   ]) assert.ok(safeOutcomeMatcher.test(phase), phase + ' is allowlisted in mutation evidence');
   assert.match(mutationProbe, /console\.log\('TUS_QUIT_TEST: ' \+ modifiedField \+ '-probe-' \+ matcherOutcome\)/);
+  assert.match(mutationProbe, /state\.invoked = true/);
+  assert.match(mutationProbe, /state\.ownerWindowMatches/);
+  assert.match(mutationProbe, /process\.pid === expected\.pid/);
+  assert.match(mutationProbe, /window\?\.id === expected\.windowId && handleHex === expected\.handleHex/);
+  assert.match(mutationProbe, /TUS_QUIT_PROMPT: invocation=/);
+  assert.match(automation, /promptOwnerWindowIdentity/);
+  assert.match(automation, /const windows = BrowserWindow\.getAllWindows\(\)/);
+  assert.match(automation, /TUS_QUIT_WINDOW: app-process=match owner-window=present/);
+  assert.match(automation, /saved-game-thread-fixture/);
+  assert.doesNotMatch(mutationProbe, /console\.log\([^)]*(?:handleHex|windowId|nativeHandle)/i);
 });
 
 
