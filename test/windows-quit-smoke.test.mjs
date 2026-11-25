@@ -179,7 +179,7 @@ test('Windows quit prompt acceptance mutates message and detail independently', 
 
 test('Windows quit acceptance recognizes the status-prefixed known detail', async () => {
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
-  assert.match(automation, /assertKnownStatusDetailIsRecognized\(app, pid, process, ownerWindow\)/);
+  assert.match(automation, /assertKnownStatusDetailIsRecognized\(app, pid, launcher, ownerWindow\)/);
   assert.match(automation, /Native Goal status: active\./);
 });
 
@@ -344,9 +344,21 @@ test('UIA wrapper phases are flushed and safely reach mutation evidence', async 
   assert.match(mutationProbe, /process\.pid === expected\.pid/);
   assert.match(mutationProbe, /window\?\.id === expected\.windowId && handleHex === expected\.handleHex/);
   assert.match(mutationProbe, /TUS_QUIT_PROMPT: invocation=/);
+  const ownerIdentity = automation.slice(automation.indexOf('async function promptOwnerWindowIdentity'), automation.indexOf('async function assertModifiedPromptIsNotClicked'));
+  assert.match(ownerIdentity, /processId: process\.pid/);
+  assert.match(ownerIdentity, /executablePath: process\.execPath/);
+  assert.doesNotMatch(ownerIdentity, /console\.log\([^)]*(?:processId|executablePath|handleHex|windowId)/i);
+  const installerSmoke = await readFile(new URL('../scripts/windows-installer-smoke.mjs', import.meta.url), 'utf8');
+  assert.match(installerSmoke, /quitPromptAcceptance\(promptApp, page, promptGraphics, installedExe\)/);
+  assert.match(automation, /const pid = ownerWindow\.processId/);
+  assert.match(automation, /const launcherPid = launcher\.pid/);
+  assert.match(automation, /taskkill\.exe', \['\/PID', String\(launcherPid\), '\/T', '\/F'\]/);
+  const quitFlow = automation.slice(automation.indexOf('export async function quitPromptAcceptance'));
+  assert.ok(quitFlow.indexOf('try {') < quitFlow.indexOf('promptOwnerWindowIdentity(app, expectedExecutable)'),
+    'identity failures enter cleanup before native checks');
   assert.match(automation, /promptOwnerWindowIdentity/);
-  assert.match(automation, /const windows = BrowserWindow\.getAllWindows\(\)/);
-  assert.match(automation, /TUS_QUIT_WINDOW: app-process=match owner-window=present/);
+  assert.match(ownerIdentity, /const windows = BrowserWindow\.getAllWindows\(\)/);
+  assert.match(automation, /TUS_QUIT_WINDOW: app-exe=match main-process=identified owner-window=captured/);
   assert.match(automation, /saved-game-thread-fixture/);
   assert.doesNotMatch(mutationProbe, /console\.log\([^)]*(?:handleHex|windowId|nativeHandle)/i);
 });

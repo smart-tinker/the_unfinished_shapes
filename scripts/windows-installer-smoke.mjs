@@ -269,7 +269,7 @@ if (handoffMode) {
   await graphics.assertHealthy();
   const promptApp = instance, promptProcess = instance.process(), promptGraphics = graphics, promptGpu = gpu;
   try {
-    await quitPromptAcceptance(promptApp, page, promptGraphics);
+    await quitPromptAcceptance(promptApp, page, promptGraphics, installedExe);
   } finally {
     if (promptProcess.exitCode !== null) {
       if (instance === promptApp) { instance = null; graphics = null; gpu = null; }

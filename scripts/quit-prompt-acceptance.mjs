@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -80,27 +81,33 @@ async function ui(action, pid, menuKey, apartment = 'MTA', ownerWindowHandle) {
 }
 
 
-async function promptOwnerWindowIdentity(app, expectedPid) {
-  const identity = await app.evaluate(({ BrowserWindow }, pid) => {
+async function promptOwnerWindowIdentity(app, expectedExecutable) {
+  assert.equal(typeof expectedExecutable === 'string' && path.isAbsolute(expectedExecutable), true,
+    'the native prompt uses the exact installed executable');
+  const identity = await app.evaluate(({ BrowserWindow }) => {
     const windows = BrowserWindow.getAllWindows();
     const window = windows.length === 1 ? windows[0] : null;
     const handle = window?.getNativeWindowHandle();
     const handleHex = handle?.length === 8 ? handle.readBigUInt64LE().toString(16)
       : handle?.length === 4 ? handle.readUInt32LE().toString(16) : '';
     return {
-      processMatches: process.pid === pid,
+      processId: process.pid,
+      executablePath: process.execPath,
       windowCount: windows.length,
       windowId: window?.id ?? null,
       handleHex,
     };
-  }, expectedPid);
-  assert.equal(identity.processMatches, true, 'Playwright identifies the packaged Electron main process');
+  });
+  assert.equal(Number.isSafeInteger(identity.processId) && identity.processId > 0, true,
+    'Electron main process has a positive PID');
+  assert.equal(path.resolve(identity.executablePath).toLowerCase() === path.resolve(expectedExecutable).toLowerCase(), true,
+    'Electron main process uses the exact installed executable');
   assert.equal(identity.windowCount, 1, 'the smoke process has one exact TUS owner window');
   assert.equal(/^[a-f0-9]{1,16}$/i.test(identity.handleHex), true, 'the owner HWND is captured without logging it');
   return identity;
 }
 
-async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField, ownerWindow) {
+async function assertModifiedPromptIsNotClicked(app, pid, launcher, modifiedField, ownerWindow) {
   assert.ok(['message', 'detail'].includes(modifiedField), 'only one prompt body field is changed at a time');
   await app.evaluate(({ dialog, BrowserWindow }, expected) => {
     const state = {
@@ -233,7 +240,7 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
       buttonsMatch: true,
     }, 'the modified native prompt remains open while keep-open is checked');
     assert.deepEqual(dismissal, { resolved: true, responseWasSafe: true }, 'test cleanup cancels the prompt with its safe default');
-    assert.equal(process.exitCode, null, 'rejecting a modified prompt leaves TUS running');
+    assert.equal(launcher.exitCode, null, 'rejecting a modified prompt leaves TUS running');
   } finally {
     const pending = await app.evaluate(() => {
       const state = globalThis.__tusPromptTest;
@@ -251,7 +258,7 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
   }
 }
 
-async function assertKnownStatusDetailIsRecognized(app, pid, process, ownerWindow) {
+async function assertKnownStatusDetailIsRecognized(app, pid, launcher, ownerWindow) {
   await app.evaluate(({ dialog, BrowserWindow }, expected) => {
     const state = {
       original: dialog.showMessageBox.bind(dialog), invoked: false, resolved: false,
@@ -323,38 +330,41 @@ async function assertKnownStatusDetailIsRecognized(app, pid, process, ownerWindo
 }
 
 
-export async function quitPromptAcceptance(app, page, graphics) {
-  const process = app.process();
-  assert.ok(process?.pid, 'packaged TUS main process has a PID');
-  const pid = process.pid;
-  const ownerWindow = await promptOwnerWindowIdentity(app, pid);
-  const before = await page.evaluate(async () => {
-    const settings = await window.tus.loadSettings();
-    const world = await window.tus.request({ ...settings, path: '/state' });
-    return {
-      workspacePath: settings.workspacePath,
-      codexPath: settings.codexPath,
-      threadId: settings.threadId,
-      worldObjects: world.objects,
-    };
-  });
-  assert.equal(before.threadId === 'saved-game-thread-fixture', true, 'the native prompt scenario uses its isolated unsafe thread fixture');
-  console.log('TUS_QUIT_WINDOW: app-process=match owner-window=present');
+export async function quitPromptAcceptance(app, page, graphics, expectedExecutable) {
+  const launcher = app.process();
+  assert.ok(launcher?.pid, 'Playwright launched the packaged TUS process');
+  const launcherPid = launcher.pid;
   let timer;
-  const exited = new Promise((resolve, reject) => {
-    process.once('exit', code => resolve(code));
-    process.once('error', reject);
+  const exited = launcher.exitCode !== null ? Promise.resolve(launcher.exitCode) : new Promise((resolve, reject) => {
+    launcher.once('exit', code => resolve(code));
+    launcher.once('error', reject);
   });
+  void exited.catch(() => {});
+
   try {
-    await assertModifiedPromptIsNotClicked(app, pid, process, 'detail', ownerWindow);
-    await assertModifiedPromptIsNotClicked(app, pid, process, 'message', ownerWindow);
-    await assertKnownStatusDetailIsRecognized(app, pid, process, ownerWindow);
+    const ownerWindow = await promptOwnerWindowIdentity(app, expectedExecutable);
+    const pid = ownerWindow.processId;
+    const before = await page.evaluate(async () => {
+      const settings = await window.tus.loadSettings();
+      const world = await window.tus.request({ ...settings, path: '/state' });
+      return {
+        workspacePath: settings.workspacePath,
+        codexPath: settings.codexPath,
+        threadId: settings.threadId,
+        worldObjects: world.objects,
+      };
+    });
+    assert.equal(before.threadId === 'saved-game-thread-fixture', true, 'the native prompt scenario uses its isolated unsafe thread fixture');
+    console.log('TUS_QUIT_WINDOW: app-exe=match main-process=identified owner-window=captured');
+    await assertModifiedPromptIsNotClicked(app, pid, launcher, 'detail', ownerWindow);
+    await assertModifiedPromptIsNotClicked(app, pid, launcher, 'message', ownerWindow);
+    await assertKnownStatusDetailIsRecognized(app, pid, launcher, ownerWindow);
     await app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; if (!window) throw new Error('The packaged TUS window is unavailable.'); window.close(); });
     const exactPromptEvidence = await ui('assert-exact-body-recognized', pid, undefined, 'MTA', ownerWindow.handleHex);
     assert.match(exactPromptEvidence, /^TUS_UIA: expected-body-recognized$/m, 'the exact production message and detail are recognized before clicking');
     const closePrompt = await ui('keep-open', pid, undefined, 'MTA', ownerWindow.handleHex);
     assert.match(closePrompt, /^TUS_UIA: exact-foreground-prompt-matched$/m, 'window-close prompt is the exact TUS dialog');
-    assert.equal(process.exitCode, null, 'Keep the game open leaves the packaged process running');
+    assert.equal(launcher.exitCode, null, 'Keep the game open leaves the packaged process running');
     await page.waitForFunction(() => document.querySelector('#connection')?.textContent.includes('World connected'), null, { timeout: 10000 });
     const afterCancel = await page.evaluate(async () => {
       const settings = await window.tus.loadSettings();
@@ -399,12 +409,18 @@ export async function quitPromptAcceptance(app, page, graphics) {
     ]);
     assert.equal(exitCode, 0, 'Quit anyway exits the packaged client cleanly');
   } catch (error) {
-    if (process.exitCode === null) {
+    if (launcher.exitCode === null) {
       const startedAt = Date.now();
       console.log('TUS_WINDOWS_CLOSE: taskkill-started');
       let outcome = 'failed';
       try {
-        await run('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeout: 10000, windowsHide: true });
+        await run('taskkill.exe', ['/PID', String(launcherPid), '/T', '/F'], { timeout: 10000, windowsHide: true });
+        await Promise.race([
+          exited,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(Object.assign(new Error('Packaged TUS did not exit after process-tree cleanup.'), { code: 'ETIMEDOUT' })), 5000);
+          }),
+        ]);
         outcome = 'completed';
       } catch {}
       console.log('TUS_UIA_TIMING: taskkill-ms=' + (Date.now() - startedAt));
