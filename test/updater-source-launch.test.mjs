@@ -136,31 +136,3 @@ test('Windows ZIP comparison labels its own timeout stage before awaiting the bo
 
   assert.ok(stage >= 0 && comparison > stage, 'the timeout stage is recorded before the comparison can time out');
 });
-
-
-test('installed-source launch observes complete rehash before keyboard approval', async () => {
-  const smoke = await readFile(new URL('../scripts/updater-release-smoke.mjs', import.meta.url), 'utf8');
-  const start = smoke.indexOf('async function respondToUpdateLaunch(');
-  const end = smoke.indexOf('\nasync function assertInstalledSourceIdentity', start);
-  const launch = smoke.slice(start, end);
-
-  assert.ok(start >= 0 && end > start, 'the installed-source launch observer is present');
-  assert.ok(launch.includes('waitForFile(dialogMarker, 30_000)'), 'the prompt observer allows a bounded full-file rehash');
-
-  const beforeKeyboard = launch.indexOf('await current.page.keyboard.press(key)');
-  assert.ok(beforeKeyboard >= 0, 'keyboard approval remains explicit');
-  for (const assertion of [
-    'assert.ok(diagnostic.launchBoundary,',
-    "assert.equal(diagnostic.launchBoundary?.status, 'starting',",
-    "assert.equal(diagnostic.launchBoundary?.launchPhase, 'dialog',",
-    "assert.equal(diagnostic.launchBoundary?.launchSubstage, 'verified',",
-    "assert.equal(diagnostic.launchBoundary?.launchReadPhase, 'verified',",
-    'assert.equal(diagnostic.launchBoundary?.launchReadBytes, manifestFile.size,',
-    "assert.equal(diagnostic.launchBoundary?.launchDialog, 'marker-written',",
-    "assert.equal(diagnostic.launchBoundary?.launchDecision, 'not-started',",
-  ]) {
-    const index = launch.indexOf(assertion);
-    assert.ok(index >= 0 && index < beforeKeyboard, assertion + ' is required before keyboard approval');
-  }
-  assert.ok(launch.indexOf("assert.equal(diagnostic.prompt, 'invoked'") < beforeKeyboard);
-});

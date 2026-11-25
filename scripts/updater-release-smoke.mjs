@@ -220,7 +220,7 @@ async function activateUpdaterButtonByKeyboard(page, id) {
   assert.equal(await lastUpdaterKeyboardAction(page), id, id + ' is activated by keyboard');
 }
 
-async function respondToUpdateLaunch(current, dialogMarker, key, manifestFile, assetName, tag) {
+async function respondToUpdateLaunch(current, dialogMarker, key, manifestFile, assetName, tag, distribution) {
   const diagnostic = {
     button: 'not-started',
     prompt: 'not-started',
@@ -231,10 +231,21 @@ async function respondToUpdateLaunch(current, dialogMarker, key, manifestFile, a
     await rm(dialogMarker, { force: true });
     await activateUpdaterButtonByKeyboard(current.page, 'updates-launch');
     diagnostic.button = 'keyboard-activated';
-    diagnostic.prompt = await waitForFile(dialogMarker, 5000) ? 'invoked' : 'missing';
+    const promptTimeoutMs = distribution === 'installer' ? 30_000 : 5000;
+    diagnostic.prompt = await waitForFile(dialogMarker, promptTimeoutMs) ? 'invoked' : 'missing';
     const runtime = await updaterRuntimeBoundary(current, manifestFile, assetName, tag, 1000).catch(() => []);
     diagnostic.launchBoundary = runtime.find(item => item.stage === 'update-launch') ?? null;
     assert.equal(diagnostic.prompt, 'invoked', 'the launch approval prompt was invoked');
+    if (distribution === 'installer') {
+      assert.ok(diagnostic.launchBoundary, 'the installed-source launch boundary is observable');
+      assert.equal(diagnostic.launchBoundary?.status, 'starting', 'launch remains pending for explicit approval');
+      assert.equal(diagnostic.launchBoundary?.launchPhase, 'dialog', 'the production approval dialog was reached');
+      assert.equal(diagnostic.launchBoundary?.launchSubstage, 'verified', 'the installer rehash completed successfully');
+      assert.equal(diagnostic.launchBoundary?.launchReadPhase, 'verified', 'the complete installer file was read and verified');
+      assert.equal(diagnostic.launchBoundary?.launchReadBytes, manifestFile.size, 'the full published installer size was rehashed');
+      assert.equal(diagnostic.launchBoundary?.launchDialog, 'marker-written', 'the production dialog call reached the smoke observer');
+      assert.equal(diagnostic.launchBoundary?.launchDecision, 'not-started', 'approval has not been supplied yet');
+    }
     await current.page.evaluate(() => {
       window.__tusUpdateDialogKey = null;
       window.__tusUpdateDialogWaiting = true;
@@ -260,7 +271,6 @@ async function respondToUpdateLaunch(current, dialogMarker, key, manifestFile, a
     console.log('TUS_UPDATE_LAUNCH_KEYBOARD ' + JSON.stringify(diagnostic));
   }
 }
-
 async function assertInstalledSourceIdentity(current, profile) {
   if (!profile) return;
   const identity = await current.instance.evaluate(({ app }) => ({
@@ -1639,7 +1649,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   }
 
   setDiagnostic(distribution === 'installer' ? 'relaunch-cancel' : 'relaunch');
-  await respondToUpdateLaunch(current, dialogMarker, 'Escape', manifestFile, assetName, tag);
+  await respondToUpdateLaunch(current, dialogMarker, 'Escape', manifestFile, assetName, tag, distribution);
   let cancelStatus = 'cancelled';
   try {
     await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent === 'Update launch cancelled.');
@@ -1673,7 +1683,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     try {
       await runWindowsRelaunch({
       child,
-      click: () => respondToUpdateLaunch(closing, dialogMarker, 'Enter', manifestFile, assetName, tag).catch(error => {
+      click: () => respondToUpdateLaunch(closing, dialogMarker, 'Enter', manifestFile, assetName, tag, distribution).catch(error => {
         if (child.exitCode === null) throw error;
       }),
       waitForExit,
@@ -1704,7 +1714,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     if (relaunchFailure) throw relaunchFailure;
   } else {
     const exit = waitForExit(closing.instance.process());
-    const approval = respondToUpdateLaunch(closing, dialogMarker, 'Enter', manifestFile, assetName, tag).catch(error => {
+    const approval = respondToUpdateLaunch(closing, dialogMarker, 'Enter', manifestFile, assetName, tag, distribution).catch(error => {
       if (closing.instance.process().exitCode === null) throw error;
     });
     setDiagnostic('relaunch');
