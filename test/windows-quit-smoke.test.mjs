@@ -44,7 +44,8 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(windowsUI, /TUS_UIA: exact-foreground-prompt-matched/);
   assert.doesNotMatch(foregroundLookup, /GetProcessWindows|GetWindowThreadProcessId/);
 
-  assert.doesNotMatch(windowsUI, /GetProcessWindows|EnumWindows\(|IsWindowVisible|GetWindowThreadProcessId/);
+  assert.doesNotMatch(windowsUI, /GetProcessWindows|EnumWindows\(|IsWindowVisible/);
+  assert.match(windowsUI, /GetWindowThreadProcessId/);
   assert.doesNotMatch(windowsUI, /FindWindow\(/);
 });
 
@@ -127,10 +128,10 @@ test('Windows quit prompt acceptance mutates message and detail independently', 
   assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'message'\)/);
   assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'detail'\)/);
   assert.match(automation, /Modified activity detail\./);
-  assert.match(automation, /TUS_UIA_TEST: detail-probe-/);
+  assert.match(automation, /TUS_QUIT_TEST: \+ modifiedField \+ '-probe-'/);
   assert.match(automation, /if \(matcherRejected\)\s*\{\s*try\s*\{\s*await ui\('keep-open', pid\)/);
   assert.match(automation, /prompt-reader-timeout-phase-\(\[a-z0-9-\]\+\)/);
-  assert.match(automation, /TUS_UIA_COMPARE: /);
+  assert.match(automation, /TUS_QUIT_COMPARE: /);
   assert.match(automation, /fromhandle/);
   assert.match(automation, /-ms=\\d\{1,6\}/);
   assert.match(automation, /const apartmentOrder = modifiedField === 'detail' \? \['STA', 'MTA'\] : \['MTA', 'STA'\]/);
@@ -167,6 +168,9 @@ test('native prompt acceptance uses bounded exact title, text and button checks'
   const prompt = windowsUI.slice(promptStart, promptEnd);
   assert.match(windowsUI, /SMTO_ABORTIFHUNG\s*\|\s*SMTO_BLOCK,\s*1000/);
   assert.match(windowsUI, /GetWindowTitle\(dialog\) != "Codex activity may continue"/);
+  assert.match(windowsUI, /GetWindowProcessId\(dialog\) != expectedProcessId/);
+  assert.match(windowsUI, /expectedDetails/);
+  assert.match(windowsUI, /MatchesExpectedPromptDetail/);
   assert.match(windowsUI, /buttons\.Count != 2/);
   assert.match(windowsUI, /control\.Text == "Keep the game open"/);
   assert.match(windowsUI, /control\.Text == "Quit anyway"/);
@@ -194,19 +198,16 @@ test('production native quit dialog carries the exact known and unknown message 
   assert.deepEqual(calls[1].options.buttons, ['Keep the game open', 'Quit anyway']);
 });
 
-test('native prompt buttons require the exact foreground TUS dialog title', async () => {
+test('native prompt click revalidates the same foreground child', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
-  assert.match(windowsUI, /GetWindowTitle\(dialog\) != "Codex activity may continue"/);
-  assert.match(windowsUI, /buttons\.Count != 2/);
-  assert.match(windowsUI, /control\.Text == "Keep the game open"/);
-  assert.match(windowsUI, /control\.Text == "Quit anyway"/);
-  assert.match(windowsUI, /control\.Text == requestedButton/);
-  const promptStart = windowsUI.indexOf("  { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {");
-  const promptEnd = windowsUI.indexOf("\n  'file-menu-open' {", promptStart);
-  const prompt = windowsUI.slice(promptStart, promptEnd);
-  assert.ok(prompt.indexOf('Find-ValidatedPromptButton') >= 0 &&
-    prompt.indexOf('Find-ValidatedPromptButton') < prompt.indexOf('[TusWindowLookup]::ClickNativePromptButton'));
-  assert.doesNotMatch(windowsUI, /\.FindAll\(/);
+  const clickStart = windowsUI.indexOf('public static bool ClickNativePromptButton');
+  const clickEnd = windowsUI.indexOf('\n  }', clickStart);
+  const click = windowsUI.slice(clickStart, clickEnd);
+  assert.match(click, /GetForegroundWindow\(\) != dialog/);
+  assert.match(click, /GetWindowProcessId\(button\) != expectedProcessId/);
+  assert.match(click, /IsChild\(dialog, button\)/);
+  assert.match(click, /GetWindowTitle\(dialog\) != "Codex activity may continue"/);
+  assert.match(click, /GetWindowTitle\(button\) != requestedButton/);
 });
 
 
@@ -237,7 +238,7 @@ test('safe UIA failure classification distinguishes a child that reached the win
     'production UI failures use the safe classifier');
   assert.match(mutationProbe, /\(\?:script-start\|window-api-ready\)-no-status/,
     'the mutation probe recognizes the safe no-status outcome');
-  assert.match(mutationProbe, /console\.log\('TUS_UIA_TEST: detail-probe-' \+ matcherOutcome\)/,
+  assert.match(mutationProbe, /console\.log\('TUS_QUIT_TEST: ' \+ modifiedField \+ '-probe-' \+ matcherOutcome\)/,
     'the mutation probe emits the classified outcome as test evidence');
   const { safeUiFailureOutcome } = await import('../scripts/quit-prompt-acceptance.mjs');
   assert.equal(typeof safeUiFailureOutcome, 'function', 'failure classification is available');
@@ -292,7 +293,7 @@ test('UIA wrapper phases are flushed and safely reach mutation evidence', async 
     'ui-payload-preparing', 'ui-payload-ready', 'ui-payload-writing', 'ui-payload-written',
     'prompt-reader-timeout-phase-payload-decode-start', 'prompt-reader-timeout-phase-payload-json-start',
   ]) assert.ok(safeOutcomeMatcher.test(phase), phase + ' is allowlisted in mutation evidence');
-  assert.match(mutationProbe, /console\.log\('TUS_UIA_TEST: detail-probe-' \+ matcherOutcome\)/);
+  assert.match(mutationProbe, /console\.log\('TUS_QUIT_TEST: ' \+ modifiedField \+ '-probe-' \+ matcherOutcome\)/);
 });
 
 

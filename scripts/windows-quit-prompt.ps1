@@ -47,6 +47,10 @@ public static class TusWindowLookup {
   private static extern bool EnumChildWindows(IntPtr parent, EnumWindowsCallback callback, IntPtr extraData);
   [DllImport("user32.dll")]
   public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")]
+  private static extern uint GetWindowThreadProcessId(IntPtr window, out int processId);
+  [DllImport("user32.dll")]
+  private static extern bool IsChild(IntPtr parent, IntPtr child);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)]
   private static extern int GetClassName(IntPtr window, StringBuilder className, int maximumLength);
   [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode)]
@@ -77,16 +81,34 @@ public static class TusWindowLookup {
     if (index == 1) return "unknown-message";
     return "candidate";
   }
-  public static IntPtr FindExpectedQuitButton(IntPtr dialog, string[] expectedMessages, string requestedButton, int uiaPromptIndex) {
+  private static bool MatchesExpectedPromptDetail(int index, string actual, string[] expectedDetails, string goalStatusPrefix) {
+    if (index == 0) {
+      if (String.Equals(NormalizePromptText(actual), NormalizePromptText(expectedDetails[0]), StringComparison.Ordinal)) return true;
+      string suffix = ". " + expectedDetails[0];
+      if (String.IsNullOrEmpty(actual) || !actual.StartsWith(goalStatusPrefix, StringComparison.Ordinal) ||
+          !actual.EndsWith(suffix, StringComparison.Ordinal)) return false;
+      int statusLength = actual.Length - goalStatusPrefix.Length - suffix.Length;
+      if (statusLength <= 0) return false;
+      string status = actual.Substring(goalStatusPrefix.Length, statusLength);
+      return !status.Contains("\r") && !status.Contains("\n");
+    }
+    return String.Equals(NormalizePromptText(actual), NormalizePromptText(expectedDetails[index]), StringComparison.Ordinal);
+  }
+  public static int GetWindowProcessId(IntPtr window) {
+    if (window == IntPtr.Zero) return 0;
+    int processId;
+    return GetWindowThreadProcessId(window, out processId) == 0 ? 0 : processId;
+  }
+  public static IntPtr FindExpectedQuitButton(IntPtr dialog, int expectedProcessId, string[] expectedMessages, string[] expectedDetails, string goalStatusPrefix, string requestedButton, int uiaPromptIndex) {
     LastPromptStatus = "invalid-window";
     LastPromptEvidence.Clear();
     LastPromptEvidenceText = "";
-    if (dialog == IntPtr.Zero) return IntPtr.Zero;
+    if (dialog == IntPtr.Zero || expectedProcessId <= 0 || GetWindowProcessId(dialog) != expectedProcessId) return IntPtr.Zero;
     if (GetWindowTitle(dialog) != "Codex activity may continue") {
       LastPromptStatus = "title-mismatch";
       return IntPtr.Zero;
     }
-    if (expectedMessages == null) return IntPtr.Zero;
+    if (expectedMessages == null || expectedDetails == null || expectedMessages.Length != expectedDetails.Length) return IntPtr.Zero;
     var controls = new List<PromptControl>();
     int childIndex = 0;
     EnumChildWindows(dialog, (child, extraData) => {
@@ -106,9 +128,11 @@ public static class TusWindowLookup {
       return true;
     }, IntPtr.Zero);
     var buttons = new List<PromptControl>();
-    bool hasExpectedMessage = uiaPromptIndex >= 0 && uiaPromptIndex < expectedMessages.Length;
-    bool hasReadableMessage = false, hasKeepOpen = false, hasQuitAnyway = false;
-    if (hasExpectedMessage) LastPromptEvidence.Add("uia-" + ExpectedFieldToken(uiaPromptIndex));
+    bool hasUiPrompt = uiaPromptIndex >= 0 && uiaPromptIndex < expectedMessages.Length;
+    int actualMessageIndex = -1, actualDetailIndex = -1, readableBodyTextCount = 0;
+    bool conflictingNativeFields = false, unreadableBodyText = false, unknownBodyText = false;
+    bool hasKeepOpen = false, hasQuitAnyway = false;
+    if (hasUiPrompt) LastPromptEvidence.Add("uia-" + ExpectedFieldToken(uiaPromptIndex));
     IntPtr requested = IntPtr.Zero;
     foreach (var control in controls) {
       var classToken = SafeClassToken(control.ClassName);
@@ -120,28 +144,41 @@ public static class TusWindowLookup {
         LastPromptEvidence.Add("child-" + control.Index + "-candidate-class-unread");
         continue;
       }
-      if (control.ClassName != "Button") {
-        var normalizedText = NormalizePromptText(control.Text);
-        if (normalizedText.Length > 0) {
-          hasReadableMessage = true;
-        }
-        int candidate = -1;
-        for (int i = 0; i < expectedMessages.Length; i++) {
-          if (String.Equals(normalizedText, NormalizePromptText(expectedMessages[i]), StringComparison.Ordinal)) {
-            hasExpectedMessage = true;
-            candidate = i;
-            break;
-          }
-        }
-        LastPromptEvidence.Add("child-" + control.Index + "-candidate-" +
-          (candidate < 0 ? (control.TextRead ? "none" : "unreadable") : ExpectedFieldToken(candidate)));
-      } else {
+      if (control.ClassName == "Button") {
         buttons.Add(control);
         if (control.Text == "Keep the game open") hasKeepOpen = true;
         if (control.Text == "Quit anyway") hasQuitAnyway = true;
         if (control.Text == requestedButton) requested = control.Handle;
         LastPromptEvidence.Add("child-" + control.Index + "-candidate-button");
+        continue;
       }
+      if (!control.TextRead || control.TextCapHit) {
+        unreadableBodyText = true;
+        LastPromptEvidence.Add("child-" + control.Index + "-candidate-unreadable");
+        continue;
+      }
+      var normalizedText = NormalizePromptText(control.Text);
+      if (normalizedText.Length == 0) continue;
+      readableBodyTextCount++;
+      int messageCandidate = -1, detailCandidate = -1;
+      for (int i = 0; i < expectedMessages.Length; i++) {
+        if (String.Equals(normalizedText, NormalizePromptText(expectedMessages[i]), StringComparison.Ordinal)) messageCandidate = i;
+        if (MatchesExpectedPromptDetail(i, control.Text, expectedDetails, goalStatusPrefix)) detailCandidate = i;
+      }
+      if (messageCandidate >= 0) {
+        if (actualMessageIndex >= 0 && actualMessageIndex != messageCandidate) conflictingNativeFields = true;
+        actualMessageIndex = messageCandidate;
+      }
+      if (detailCandidate >= 0) {
+        if (actualDetailIndex >= 0 && actualDetailIndex != detailCandidate) conflictingNativeFields = true;
+        actualDetailIndex = detailCandidate;
+      }
+      if (messageCandidate >= 0 && detailCandidate >= 0 && messageCandidate != detailCandidate) conflictingNativeFields = true;
+      if (messageCandidate < 0 && detailCandidate < 0) unknownBodyText = true;
+      string candidate = messageCandidate >= 0 && detailCandidate >= 0 ? "complete-body" :
+        messageCandidate >= 0 ? "message-" + (messageCandidate == 0 ? "known" : "unknown") :
+        detailCandidate >= 0 ? "detail-" + (detailCandidate == 0 ? "known" : "unknown") : "body-unrecognized";
+      LastPromptEvidence.Add("child-" + control.Index + "-candidate-" + candidate);
     }
     if (buttons.Count != 2) {
       LastPromptStatus = "button-count-mismatch";
@@ -158,17 +195,37 @@ public static class TusWindowLookup {
       LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
       return IntPtr.Zero;
     }
-    if (!hasExpectedMessage) {
-      LastPromptStatus = hasReadableMessage ? "expected-message-mismatch" : "expected-message-unavailable";
+    bool matchedNativeBody = actualMessageIndex >= 0 && actualMessageIndex == actualDetailIndex;
+    bool completeBodyRead = readableBodyTextCount >= 2 && !unreadableBodyText;
+    if (conflictingNativeFields || unknownBodyText ||
+        (hasUiPrompt && ((actualMessageIndex >= 0 && actualMessageIndex != uiaPromptIndex) ||
+          (actualDetailIndex >= 0 && actualDetailIndex != uiaPromptIndex))) ||
+        (completeBodyRead && !matchedNativeBody)) {
+      LastPromptStatus = "expected-body-mismatch";
+      LastPromptEvidence.Add("body-mismatch");
       LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
       return IntPtr.Zero;
     }
-    LastPromptStatus = "matched";
+    if (matchedNativeBody && !unreadableBodyText) {
+      LastPromptStatus = "matched";
+      LastPromptEvidence.Add("body-exact");
+      LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
+      return requested;
+    }
+    if (hasUiPrompt) {
+      LastPromptStatus = "matched";
+      LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
+      return requested;
+    }
+    LastPromptStatus = "expected-body-unavailable";
     LastPromptEvidenceText = String.Join("-", LastPromptEvidence.ToArray());
-    return requested;
+    return IntPtr.Zero;
   }
-  public static bool ClickNativePromptButton(IntPtr button) {
-    if (button == IntPtr.Zero) return false;
+  public static bool ClickNativePromptButton(IntPtr dialog, int expectedProcessId, IntPtr button, string requestedButton) {
+    if (dialog == IntPtr.Zero || button == IntPtr.Zero || expectedProcessId <= 0 ||
+        GetForegroundWindow() != dialog || GetWindowProcessId(dialog) != expectedProcessId ||
+        GetWindowProcessId(button) != expectedProcessId || !IsChild(dialog, button) ||
+        GetWindowTitle(dialog) != "Codex activity may continue" || GetWindowTitle(button) != requestedButton) return false;
     IntPtr ignored;
     return SendMessageTimeoutCommand(button, BM_CLICK, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, out ignored) != IntPtr.Zero;
   }
@@ -208,24 +265,32 @@ function Find-ValidatedPromptButton {
     [Parameter(Mandatory=$true)][string]$GoalStatusPrefix,
     [Parameter(Mandatory=$true)][string]$RequestedButton
   )
+  $script:uiPhase = 'checking-exact-dialog-buttons'
+  $button = [TusWindowLookup]::FindExpectedQuitButton(
+    $WindowHandle, $ProcessId, $ExpectedMessages, $ExpectedDetails, $GoalStatusPrefix, $RequestedButton, -1)
+  if ($button -ne [IntPtr]::Zero -or [TusWindowLookup]::LastPromptStatus -ne 'expected-body-unavailable') {
+    return $button
+  }
+
   $cacheKey = $WindowHandle.ToInt64().ToString()
   if (-not $script:uiaPromptResults.ContainsKey($cacheKey)) {
     $script:uiPhase = 'checking-accessible-prompt-body'
     $script:uiaPromptResults[$cacheKey] = Get-UiaPromptBodyResult $WindowHandle $ExpectedMessages $ExpectedDetails $GoalStatusPrefix -Apartment $script:uiaApartment
   }
-  $script:uiPhase = 'checking-exact-dialog-buttons'
   $uiaResult = [string]$script:uiaPromptResults[$cacheKey]
   if ($uiaResult -match '^timeout-(phase-[a-z0-9-]+|no-phase)$') {
     $script:uiaPromptTimeoutPhase = $Matches[1]
-    $uiaResult = 'timeout'
+    [TusWindowLookup]::LastPromptStatus = 'expected-body-timeout'
+    return [IntPtr]::Zero
   }
   if ($uiaResult -match '^matched-([01])$') {
-    return [TusWindowLookup]::FindExpectedQuitButton($WindowHandle, $ExpectedMessages, $RequestedButton, [int]$Matches[1])
+    return [TusWindowLookup]::FindExpectedQuitButton(
+      $WindowHandle, $ProcessId, $ExpectedMessages, $ExpectedDetails, $GoalStatusPrefix, $RequestedButton, [int]$Matches[1])
   }
-  switch ($uiaResult) {
-    'mismatch' { [TusWindowLookup]::LastPromptStatus = 'expected-body-mismatch' }
-    'timeout' { [TusWindowLookup]::LastPromptStatus = 'expected-body-timeout' }
-    default { [TusWindowLookup]::LastPromptStatus = 'expected-body-unavailable' }
+  if ($uiaResult -eq 'mismatch') {
+    [TusWindowLookup]::LastPromptStatus = 'expected-body-mismatch'
+  } else {
+    [TusWindowLookup]::LastPromptStatus = 'expected-body-unavailable'
   }
   return [IntPtr]::Zero
 }
@@ -258,12 +323,13 @@ switch ($Action) {
           $script:uiPhase = 'checking-exact-dialog-buttons'
           $quitButton = Find-ValidatedPromptButton $foregroundHandle $expectedMessages $expectedDetails $goalStatusPrefix $buttonName
           $promptStatus = [TusWindowLookup]::LastPromptStatus
+          if ($promptStatus -eq 'expected-body-mismatch') { break }
           if ($quitButton -ne [IntPtr]::Zero) {
             Write-PromptEvidence
             Write-Output 'TUS_UIA: exact-foreground-prompt-matched'
             Write-Output 'TUS_UIA: dialog-accessible'
             $script:uiPhase = 'clicking-native-button'
-            if (-not [TusWindowLookup]::ClickNativePromptButton($quitButton)) { Write-Output 'TUS_UIA: quit-button-click-failed'; exit 2 }
+            if (-not [TusWindowLookup]::ClickNativePromptButton($foregroundHandle, $ProcessId, $quitButton, $buttonName)) { Write-Output 'TUS_UIA: quit-button-click-failed'; exit 2 }
             Write-Output "Clicked native '$buttonName' button."
             exit 0
           }
@@ -284,7 +350,7 @@ switch ($Action) {
   'assert-exact-body-recognized' {
     $script:uiPhase = 'checking-exact-prompt-body'
     $foregroundHandle = [TusWindowLookup]::GetForegroundWindow()
-    if ($foregroundHandle -eq [IntPtr]::Zero -or [TusWindowLookup]::GetWindowTitle($foregroundHandle) -ne 'Codex activity may continue') {
+    if ($foregroundHandle -eq [IntPtr]::Zero -or [TusWindowLookup]::GetWindowProcessId($foregroundHandle) -ne $ProcessId -or [TusWindowLookup]::GetWindowTitle($foregroundHandle) -ne 'Codex activity may continue') {
       Write-Output 'TUS_UIA: expected-foreground-prompt-unavailable'
       exit 2
     }
@@ -302,7 +368,7 @@ switch ($Action) {
   'assert-body-mismatch-rejected' {
     $script:uiPhase = 'checking-modified-prompt-body'
     $foregroundHandle = [TusWindowLookup]::GetForegroundWindow()
-    if ($foregroundHandle -eq [IntPtr]::Zero -or [TusWindowLookup]::GetWindowTitle($foregroundHandle) -ne 'Codex activity may continue') {
+    if ($foregroundHandle -eq [IntPtr]::Zero -or [TusWindowLookup]::GetWindowProcessId($foregroundHandle) -ne $ProcessId -or [TusWindowLookup]::GetWindowTitle($foregroundHandle) -ne 'Codex activity may continue') {
       Write-Output 'TUS_UIA: expected-foreground-prompt-unavailable'
       exit 2
     }
@@ -326,7 +392,7 @@ switch ($Action) {
   'dismiss-test-prompt' {
     $script:uiPhase = 'dismissing-test-prompt'
     $foregroundHandle = [TusWindowLookup]::GetForegroundWindow()
-    if ($foregroundHandle -eq [IntPtr]::Zero -or [TusWindowLookup]::GetWindowTitle($foregroundHandle) -ne 'Codex activity may continue') {
+    if ($foregroundHandle -eq [IntPtr]::Zero -or [TusWindowLookup]::GetWindowProcessId($foregroundHandle) -ne $ProcessId -or [TusWindowLookup]::GetWindowTitle($foregroundHandle) -ne 'Codex activity may continue') {
       Write-Output 'TUS_UIA: test-prompt-not-found'
       exit 2
     }
@@ -342,6 +408,7 @@ switch ($Action) {
     $windowHandle = $process.MainWindowHandle
     if ($windowHandle -eq [IntPtr]::Zero) { $windowHandle = [TusWindowLookup]::GetForegroundWindow() }
     if ($windowHandle -eq [IntPtr]::Zero) { Write-Output 'TUS_UIA: app-window-not-found'; throw 'The packaged TUS main window was not found.' }
+    if ([TusWindowLookup]::GetWindowProcessId($windowHandle) -ne $ProcessId) { Write-Output 'TUS_UIA: main-window-title-mismatch'; throw 'The packaged TUS main window was not found.' }
     if ([TusWindowLookup]::GetWindowTitle($windowHandle) -ne 'The Unfinished Shapes') { Write-Output 'TUS_UIA: main-window-title-mismatch'; throw 'The packaged TUS main window was not found.' }
     if ([TusWindowLookup]::GetForegroundWindow() -ne $windowHandle) { Write-Output 'TUS_UIA: app-window-not-foreground'; throw 'The packaged TUS window is not foreground.' }
     Write-Output 'TUS_UIA: main-window-found'
@@ -359,6 +426,7 @@ switch ($Action) {
     $windowHandle = $process.MainWindowHandle
     if ($windowHandle -eq [IntPtr]::Zero) { $windowHandle = [TusWindowLookup]::GetForegroundWindow() }
     if ($windowHandle -eq [IntPtr]::Zero) { Write-Output 'TUS_UIA: app-window-not-found'; throw 'The packaged TUS main window was not found.' }
+    if ([TusWindowLookup]::GetWindowProcessId($windowHandle) -ne $ProcessId) { Write-Output 'TUS_UIA: main-window-title-mismatch'; throw 'The packaged TUS main window was not found.' }
     if ([TusWindowLookup]::GetWindowTitle($windowHandle) -ne 'The Unfinished Shapes') { Write-Output 'TUS_UIA: main-window-title-mismatch'; throw 'The packaged TUS main window was not found.' }
     if ([TusWindowLookup]::GetForegroundWindow() -ne $windowHandle) { Write-Output 'TUS_UIA: app-window-not-foreground'; throw 'The packaged TUS window is not foreground.' }
     if ($MenuKey -notmatch '^[eEqQ]$') { Write-Output 'TUS_UIA: invalid-file-menu-key'; throw 'The validated File Exit menu key is unavailable.' }

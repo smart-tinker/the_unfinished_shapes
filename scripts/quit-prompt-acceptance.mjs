@@ -118,11 +118,11 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
         ? 'unexpected-match' : 'unavailable';
     }
     apartmentOutcomes.set(apartment, outcome);
-    console.log('TUS_UIA_COMPARE: ' + apartment.toLowerCase() + '=' + outcome);
+    console.log('TUS_QUIT_COMPARE: ' + apartment.toLowerCase() + '=' + outcome);
   }
   const matcherRejected = apartmentOutcomes.get('MTA') === 'mismatch';
   const matcherOutcome = apartmentOutcomes.get('MTA') || 'unavailable';
-  console.log('TUS_UIA_TEST: detail-probe-' + matcherOutcome);
+  console.log('TUS_QUIT_TEST: ' + modifiedField + '-probe-' + matcherOutcome);
 
   let keepOpenRejected = false;
   if (matcherRejected) {
