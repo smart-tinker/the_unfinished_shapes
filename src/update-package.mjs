@@ -713,7 +713,8 @@ function installSmokeArchiveWriteFailure(target, boundary, onlyFile = null) {
             if (!error && Number.isSafeInteger(bytesWritten) && bytesWritten > 0 && control.state === 'armed') {
               control.state = 'injected';
               control.firstChunkWritten = true;
-              const failure = Object.assign(new Error('No space left on device.'), { code: 'ENOSPC' });
+              const code = control.errorCode === 'EACCES' ? 'EACCES' : 'ENOSPC';
+              const failure = Object.assign(new Error('Injected filesystem write failure.'), { code });
               return Reflect.apply(callback, this, [failure]);
             }
             return Reflect.apply(callback, this, [error, bytesWritten, ...rest]);

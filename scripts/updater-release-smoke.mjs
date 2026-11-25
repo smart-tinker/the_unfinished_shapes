@@ -1142,7 +1142,7 @@ async function assertArchiveWriteFailureCleaned(current, {
   const controlInstalled = await current.instance.evaluate(() => {
     const boundary = globalThis.__tusUpdaterSmokeBoundary;
     if (!boundary || boundary.downloadVerifiedAsset !== 'fulfilled' || boundary.writeFailureControl) return false;
-    boundary.writeFailureControl = { state: 'armed', firstChunkWritten: false };
+    boundary.writeFailureControl = { state: 'armed', firstChunkWritten: false, errorCode: 'EACCES' };
     return true;
   });
   assert.equal(controlInstalled, true, 'the write failure is armed only after the packaged verifier accepted the download');
@@ -1152,7 +1152,6 @@ async function assertArchiveWriteFailureCleaned(current, {
     const observedFailureHandle = await current.page.waitForFunction(() => {
       const status = document.querySelector('#updates-status');
       if (status?.dataset.updateExtractInvokeStatus === 'rejected' &&
-          status.dataset.updateExtractFailureCode === 'FILESYSTEM_SPACE' &&
           status.dataset.updateExtractStage === 'write') {
         return {
           rendererInvokeStatus: status.dataset.updateExtractInvokeStatus,
@@ -1207,6 +1206,7 @@ async function assertArchiveWriteFailureCleaned(current, {
       rendererInvokeStatus: safeObservedFailure.rendererInvokeStatus,
       failureCode: safeObservedFailure.failureCode,
       extractStage: safeObservedFailure.extractStage,
+      injection: 'synthetic-eacces-after-first-write',
       controlState: control?.state ?? 'missing',
       firstChunkWritten: control?.firstChunkWritten === true,
       targetRemoved,
@@ -1224,8 +1224,9 @@ async function assertArchiveWriteFailureCleaned(current, {
       extractModuleImport: 'fulfilled',
       extractCall: 'rejected',
       rendererInvokeStatus: 'rejected',
-      failureCode: 'FILESYSTEM_SPACE',
+      failureCode: 'FILESYSTEM_PERMISSION',
       extractStage: 'write',
+      injection: 'synthetic-eacces-after-first-write',
       controlState: 'injected',
       firstChunkWritten: true,
       targetRemoved: true,
@@ -1236,7 +1237,7 @@ async function assertArchiveWriteFailureCleaned(current, {
       sourceVersionUnchanged: true,
       sourceIdentityUnchanged: true,
       sourceFixtureUnchanged: true,
-    }, 'a post-write ENOSPC removes the partial target without relaunch and preserves the source for a same-asset retry');
+    }, 'synthetic post-write EACCES removes the partial target without relaunch and preserves the source for a same-asset retry');
   } finally {
     await current.instance.evaluate(() => {
       const boundary = globalThis.__tusUpdaterSmokeBoundary;
@@ -1646,6 +1647,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     assert.equal(extractDiagnostic.outcome, 'verified', 'the selected verified archive reaches a terminal extraction success');
     assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'the same published asset remains intact for the positive retry');
     assert.deepEqual(await readdir(path.dirname(downloadedPath)), [path.basename(downloadedPath)], 'the retry reuses the retained download');
+    console.log('TUS_UPDATE_WRITE_FAILURE_RETRY outcome=verified injection=synthetic-eacces-after-first-write');
   }
 
   setDiagnostic(distribution === 'installer' ? 'relaunch-cancel' : 'relaunch');
