@@ -8,8 +8,8 @@ const automationScript = fileURLToPath(new URL('./windows-quit-prompt.ps1', impo
 
 const safeUiMarkers = new Set([
   'script-start', 'window-api-ready', 'expected-foreground-prompt-unavailable',
-  'expected-body-recognized', 'quit-dialog-not-found', 'modified-body-button-returned',
-  'modified-body-unverified', 'modified-body-rejected',
+  'expected-body-recognized', 'quit-dialog-not-found', 'test-prompt-not-found', 'test-prompt-dismissed',
+  'modified-body-button-returned', 'modified-body-unverified', 'modified-body-rejected',
   'ui-child-starting', 'ui-child-started', 'ui-payload-preparing', 'ui-payload-ready',
   'ui-payload-writing', 'ui-payload-written', 'ui-child-waiting', 'ui-child-finished',
   'ui-child-killing', 'ui-child-kill-waiting', 'ui-child-exit-checking', 'ui-child-output-draining',
@@ -40,7 +40,9 @@ export function safeUiFailureOutcome(tokens = [], processFailure = 'probe-failed
     if (token === 'prompt-reader-timeout-no-phase' || safeUiTimeoutPhase.test(token)) return token;
     const status = token.startsWith('prompt-') ? token.slice('prompt-'.length)
       : token.startsWith('expected-body-') ? token.slice('expected-body-'.length) : '';
-    if ((safeUiMarkers.has(token) || safeUiPromptStatuses.has(status)) && !marker) marker = token;
+    if (safeUiPromptStatuses.has(status)) return token;
+    if (/^automation-error-[a-z0-9]{1,48}-at-[a-z0-9-]{1,64}$/.test(token)) return token;
+    if (safeUiMarkers.has(token) && !marker) marker = token;
   }
   if (marker === 'script-start' || marker === 'window-api-ready') return marker + '-no-status';
   const failure = typeof processFailure === 'string' ? processFailure : '';
@@ -110,12 +112,12 @@ async function assertModifiedPromptIsNotClicked(app, pid, process, modifiedField
       outcome = /^TUS_UIA: modified-body-rejected$/m.test(result) ? 'mismatch'
         : /^TUS_UIA: modified-body-button-returned$/m.test(result) ? 'unexpected-match' : 'unexpected-result';
     } catch (error) {
-      const safeOutcome = /exit-[a-z0-9_-]+|timeout-[a-z0-9-]+|(?:script-start|window-api-ready)-no-status|ui-(?:child-(?:starting|started|waiting|finished|killing|kill-waiting|exit-checking|output-draining|finally-exit-checking|finally-killing|finally-waiting|disposing)|payload-(?:preparing|ready|writing|written))|prompt-reader-timeout-[a-z0-9-]+|expected-foreground-prompt-unavailable|quit-dialog-not-found|automation-error-[a-z0-9]+-at-[a-z0-9-]+|modified-body-(?:button-returned|unverified|rejected)|expected-body-(?:mismatch|unavailable|timeout)|prompt-(?:foreground-window-unavailable|foreground-title-mismatch|expected-body-(?:mismatch|unavailable|timeout)|(?:invalid-window|title-mismatch|button-count-mismatch|expected-buttons-missing|requested-button-missing|expected-message-mismatch|expected-message-unavailable|matched))/gi;
+      const safeOutcome = /exit-[a-z0-9_-]+|timeout-[a-z0-9-]+|(?:script-start|window-api-ready)-no-status|ui-(?:child-(?:starting|started|waiting|finished|killing|kill-waiting|exit-checking|output-draining|finally-exit-checking|finally-killing|finally-waiting|disposing)|payload-(?:preparing|ready|writing|written))|prompt-reader-timeout-[a-z0-9-]+|expected-foreground-prompt-unavailable|quit-dialog-not-found|automation-error-[a-z0-9]+-at-[a-z0-9-]+|modified-body-(?:button-returned|unverified|rejected)|expected-body-(?:mismatch|unavailable|timeout)|test-prompt-not-found|test-prompt-dismissed|prompt-(?:foreground-window-unavailable|foreground-title-mismatch|expected-body-(?:mismatch|unavailable|timeout)|(?:invalid-window|title-mismatch|button-count-mismatch|expected-buttons-missing|requested-button-missing|expected-message-mismatch|expected-message-unavailable|matched))/gi;
       const outcomeTokens = [...String(error?.message || '').matchAll(safeOutcome)];
       const safeFailure = outcomeTokens.length ? outcomeTokens[outcomeTokens.length - 1][0].toLowerCase() : 'probe-failed';
       const timeout = safeFailure.match(/^prompt-reader-timeout-phase-([a-z0-9-]+)$/);
       outcome = timeout ? 'timeout-' + timeout[1] : safeFailure === 'modified-body-button-returned'
-        ? 'unexpected-match' : 'unavailable';
+        ? 'unexpected-match' : safeFailure;
     }
     apartmentOutcomes.set(apartment, outcome);
     console.log('TUS_QUIT_COMPARE: ' + apartment.toLowerCase() + '=' + outcome);

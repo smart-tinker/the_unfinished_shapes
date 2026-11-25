@@ -244,6 +244,11 @@ test('safe UIA failure classification distinguishes a child that reached the win
   assert.equal(typeof safeUiFailureOutcome, 'function', 'failure classification is available');
   assert.equal(safeUiFailureOutcome(['script-start', 'window-api-ready']) === 'window-api-ready-no-status', true);
   assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-findfirst-0-start']) === 'prompt-reader-timeout-phase-findfirst-0-start', true);
+  assert.equal(safeUiFailureOutcome(['prompt-expected-body-unavailable', 'modified-body-unverified']),
+    'prompt-expected-body-unavailable', 'specific body status wins over the generic unverified marker');
+  assert.equal(safeUiFailureOutcome(['window-api-ready', 'automation-error-invalidoperationexception-at-dismissing-test-prompt']),
+    'automation-error-invalidoperationexception-at-dismissing-test-prompt');
+  assert.equal(safeUiFailureOutcome(['window-api-ready', 'test-prompt-not-found']), 'test-prompt-not-found');
   assert.equal(safeUiFailureOutcome(['script-start', 'window-api-ready', 'private dialog text']) === 'window-api-ready-no-status', true,
     'only allowlisted tokens can become CI evidence');
 });
