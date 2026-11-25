@@ -21,6 +21,8 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(windowsUI, /GetForegroundWindow/);
   assert.doesNotMatch(windowsUI, /GetForegroundOwnedWindow|foreground-window-not-owned/);
   assert.match(windowsUI, /TUS_UIA: prompt-window-matched/);
+  const powershellActions = windowsUI.slice(windowsUI.indexOf('switch ($Action) {'));
+  assert.doesNotMatch(powershellActions, /\|\|/, 'PowerShell branches use PowerShell logical operators');
 
   assert.match(windowsUI, /function Find-ExpectedPromptWindowBounded/);
   assert.match(windowsUI, /FindExpectedPromptWindow\(\$ProcessId\)/);

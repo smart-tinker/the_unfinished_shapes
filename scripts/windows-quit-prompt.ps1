@@ -476,8 +476,8 @@ switch ($Action) {
     $script:uiaPromptResults.Clear()
     $button = Find-ValidatedPromptButton $promptWindowHandle $expectedMessages $expectedDetails $goalStatusPrefix 'Keep the game open'
     if ([TusWindowLookup]::LastPromptStatus -notin @('expected-body-mismatch', 'matched') -or
-        [TusWindowLookup]::GetForegroundWindow() -ne $promptWindowHandle ||
-        [TusWindowLookup]::GetWindowProcessId($promptWindowHandle) -ne $ProcessId ||
+        [TusWindowLookup]::GetForegroundWindow() -ne $promptWindowHandle -or
+        [TusWindowLookup]::GetWindowProcessId($promptWindowHandle) -ne $ProcessId -or
         [TusWindowLookup]::GetWindowTitle($promptWindowHandle) -ne 'Codex activity may continue') {
       Write-Output 'TUS_UIA: test-prompt-not-found'
       Write-Output 'TUS_UIA: prompt-foreground-activation-rejected'
