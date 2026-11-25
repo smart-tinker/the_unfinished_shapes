@@ -269,6 +269,7 @@ test('classifies real archive-path rejection and known file-type, size and files
     [new Error('Update archive contains an unsupported file type.'), 'ARCHIVE_FILE_TYPE'],
     [new Error('Update archive exceeds extraction limits.'), 'ARCHIVE_SIZE'],
     [Object.assign(new Error('/private/runner/path'), { code: 'ENOSPC', tarCode: 'TAR_ENTRY_ERROR' }), 'FILESYSTEM_SPACE'],
+    [Object.assign(new Error('/private/runner/path'), { code: 'EACCES' }), 'FILESYSTEM_PERMISSION'],
     [Object.assign(new Error('private tar message'), { code: 'TAR_ENTRY_ERROR', tarCode: 'TAR_ENTRY_ERROR' }), 'TAR_ENTRY_ERROR'],
     [Object.assign(new Error('private tar code'), { tarCode: 'PRIVATE_TAR_CODE' }), 'OTHER'],
     [new Error('private archive path'), 'OTHER'],
@@ -921,9 +922,9 @@ test('Windows ZIP extraction uses bounded larger compressed reads', async () => 
 });
 
 
-test('smoke-only ENOSPC after one completed target write cleans extraction and permits same-asset retry', async () => {
+test('smoke-only ENOSPC and EACCES after one completed target write clean extraction and permit same-asset retry', async () => {
   const electronExecutable = createRequire(import.meta.url)('electron');
-  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-enospc-'));
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-write-failure-'));
   const archive = path.join(parent, 'windows.zip');
   const archiveRoot = 'TheUnfinishedShapes-win32-x64';
   const target = path.join(parent, 'TheUnfinishedShapes-0.1.0-rc.11');
@@ -944,54 +945,63 @@ test('smoke-only ENOSPC after one completed target write cleans extraction and p
       { name: archiveRoot + '/TheUnfinishedShapes.exe', contents: executable, mode: 0o100755 },
     ]));
     request.sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
-    const childSource = [
-      "process.argv.push('--tus-smoke-provenance-diagnostic');",
-      "const control = { state: 'armed', firstChunkWritten: false };",
-      "globalThis.__tusUpdaterSmokeBoundary = { downloadVerifiedAsset: 'fulfilled', writeFailureControl: control };",
-      "const [moduleUrl, requestJSON] = process.argv.slice(1);",
-      "const request = JSON.parse(requestJSON);",
-      "const target = path.join(request.directory, 'TheUnfinishedShapes-0.1.0-rc.11');",
-      "const updater = await import(moduleUrl);",
-      "let failure;",
-      "try { await updater.extractVerifiedArchive(request); } catch (error) { failure = error; }",
-      "const targetRemoved = await lstat(target).then(() => false, error => error.code === 'ENOENT');",
-      "let retrySucceeded = false;",
-      "if (failure && control.state === 'injected' && targetRemoved) {",
-      "  control.state = 'disabled';",
-      "  const retry = await updater.extractVerifiedArchive(request);",
-      "  retrySucceeded = (await readFile(retry.executablePath)).equals(Buffer.from('verified executable fixture'));",
-      "}",
-      "process.stdout.write(JSON.stringify({",
-      "  status: failure ? 'rejected' : 'fulfilled',",
-      "  failureCode: failure ? updater.safeArchiveExtractionFailureCode(failure) : null,",
-      "  extractStage: failure ? updater.safeArchiveExtractionStage(failure) : null,",
-      "  controlState: control.state,",
-      "  firstChunkWritten: control.firstChunkWritten,",
-      "  targetRemoved,",
-      "  retrySucceeded,",
-      "}));",
-    ].join(String.fromCharCode(10));
-    const child = spawnSync(electronExecutable, [
-      '--input-type=module', '-e',
-      "import path from 'node:path'; import { lstat, readFile } from 'node:fs/promises';\n" + childSource,
-      new URL('../src/update-package.mjs', import.meta.url).href,
-      JSON.stringify(request),
-    ], {
-      encoding: 'utf8',
-      windowsHide: true,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-    });
 
-    assert.equal(child.status, 0, 'the Electron extraction probe completed');
-    assert.deepEqual(JSON.parse(child.stdout), {
-      status: 'rejected',
-      failureCode: 'FILESYSTEM_SPACE',
-      extractStage: 'write',
-      controlState: 'disabled',
-      firstChunkWritten: true,
-      targetRemoved: true,
-      retrySucceeded: true,
-    }, 'a one-shot post-write ENOSPC removes the partial target and allows retry of the same verified archive');
+    for (const { errorCode, expectedFailureCode } of [
+      { errorCode: 'ENOSPC', expectedFailureCode: 'FILESYSTEM_SPACE' },
+      { errorCode: 'EACCES', expectedFailureCode: 'FILESYSTEM_PERMISSION' },
+    ]) {
+      await rm(target, { recursive: true, force: true });
+      const childSource = [
+        "process.argv.push('--tus-smoke-provenance-diagnostic');",
+        "const [moduleUrl, requestJSON, injectedCode] = process.argv.slice(1);",
+        "const control = { state: 'armed', firstChunkWritten: false, errorCode: injectedCode };",
+        "globalThis.__tusUpdaterSmokeBoundary = { downloadVerifiedAsset: 'fulfilled', writeFailureControl: control };",
+        "const request = JSON.parse(requestJSON);",
+        "const target = path.join(request.directory, 'TheUnfinishedShapes-0.1.0-rc.11');",
+        "const updater = await import(moduleUrl);",
+        "let failure;",
+        "try { await updater.extractVerifiedArchive(request); } catch (error) { failure = error; }",
+        "const targetRemoved = await lstat(target).then(() => false, error => error.code === 'ENOENT');",
+        "let retrySucceeded = false;",
+        "if (failure && control.state === 'injected' && targetRemoved) {",
+        "  control.state = 'disabled';",
+        "  const retry = await updater.extractVerifiedArchive(request);",
+        "  retrySucceeded = (await readFile(retry.executablePath)).equals(Buffer.from('verified executable fixture'));",
+        "}",
+        "process.stdout.write(JSON.stringify({",
+        "  status: failure ? 'rejected' : 'fulfilled',",
+        "  failureCode: failure ? updater.safeArchiveExtractionFailureCode(failure) : null,",
+        "  extractStage: failure ? updater.safeArchiveExtractionStage(failure) : null,",
+        "  controlState: control.state,",
+        "  firstChunkWritten: control.firstChunkWritten,",
+        "  targetRemoved,",
+        "  retrySucceeded,",
+        "}));",
+      ].join(String.fromCharCode(10));
+      const child = spawnSync(electronExecutable, [
+        '--input-type=module', '-e',
+        "import path from 'node:path'; import { lstat, readFile } from 'node:fs/promises';\n" + childSource,
+        new URL('../src/update-package.mjs', import.meta.url).href,
+        JSON.stringify(request),
+        errorCode,
+      ], {
+        encoding: 'utf8',
+        windowsHide: true,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      });
+
+      assert.equal(child.status, 0, 'the Electron extraction probe completed for ' + errorCode);
+      assert.deepEqual(JSON.parse(child.stdout), {
+        status: 'rejected',
+        failureCode: expectedFailureCode,
+        extractStage: 'write',
+        controlState: 'disabled',
+        firstChunkWritten: true,
+        targetRemoved: true,
+        retrySucceeded: true,
+      }, 'a one-shot post-write ' + errorCode + ' removes the partial target and allows same-asset retry');
+    }
+
     assert.deepEqual(await readFile(path.join(target, 'resources', 'app.asar')), payload);
     assert.deepEqual(await readFile(path.join(target, 'TheUnfinishedShapes.exe')), executable);
     assert.equal(createHash('sha256').update(await readFile(archive)).digest('hex'), request.sha256);
@@ -1000,7 +1010,6 @@ test('smoke-only ENOSPC after one completed target write cleans extraction and p
     await rm(parent, { recursive: true, force: true });
   }
 });
-
 
 test('ZIP write batcher preserves bytes and uses only the requested bounded batch size', async () => {
   const payload = Buffer.alloc(2 * 1024 * 1024 + 17, 0x5a);
