@@ -665,7 +665,7 @@ test('TUS launch snapshot keeps bounded file rehash read state', () => {
   assert.equal(JSON.stringify(diagnostics).includes('C:/private/path'), false);
 });
 
-test('TUS verified ZIP comparison distinguishes raw reads, Deflate and file sink at the safe boundary', () => {
+test('TUS verified ZIP comparison distinguishes raw reads, batched and direct Deflate at the safe boundary', () => {
   const comparison = safeZipBatcherComparison({
     assetMatches: true,
     entrySequence: 12,
@@ -679,7 +679,7 @@ test('TUS verified ZIP comparison distinguishes raw reads, Deflate and file sink
     writeHighWaterMarkBytes: 16_384,
     arms: [
       {
-        trial: 1, arm: 'raw-read', sink: 'count-discard', outcome: 'time-limit',
+        trial: 1, arm: 'raw-read', sink: 'count-discard', outcome: 'time-limit', batchBytes: null,
         wallMs: 15_000, cpuUserMs: 20, cpuSystemMs: 10,
         compressedBytesRead: 12_345, decodedBytes: null, sinkBytesProcessed: 12_345,
         sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 0,
@@ -688,7 +688,7 @@ test('TUS verified ZIP comparison distinguishes raw reads, Deflate and file sink
         entryName: 'private-entry', error: 'private read error',
       },
       {
-        trial: 1, arm: 'deflate-discard', sink: 'count-discard', outcome: 'time-limit',
+        trial: 1, arm: 'deflate-discard', sink: 'count-discard', outcome: 'time-limit', batchBytes: 262_144,
         wallMs: 15_000, cpuUserMs: 30, cpuSystemMs: 20,
         compressedBytesRead: 5_432, decodedBytes: 20_000, sinkBytesProcessed: 20_000,
         sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 0,
@@ -696,7 +696,7 @@ test('TUS verified ZIP comparison distinguishes raw reads, Deflate and file sink
         cleanupStatus: 'not-created',
       },
       {
-        trial: 1, arm: 'deflate-file', sink: 'node-fs-file', outcome: 'time-limit',
+        trial: 1, arm: 'deflate-file', sink: 'node-fs-file', outcome: 'time-limit', batchBytes: 262_144,
         wallMs: 15_000, cpuUserMs: 40, cpuSystemMs: 30,
         compressedBytesRead: 5_432, decodedBytes: 20_000, sinkBytesProcessed: 19_000,
         sinkWritableLength: 16_384, sinkNeedDrain: true, writeCallbackWaitMs: 900,
@@ -704,8 +704,8 @@ test('TUS verified ZIP comparison distinguishes raw reads, Deflate and file sink
         cleanupStatus: 'removed', filePath: 'C:/private/archive/entry.bin',
       },
       {
-        trial: 2, arm: 'deflate-discard', sink: 'count-discard', outcome: 'time-limit',
-        wallMs: 15_000, cpuUserMs: 50, cpuSystemMs: 40,
+        trial: 2, arm: 'deflate-direct', sink: 'count-discard', outcome: 'time-limit',
+        batchBytes: null, wallMs: 15_000, cpuUserMs: 50, cpuSystemMs: 40,
         compressedBytesRead: 5_432, decodedBytes: 20_000, sinkBytesProcessed: 20_000,
         sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 0,
         sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: true,
@@ -718,6 +718,8 @@ test('TUS verified ZIP comparison distinguishes raw reads, Deflate and file sink
   assert.deepEqual(comparison.arms.map((arm) => ({
     arm: arm.arm,
     trial: arm.trial,
+    batchBytes: arm.batchBytes,
+    countersMatch: arm.countersMatch,
     compressedBytesRead: arm.compressedBytesRead,
     decodedBytes: arm.decodedBytes,
     sinkBytesProcessed: arm.sinkBytesProcessed,
@@ -727,25 +729,25 @@ test('TUS verified ZIP comparison distinguishes raw reads, Deflate and file sink
     cleanupStatus: arm.cleanupStatus,
   })), [
     {
-      arm: 'raw-read', trial: 1,
+      arm: 'raw-read', trial: 1, batchBytes: null, countersMatch: null,
       compressedBytesRead: 12_345, decodedBytes: null, sinkBytesProcessed: 12_345,
       sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 0,
       cleanupStatus: 'not-created',
     },
     {
-      arm: 'deflate-discard', trial: 1,
+      arm: 'deflate-discard', trial: 1, batchBytes: 262_144, countersMatch: true,
       compressedBytesRead: 5_432, decodedBytes: 20_000, sinkBytesProcessed: 20_000,
       sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 0,
       cleanupStatus: 'not-created',
     },
     {
-      arm: 'deflate-file', trial: 1,
+      arm: 'deflate-file', trial: 1, batchBytes: 262_144, countersMatch: false,
       compressedBytesRead: 5_432, decodedBytes: 20_000, sinkBytesProcessed: 19_000,
       sinkWritableLength: 16_384, sinkNeedDrain: true, writeCallbackWaitMs: 900,
       cleanupStatus: 'removed',
     },
     {
-      arm: 'deflate-discard', trial: 2,
+      arm: 'deflate-direct', trial: 2, batchBytes: null, countersMatch: true,
       compressedBytesRead: 5_432, decodedBytes: 20_000, sinkBytesProcessed: 20_000,
       sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 0,
       cleanupStatus: 'not-created',

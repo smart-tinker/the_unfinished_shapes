@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as diagnostics from '../scripts/updater-smoke-diagnostics.mjs';
 import { Readable, Writable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 test('ZIP pipeline diagnostic uses each requested batch size without changing bytes', async () => {
   assert.equal(typeof diagnostics.runZipSinkPipeline, 'function');
@@ -27,24 +28,36 @@ test('ZIP pipeline diagnostic uses each requested batch size without changing by
   const largerBatcher = await collect(1024 * 1024);
   assert.deepEqual(productionBatcher.map(chunk => chunk.length), [256 * 1024, 64 * 1024]);
   assert.deepEqual(largerBatcher.map(chunk => chunk.length), [320 * 1024]);
+
+  const directChunks = [];
+  const directSink = new Writable({
+    write(chunk, _encoding, callback) {
+      directChunks.push(Buffer.from(chunk));
+      callback();
+    },
+  });
+  await pipeline(Readable.from(input), directSink);
+  assert.deepEqual(directChunks.map(chunk => chunk.length), input.map(chunk => chunk.length));
+  assert.deepEqual(Buffer.concat(directChunks), expected);
+  assert.deepEqual(Buffer.concat(directChunks), Buffer.concat(productionBatcher));
   for (const chunks of [productionBatcher, largerBatcher]) {
     assert.equal(chunks.reduce((total, chunk) => total + chunk.length, 0), expected.length);
     assert.deepEqual(Buffer.concat(chunks), expected);
   }
 });
 
-test('ZIP comparison exposes raw, Deflate and file-sink measurements', () => {
+test('ZIP comparison exposes raw, batched and direct Deflate measurements', () => {
   const plan = [
     { trial: 1, arm: 'raw-read', sink: 'count-discard' },
     { trial: 1, arm: 'deflate-discard', sink: 'count-discard' },
     { trial: 1, arm: 'deflate-file', sink: 'node-fs-file' },
-    { trial: 2, arm: 'deflate-discard', sink: 'count-discard' },
+    { trial: 2, arm: 'deflate-direct', sink: 'count-discard' },
   ];
   const arms = plan.map(({ trial, arm, sink }) => ({
     trial,
     arm,
     sink,
-    batchBytes: arm === 'raw-read' ? null : 256 * 1024,
+    batchBytes: ['deflate-discard', 'deflate-file'].includes(arm) ? 256 * 1024 : null,
     outcome: 'completed',
     wallMs: 10_000,
     cpuUserMs: 100,
@@ -82,7 +95,12 @@ test('ZIP comparison exposes raw, Deflate and file-sink measurements', () => {
   assert.equal(comparison.batchBytes, 256 * 1024);
   assert.deepEqual(comparison.armOrder, plan.map(({ arm }) => arm));
   assert.deepEqual(comparison.sinkOrder, plan.map(({ sink }) => sink));
-  assert.deepEqual(comparison.arms.map(({ trial, arm, sink }) => ({ trial, arm, sink })), plan);
+  assert.deepEqual(comparison.arms.map(({ trial, arm, sink, batchBytes, countersMatch }) => ({ trial, arm, sink, batchBytes, countersMatch })), [
+    { ...plan[0], batchBytes: null, countersMatch: null },
+    { ...plan[1], batchBytes: 256 * 1024, countersMatch: true },
+    { ...plan[2], batchBytes: 256 * 1024, countersMatch: true },
+    { ...plan[3], batchBytes: null, countersMatch: true },
+  ]);
   assert.equal(comparison.arms[0].sinkBytesProcessed, 111_522_616);
   assert.equal(comparison.arms[2].cleanupStatus, 'removed');
   assert.equal(comparison.arms[0].cleanupStatus, 'not-created');
