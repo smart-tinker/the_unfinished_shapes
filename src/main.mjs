@@ -20,28 +20,7 @@ let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, ext
 const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic')
   ? { releaseFetches: [], moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null, launchStatus: 'not-started', launchPhase: 'unknown', launchSubstage: 'not-started', launchReadPhase: 'not-started', launchReadBytes: 0, launchDialog: 'not-started', launchDecision: 'not-started' }
   : null;
-if (updaterSmokeBoundary) {
-  globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
-  globalThis.__tusUpdaterSmokeZipBatcherCompare = async expected => {
-    const update = downloadedUpdate;
-    const assetMatches = process.platform === 'win32' &&
-      updaterSmokeBoundary.downloadVerifiedAsset === 'fulfilled' &&
-      update?.distribution === 'portable' &&
-      expected?.tag === 'v0.1.0-rc11' &&
-      typeof expected?.sha256 === 'string' && /^[a-f0-9]{64}$/.test(expected.sha256) &&
-      Number.isSafeInteger(expected?.size) &&
-      update?.release?.tag_name === expected.tag &&
-      update?.assetName === expected.assetName &&
-      update?.asset?.size === expected.size &&
-      update?.asset?.digest === 'sha256:' + expected.sha256 &&
-      update?.sha256 === expected.sha256;
-    const { compareVerifiedWindowsZipBatcher } = await import('../scripts/updater-smoke-diagnostics.mjs');
-    return compareVerifiedWindowsZipBatcher(assetMatches ? update.filePath : null, assetMatches, {
-      sha256: expected.sha256,
-      size: expected.size,
-    });
-  };
-}
+if (updaterSmokeBoundary) globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
 if (!app.requestSingleInstanceLock()) app.quit();
 const settings = () => loadSettings(app.getPath('userData'));
 async function sigstoreTrustedRootTargetInfo() {
