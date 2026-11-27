@@ -153,9 +153,9 @@ const zipBatcherArmPlan = Object.freeze([
   { trial: 1, arm: 'raw-read' },
   { trial: 1, arm: 'deflate-discard' },
   { trial: 1, arm: 'deflate-file' },
-  { trial: 2, arm: 'deflate-discard' },
+  { trial: 2, arm: 'deflate-direct' },
 ]);
-const safeZipArms = new Set(['raw-read', 'deflate-discard', 'deflate-file']);
+const safeZipArms = new Set(['raw-read', 'deflate-discard', 'deflate-file', 'deflate-direct']);
 const safeZipSinks = new Set(['count-discard', 'node-fs-file']);
 const safeZipBatcherOutcomes = new Set(['completed', 'time-limit', 'failed', 'unknown']);
 const safeZipCleanupStatuses = new Set(['removed', 'not-created', 'failed', 'unknown']);
@@ -174,13 +174,14 @@ export function safeZipBatcherComparison(value) {
   const arms = (Array.isArray(value?.arms) ? value.arms : []).slice(0, zipBatcherArmPlan.length).map(arm => {
     const armName = safeZipArms.has(arm?.arm) ? arm.arm : 'unknown';
     const sink = safeZipSinks.has(arm?.sink) ? arm.sink : 'unknown';
+    const usesBatcher = armName === 'deflate-discard' || armName === 'deflate-file';
     const decodedBytes = safeZipSinkMetric(arm?.decodedBytes, 1_073_741_824);
     const sinkBytesProcessed = safeZipSinkMetric(arm?.sinkBytesProcessed, 1_073_741_824);
     return {
       trial: [1, 2].includes(arm?.trial) ? arm.trial : null,
       arm: armName,
       sink,
-      batchBytes: armName !== 'raw-read' && arm?.batchBytes === zipWriteBatchBytes ? zipWriteBatchBytes : null,
+      batchBytes: usesBatcher && arm?.batchBytes === zipWriteBatchBytes ? zipWriteBatchBytes : null,
       outcome: safeZipBatcherOutcomes.has(arm?.outcome) ? arm.outcome : 'unknown',
       wallMs: safeZipSinkMetric(arm?.wallMs, 60_000),
       cpuUserMs: safeZipSinkMetric(arm?.cpuUserMs, 120_000),
@@ -264,10 +265,12 @@ async function measureZipBatcherArm(archivePath, trial, armName) {
     entryNonAsar: false, entryMatches: false,
   };
   const rawRead = armName === 'raw-read';
+  const directDeflate = armName === 'deflate-direct';
+  const useBatcher = !rawRead && !directDeflate;
   const sinkType = armName === 'deflate-file' ? 'node-fs-file' : 'count-discard';
   const arm = {
     trial, arm: armName, sink: sinkType,
-    batchBytes: rawRead ? null : zipWriteBatchBytes,
+    batchBytes: useBatcher ? zipWriteBatchBytes : null,
     outcome: 'failed', wallMs: null, cpuUserMs: null, cpuSystemMs: null,
     compressedBytesRead: null, decodedBytes: null, sinkBytesProcessed: null,
     sinkWritableLength: null, sinkNeedDrain: null, writeCallbackWaitMs: null,
@@ -338,8 +341,8 @@ async function measureZipBatcherArm(archivePath, trial, armName) {
       controller.abort();
     }, zipBatcherArmTimeoutMs);
     try {
-      if (rawRead) await pipeline(source, sink, { signal: controller.signal });
-      else await runZipSinkPipeline(source, sink, zipWriteBatchBytes, controller.signal);
+      if (useBatcher) await runZipSinkPipeline(source, sink, zipWriteBatchBytes, controller.signal);
+      else await pipeline(source, sink, { signal: controller.signal });
       arm.outcome = 'completed';
       sampleSink();
     } catch {

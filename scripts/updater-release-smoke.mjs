@@ -1541,7 +1541,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
       const compare = globalThis.__tusUpdaterSmokeZipBatcherCompare;
       return typeof compare === 'function' ? compare(expected) : null;
     }, { tag, assetName, size: manifestFile.size, sha256: manifestFile.sha256 }),
-    'Verified ZIP raw-read/Deflate/file comparison', zipBatcherComparisonTimeoutMs);
+    'Verified ZIP raw/direct/batched Deflate comparison', zipBatcherComparisonTimeoutMs);
     zipBatcherComparison = safeZipBatcherComparison(rawComparison);
     console.log('TUS_UPDATE_ZIP_BATCHER_COMPARISON ' + JSON.stringify(zipBatcherComparison));
   }
@@ -1769,30 +1769,38 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   if (zipBatcherComparison) {
     assert.equal(zipBatcherComparison.assetMatches, true, 'sink comparison uses the exact verified RC11 asset');
     assert.equal(zipBatcherComparison.entryMatches, true, 'each arm reads the exact published non-ASAR Deflate entry');
-    assert.equal(zipBatcherComparison.batchBytes, 256 * 1024, 'all arms use the production ZIP batcher');
+    assert.equal(zipBatcherComparison.batchBytes, 256 * 1024, 'the production ZIP batcher size is fixed');
     assert.deepEqual(zipBatcherComparison.sinkOrder, ['count-discard', 'node-fs-file', 'node-fs-file', 'count-discard']);
     assert.equal(zipBatcherComparison.readHighWaterMarkBytes, 256 * 1024);
     assert.equal(zipBatcherComparison.writeHighWaterMarkBytes, 16 * 1024);
-    assert.equal(zipBatcherComparison.measurementScope, 'pipeline-only');
+    assert.equal(zipBatcherComparison.measurementScope, 'raw-reader-and-deflate-pipeline');
     const expectedArms = [
-      { trial: 1, sink: 'count-discard' },
-      { trial: 1, sink: 'node-fs-file' },
-      { trial: 2, sink: 'node-fs-file' },
-      { trial: 2, sink: 'count-discard' },
+      { trial: 1, arm: 'raw-read', sink: 'count-discard' },
+      { trial: 1, arm: 'deflate-discard', sink: 'count-discard' },
+      { trial: 1, arm: 'deflate-file', sink: 'node-fs-file' },
+      { trial: 2, arm: 'deflate-direct', sink: 'count-discard' },
     ];
-    assert.deepEqual(zipBatcherComparison.arms.map(({ trial, sink }) => ({ trial, sink })), expectedArms);
+    assert.deepEqual(zipBatcherComparison.arms.map(({ trial, arm, sink }) => ({ trial, arm, sink })), expectedArms);
     for (const arm of zipBatcherComparison.arms) {
       assert.ok(['completed', 'time-limit'].includes(arm.outcome), 'each bounded sink arm produced a measurement');
-      assert.equal(arm.batchBytes, zipBatcherComparison.batchBytes, 'each arm uses the same production batcher');
+      const usesBatcher = ['deflate-discard', 'deflate-file'].includes(arm.arm);
+      assert.equal(arm.batchBytes, usesBatcher ? zipBatcherComparison.batchBytes : null, 'only production Deflate sink arms use the batcher');
       assert.equal(arm.cleanupStatus, arm.sink === 'node-fs-file' ? 'removed' : 'not-created');
-      for (const key of ['wallMs', 'cpuUserMs', 'cpuSystemMs', 'compressedBytesRead', 'decodedBytes', 'sinkBytesProcessed']) {
+      for (const key of ['wallMs', 'cpuUserMs', 'cpuSystemMs', 'compressedBytesRead', 'sinkBytesProcessed']) {
         assert.ok(Number.isSafeInteger(arm[key]) && arm[key] >= 0, 'each sink arm reports bounded ' + key);
       }
+      if (arm.arm === 'raw-read') assert.equal(arm.decodedBytes, null);
+      else assert.ok(Number.isSafeInteger(arm.decodedBytes) && arm.decodedBytes >= 0, 'Deflate arms report decoded-byte progress');
       if (arm.outcome === 'completed') {
         assert.equal(arm.compressedBytesRead, zipBatcherComparison.entryCompressedSize);
-        assert.equal(arm.decodedBytes, zipBatcherComparison.entryUncompressedSize);
-        assert.equal(arm.sinkBytesProcessed, zipBatcherComparison.entryUncompressedSize);
-        assert.equal(arm.countersMatch, true);
+        if (arm.arm === 'raw-read') {
+          assert.equal(arm.sinkBytesProcessed, zipBatcherComparison.entryCompressedSize);
+          assert.equal(arm.countersMatch, null);
+        } else {
+          assert.equal(arm.decodedBytes, zipBatcherComparison.entryUncompressedSize);
+          assert.equal(arm.sinkBytesProcessed, zipBatcherComparison.entryUncompressedSize);
+          assert.equal(arm.countersMatch, true);
+        }
         assert.equal(arm.sourceReadableEnded, true);
         assert.equal(arm.sinkWritableFinished, true);
         assert.equal(arm.sinkClosed, true);
