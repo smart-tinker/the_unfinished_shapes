@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { Readable } from 'node:stream';
+import { getDefaultHighWaterMark, Readable } from 'node:stream';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -507,7 +507,7 @@ test('Windows extraction buffers non-ASAR ZIP files in a bounded write queue', a
     ], { encoding: 'utf8' });
     assert.equal(child.status, 0, 'the real archive extractor completes in the observer process');
     assert.deepEqual(JSON.parse(child.stdout), [
-      { kind: 'app-asar', highWaterMark: 16 * 1024, flags: 'wx', mode: 0o600 },
+      { kind: 'app-asar', highWaterMark: getDefaultHighWaterMark(false), flags: 'wx', mode: 0o600 },
       { kind: 'non-asar', highWaterMark: 1024 * 1024, flags: 'wx', mode: 0o600 },
     ]);
     const target = path.join(await realpath(parent), 'TheUnfinishedShapes-0.1.0-rc.11');
