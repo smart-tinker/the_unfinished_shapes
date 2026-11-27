@@ -900,8 +900,10 @@ function traceSmokeJump(event, value, details) {
   try { window.__TUS_SMOKE_JUMP_TRACE?.(event, value, details); } catch {}
 }
 function currentSmokeMovementFrame() {
-  const trace = window.__TUS_SMOKE_JUMP_TRACE_STATE, frame = latestSmokeMovementFrame;
-  return trace?.active === true && trace.captureRafFrames === true && frame && frame.at >= trace.startedAt ? frame : null;
+  const trace = window.__TUS_SMOKE_JUMP_TRACE_STATE;
+  if (trace?.active !== true || trace.captureRafFrames !== true) return null;
+  const frame = latestSmokeMovementFrame;
+  return frame && frame.at >= trace.startedAt ? frame : null;
 }
 async function syncPosition() {
   const position = { ...playerPosition }, key = positionKey(playerPosition), generation = settingsGeneration, movementVersion = localMovementVersion, jump = jumpRequested;
