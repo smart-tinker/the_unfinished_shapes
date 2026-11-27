@@ -158,6 +158,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Threading;
+public delegate string TusExpectedWindowProbe(int expectedProcessId, string expectedOwnerHandle, uint timeoutMilliseconds);
 public sealed class TusUiaOutputCapture
 {
     private static readonly Regex TokenMatcher = new Regex(@"^TUS_UIA_CHILD: (phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|first-child-(?:start|done)|child-name-(?:start|done)|next-sibling-(?:start|done))|matched-[01]|mismatch)$", RegexOptions.CultureInvariant);
@@ -165,6 +166,7 @@ public sealed class TusUiaOutputCapture
     private Stopwatch fromHandleWatch;
     private readonly int expectedProcessId;
     private readonly string expectedOwnerHandle;
+    private readonly TusExpectedWindowProbe ownerWindowProbe;
     private readonly Stopwatch probeBudgetWatch = Stopwatch.StartNew();
     private int ownerProbeQueued;
     private volatile bool fromHandleObserved;
@@ -184,10 +186,11 @@ public sealed class TusUiaOutputCapture
     public readonly ManualResetEvent OutputReadComplete = new ManualResetEvent(false);
     public readonly DataReceivedEventHandler Handler;
 
-    public TusUiaOutputCapture(int processId, string ownerWindowHandle)
+    public TusUiaOutputCapture(int processId, string ownerWindowHandle, TusExpectedWindowProbe probe)
     {
         expectedProcessId = processId;
         expectedOwnerHandle = ownerWindowHandle;
+        ownerWindowProbe = probe;
         Handler = new DataReceivedEventHandler(OnOutputDataReceived);
     }
 
@@ -202,7 +205,7 @@ public sealed class TusUiaOutputCapture
             if (!fromHandleDone && remaining > 0)
             {
                 uint timeout = (uint)Math.Min(250, remaining);
-                status = TusWindowLookup.ProbeExpectedOwnerWindow(expectedProcessId, expectedOwnerHandle, timeout);
+                status = ownerWindowProbe(expectedProcessId, expectedOwnerHandle, timeout);
                 if (fromHandleDone) status = "unknown";
             }
         }
@@ -246,7 +249,9 @@ public sealed class TusUiaOutputCapture
 }
 '@
   }
-  $outputCapture = New-Object -TypeName TusUiaOutputCapture -ArgumentList @($ExpectedProcessId, $ExpectedOwnerHandle)
+  $probeMethod = [TusWindowLookup].GetMethod('ProbeExpectedOwnerWindow')
+  $ownerWindowProbe = $probeMethod.CreateDelegate([TusExpectedWindowProbe])
+  $outputCapture = New-Object -TypeName TusUiaOutputCapture -ArgumentList @($ExpectedProcessId, $ExpectedOwnerHandle, $ownerWindowProbe)
   $process.add_OutputDataReceived($outputCapture.Handler)
   $setupWatch.Stop()
   Write-UiaTimingMarker 'reader-setup' $setupWatch.ElapsedMilliseconds
