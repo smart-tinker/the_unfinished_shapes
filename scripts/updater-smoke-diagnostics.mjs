@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { Writable } from 'node:stream';
@@ -9,6 +10,10 @@ import { createZipWriteBatcher, openZipReadStream, safeArchiveExtractionOperatio
 import { safeUpdaterModuleName } from '../src/update-release.mjs';
 
 export const updaterZipStreamSampleOffsetsMs = Object.freeze([15_000, 35_000, 55_000, 75_000, 95_000, 110_000]);
+
+export async function assertPortableExtractVerified(runExtract) {
+  assert.equal(await runExtract(), 'verified', 'the selected verified archive reaches a terminal extraction success');
+}
 
 const safeVerifierSetupStages = new Set([
   'tuf-get-trusted-root', 'trust-material', 'verifier-construction',
@@ -54,6 +59,21 @@ const safeArchiveFailureCodes = new Set([
 const safeArchiveFailureCode = value => safeArchiveFailureCodes.has(value) ? value : 'OTHER';
 const safeExtractStreamCount = (value, max = 0xffffffff) =>
   Number.isSafeInteger(value) && value >= 0 ? Math.min(value, max) : null;
+
+function safeExtractTiming(value) {
+  const elapsed = (start, end) => {
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    const milliseconds = Math.round(end - start);
+    return milliseconds >= 0 && milliseconds <= 120_000 ? milliseconds : null;
+  };
+  return {
+    ipcToExtractCallMs: elapsed(value?.ipcEnteredAt, value?.extractCallAt),
+    extractCallToDigestVerifiedMs: elapsed(value?.extractCallAt, value?.digestVerifiedAt),
+    digestVerifiedToFirstZipPipelineMs: elapsed(value?.digestVerifiedAt, value?.firstZipPipelineAt),
+    firstZipPipelineToEntry12Ms: elapsed(value?.firstZipPipelineAt, value?.entry12At),
+    ipcToEntry12Ms: elapsed(value?.ipcEnteredAt, value?.entry12At),
+  };
+}
 
 function safeExtractStreamSnapshot(value, previous, elapsedMs) {
   if (!value || typeof value !== 'object') return null;
@@ -492,6 +512,7 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
       extractPhase: safeExtractPhases.has(item.extractPhase) ? item.extractPhase : 'unknown',
       extractSubstage: safeExtractSubstages.has(item.extractSubstage) ? item.extractSubstage : 'unknown',
       extractAppAsarEntry: item.extractAppAsarEntry === true,
+      extractTiming: safeExtractTiming(item.extractTiming),
       failureCode: typeof item.failureCode === 'string' ? safeArchiveFailureCode(item.failureCode) : null,
       extractStage: typeof item.extractStage === 'string' ? safeArchiveExtractionStage(item.extractStage) : null,
       extractOperation: typeof item.extractOperation === 'string' ? safeArchiveExtractionOperation(item.extractOperation) : null,

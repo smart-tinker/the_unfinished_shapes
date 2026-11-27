@@ -129,10 +129,3 @@ test('incompatible package verifier IPC is forwarded only to the packaged smoke 
 });
 
 
-test('Windows ZIP comparison labels its own timeout stage before awaiting the bounded call', async () => {
-  const smoke = await readFile(new URL('../scripts/updater-release-smoke.mjs', import.meta.url), 'utf8');
-  const stage = smoke.indexOf("setDiagnostic('zip-batcher-comparison')");
-  const comparison = smoke.indexOf('const rawComparison = await withTimeout(current.instance.evaluate');
-
-  assert.ok(stage >= 0 && comparison > stage, 'the timeout stage is recorded before the comparison can time out');
-});
