@@ -202,7 +202,7 @@ async function observeUpdaterKeyboardActions(page) {
         return;
       }
       const id = event.target instanceof HTMLElement ? event.target.id : '';
-      if (event.key === 'Enter' && ['updates-check', 'updates-download', 'updates-cancel', 'updates-launch'].includes(id) &&
+      if (event.key === 'Enter' && ['updates-check', 'updates-download', 'updates-extract', 'updates-cancel', 'updates-launch'].includes(id) &&
           window.__tusUpdaterKeyboardActions.length < 40) {
         window.__tusUpdaterKeyboardActions.push(id);
       }
@@ -1576,7 +1576,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     });
     const pendingStatus = 'Choose a destination folder…';
     const successStatus = 'Verified archive extracted. You can now launch the new copy.';
-    await current.page.locator('#updates-extract').click();
+    await activateUpdaterButtonByKeyboard(current.page, 'updates-extract');
     const folderChooserInvoked = await waitForFile(path.join(workDir, 'extract-folder-chooser.json'), 5000);
     const extractDiagnostic = {
       folderChooserInvoked,
