@@ -1,4 +1,11 @@
 $ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+public static class TusWindowLookup {
+  public static string ProbeExpectedOwnerWindow(int expectedProcessId, string expectedOwnerHandle, uint timeoutMilliseconds) {
+    return "unknown";
+  }
+}
+'@
 function Write-UiaPhaseMarker {
   param([Parameter(Mandatory=$true)][string]$Phase)
   [Console]::Out.WriteLine('TUS_UIA: ' + $Phase)
@@ -23,7 +30,7 @@ $testChildScript = @'
 Start-Sleep -Seconds 30
 '@
 $watch = [Diagnostics.Stopwatch]::StartNew()
-$result = Get-UiaPromptBodyResult -WindowHandle ([IntPtr]::Zero) -ExpectedMessages @('fixture-message') -ExpectedDetails @('fixture-detail') -GoalStatusPrefix 'fixture-prefix' -ChildScriptOverride $testChildScript
+$result = Get-UiaPromptBodyResult -WindowHandle ([IntPtr]::Zero) -ExpectedMessages @('fixture-message') -ExpectedDetails @('fixture-detail') -GoalStatusPrefix 'fixture-prefix' -ExpectedProcessId 0 -ExpectedOwnerHandle '0' -ChildScriptOverride $testChildScript
 $watch.Stop()
 [Console]::Out.WriteLine("TUS_UIA_TEST: result=$result")
 [Console]::Out.WriteLine("TUS_UIA_TEST: elapsed=$($watch.ElapsedMilliseconds)")

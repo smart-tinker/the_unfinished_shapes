@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const runPowerShell = promisify(execFile);
 
 test('real native quit prompt runs without CI auto-confirm and skips closed-app cleanup', async () => {
   const source = await readFile(new URL('../scripts/windows-installer-smoke.mjs', import.meta.url), 'utf8');
@@ -20,8 +24,19 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(windowsUI, /TUS_UIA: automation-error-/);
   assert.match(windowsUI, /GetForegroundWindow/);
   assert.doesNotMatch(windowsUI, /GetForegroundOwnedWindow|foreground-window-not-owned/);
+  assert.match(windowsUI, /TUS_UIA: prompt-window-matched/);
+  assert.match(windowsUI, /TUS_UIA: prompt-dialog-process-match/);
+  const powershellActions = windowsUI.slice(windowsUI.indexOf('switch ($Action) {'));
+  assert.doesNotMatch(powershellActions, /\|\|/, 'PowerShell branches use PowerShell logical operators');
 
-  assert.match(windowsUI, /\$foregroundHandle = \[TusWindowLookup\]::GetForegroundWindow\(\)/);
+  assert.match(windowsUI, /function Find-ExpectedPromptWindowBounded/);
+  assert.match(windowsUI, /FindExpectedPromptWindow\(\$ProcessId, \$OwnerWindowHandle\)/);
+  const boundedFinderStart = windowsUI.indexOf('function Find-ExpectedPromptWindowBounded');
+  const boundedFinderEnd = windowsUI.indexOf('function Write-PromptEvidence', boundedFinderStart);
+  const boundedFinder = windowsUI.slice(boundedFinderStart, boundedFinderEnd);
+  assert.match(boundedFinder, /AddSeconds\(15\)/);
+  assert.match(boundedFinder, /Start-Sleep -Milliseconds 100/);
+  assert.match(windowsUI, /Find-ExpectedPromptWindowBounded/);
   const titleStart = windowsUI.indexOf('public static string GetWindowTitle');
   const titleEnd = windowsUI.indexOf('private static string NormalizePromptText', titleStart);
   const titleReader = windowsUI.slice(titleStart, titleEnd);
@@ -33,18 +48,44 @@ test('real native quit prompt runs without CI auto-confirm and skips closed-app 
   assert.match(windowsUI, /FindExpectedQuitButton/);
   assert.match(windowsUI, /ClickNativePromptButton/);
   assert.match(windowsUI, /buttons\.Count != 2/);
-  const foregroundStart = windowsUI.indexOf('$foregroundHandle = [TusWindowLookup]::GetForegroundWindow()');
-  const foregroundEnd = windowsUI.indexOf("\n  'file-menu-open' {", foregroundStart);
-  const foregroundLookup = windowsUI.slice(foregroundStart, foregroundEnd);
-  const exactTitleGate = foregroundLookup.indexOf("GetWindowTitle($foregroundHandle) -eq 'Codex activity may continue'");
-  const nativeButtonFind = foregroundLookup.indexOf('Find-ValidatedPromptButton');
-  const nativeButtonClick = foregroundLookup.indexOf('[TusWindowLookup]::ClickNativePromptButton');
-  assert.ok(exactTitleGate >= 0 && exactTitleGate < nativeButtonFind && nativeButtonFind < nativeButtonClick,
-    'only the exact TUS dialog title and native prompt match reach the click');
+  const finderStart = windowsUI.indexOf('public static IntPtr FindExpectedPromptWindow');
+  const finderEnd = windowsUI.indexOf('public static bool ActivateExpectedPromptWindow', finderStart);
+  const finder = windowsUI.slice(finderStart, finderEnd);
+  assert.match(finder, /EnumWindows\(/);
+  assert.match(finder, /IsOwnedByExpectedWindow\(window, expectedOwner\)/);
+  assert.match(finder, /if \(processId != expectedProcessId\)/);
+  assert.match(finder, /window-process-mismatch/);
+  assert.match(windowsUI, /GetWindowProcessId\(expectedOwner\) == expectedProcessId/);
+  assert.match(windowsUI, /GetWindowProcessId\(dialog\) == expectedProcessId/);
+  assert.match(finder, /IsWindowVisible\(window\)/);
+  assert.match(finder, /IsWindowEnabled\(window\)/);
+  assert.match(finder, /GetWindowTitle\(window\) == "Codex activity may continue"/);
+  assert.match(windowsUI, /GetWindow\(window, GW_OWNER\)/);
+  assert.match(windowsUI, /GetAncestor\(window, GA_ROOTOWNER\)/);
+  assert.match(windowsUI, /IsExpectedPromptWindow\(dialog, expectedProcessId, expectedOwner\)/);
+  assert.match(finder, /window-ambiguous/);
   assert.match(windowsUI, /TUS_UIA: exact-foreground-prompt-matched/);
-  assert.doesNotMatch(foregroundLookup, /GetProcessWindows|GetWindowThreadProcessId/);
-
-  assert.doesNotMatch(windowsUI, /GetProcessWindows|EnumWindows\(|IsWindowVisible|GetWindowThreadProcessId/);
+  const promptStart = windowsUI.indexOf("  { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {");
+  const promptEnd = windowsUI.indexOf("\n  'assert-exact-body-recognized' {", promptStart);
+  const prompt = windowsUI.slice(promptStart, promptEnd);
+  const firstMatcher = prompt.indexOf('Find-ValidatedPromptButton');
+  const foreground = prompt.indexOf('ActivateExpectedPromptWindow');
+  const secondMatcher = prompt.indexOf('Find-ValidatedPromptButton', firstMatcher + 1);
+  const nativeButtonClick = prompt.indexOf('[TusWindowLookup]::ClickNativePromptButton');
+  assert.ok(firstMatcher >= 0 && firstMatcher < foreground && foreground < secondMatcher && secondMatcher < nativeButtonClick,
+    'the process-owned exact prompt is matched, foregrounded, revalidated and only then clicked');
+  const activationStart = windowsUI.indexOf('public static bool ActivateExpectedPromptWindow');
+  const activationEnd = windowsUI.indexOf('public static IntPtr FindExpectedQuitButton', activationStart);
+  const activation = windowsUI.slice(activationStart, activationEnd);
+  assert.match(activation, /SetForegroundWindow\(dialog\)/);
+  assert.match(activation, /GetForegroundWindow\(\) == dialog/);
+  assert.match(windowsUI, /GetWindowThreadProcessId/);
+  const mismatchStart = windowsUI.indexOf("  'assert-body-mismatch-rejected' {");
+  const mismatchEnd = windowsUI.indexOf("\n  'dismiss-test-prompt' {", mismatchStart);
+  const mismatchAction = windowsUI.slice(mismatchStart, mismatchEnd);
+  assert.match(mismatchAction, /Find-ExpectedPromptWindowBounded/);
+  assert.doesNotMatch(mismatchAction, /ActivateExpectedPromptWindow|ClickNativePromptButton/,
+    'a changed body is rejected without foregrounding or clicking');
   assert.doesNotMatch(windowsUI, /FindWindow\(/);
 });
 
@@ -72,19 +113,97 @@ test('Windows quit UI reports its latest safe phase when native automation times
   const timeout = Number(automation.match(/timeout:\s*(\d+)/)?.[1]);
   assert.ok(timeout >= 25000, 'PowerShell timeout includes startup plus the full 15-second dialog wait');
   for (const marker of [
-    'script-start', 'window-api-ready', 'locating-foreground-dialog',
+    'script-start', 'window-api-ready', 'locating-process-dialog', 'prompt-window-matched',
     'foreground-title-matched', 'exact-foreground-prompt-matched', 'dialog-accessible', 'quit-dialog-not-found',
   ]) {
     assert.ok(windowsUI.includes('TUS_UIA: ' + marker), 'PowerShell reports ' + marker);
   }
   assert.match(windowsUI, /automation-error-\$errorType-at-\$script:uiPhase/);
-  assert.match(windowsUI, /\$script:uiPhase = 'checking-foreground-window'/);
-  assert.match(windowsUI, /\$script:uiPhase = 'reading-foreground-title'/);
+  assert.match(windowsUI, /\$script:uiPhase = 'checking-process-owned-prompt-window'/);
+  assert.match(windowsUI, /\$script:uiPhase = 'foregrounding-exact-prompt'/);
   assert.match(windowsUI, /\$script:uiPhase = 'checking-exact-dialog-buttons'/);
   assert.match(windowsUI, /TUS_UIA: prompt-\$promptStatus/);
   assert.doesNotMatch(windowsUI, /GetProcessWindows|reading-owned-window/);
 });
 
+
+test('bounded UIA child overflow is unavailable, not a definite mismatch', async () => {
+  const uia = await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8');
+  const traversalStart = uia.indexOf('for ($childOrdinal');
+  const traversalEnd = uia.indexOf('for ($index', traversalStart);
+  const traversal = uia.slice(traversalStart, traversalEnd);
+  const cap = traversal.indexOf('if ($childOrdinal -eq 63) {');
+  const overflow = traversal.slice(cap);
+  assert.ok(cap >= 0, 'the reader reaches its bound after 64 entries');
+  assert.ok(traversal.indexOf('$nextElement = $walker.GetNextSibling($element)') < cap,
+    'the reader checks whether a 65th sibling exists');
+  assert.ok(overflow.indexOf('if ($null -ne $nextElement)') <
+    overflow.indexOf("[Console]::Out.WriteLine('unavailable')"));
+  assert.ok(overflow.indexOf("[Console]::Out.WriteLine('unavailable')") <
+    overflow.indexOf('exit 1'));
+  assert.ok(uia.indexOf('exit 1', traversalStart) < traversalEnd,
+    'overflow exits before the complete-scan mismatch path');
+  assert.ok(uia.indexOf("TUS_UIA_CHILD: mismatch") > traversalEnd);
+  assert.match(uia, /if \(\$process\.ExitCode -eq 0 -and \$results\.Count -gt 0\)[\s\S]*return 'unavailable'/,
+    'overflow failure remains unavailable at the parent-reader boundary');
+});
+
+
+test('Windows UIA child scan rejects an expected message and detail beyond child 64 as unavailable', { skip: process.platform !== 'win32' }, async () => {
+  const source = (await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8'))
+    .replace(/\r\n/g, '\n');
+  const childStart = source.indexOf("$childScript = @'\n");
+  const childEnd = source.indexOf("\n'@", childStart);
+  assert.ok(childStart >= 0 && childEnd > childStart, 'the production child script is present');
+  const childScript = source.slice(childStart + "$childScript = @'\n".length, childEnd);
+  const scanStart = childScript.indexOf('$expected = @($payload.expectedMessages)');
+  const scanEnd = childScript.indexOf('\n} catch {', scanStart);
+  assert.ok(scanStart >= 0 && scanEnd > scanStart, 'the production scan and matcher are present');
+  const productionWalker = '$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker';
+  const productionScanAndMatch = childScript.slice(scanStart, scanEnd);
+  assert.ok(productionScanAndMatch.includes(productionWalker), 'the production UIA walker is identified');
+  const scanAndMatch = productionScanAndMatch.replace(productionWalker, '');
+
+  const powershell = [
+    'Add-Type -AssemblyName UIAutomationTypes',
+    '$payload = [pscustomobject]@{',
+    '  expectedMessages = @("Codex may still be working in this conversation.", "The current Codex activity is unknown.")',
+    '  expectedDetails = @("Quitting TUS closes its Codex connection but does not confirm that a Goal or turn stopped. Keep the game open to pause or clear the Goal, or quit anyway.", "Codex state could not be confirmed. Keep the game open and reconnect to check the conversation, or quit anyway.")',
+    '  goalStatusPrefix = "Native Goal status: "',
+    '}',
+    '$nodes = @()',
+    'for ($index = 0; $index -lt 66; $index++) {',
+    '  $name = "child-" + ($index + 1)',
+    '  if ($index -eq 64) { $name = $payload.expectedMessages[0] }',
+    '  if ($index -eq 65) { $name = $payload.goalStatusPrefix + "active. " + $payload.expectedDetails[0] }',
+    '  $node = [pscustomobject]@{ Name = $name }',
+    '  $node | Add-Member -MemberType ScriptMethod -Name GetCurrentPropertyValue -Value { param($property) return $this.Name }',
+    '  $nodes += $node',
+    '}',
+    '$walker = [pscustomobject]@{ Nodes = $nodes }',
+    '$walker | Add-Member -MemberType ScriptMethod -Name GetFirstChild -Value { param($root) return $this.Nodes[0] }',
+    '$walker | Add-Member -MemberType ScriptMethod -Name GetNextSibling -Value { param($current) $index = [array]::IndexOf($this.Nodes, $current); if ($index + 1 -lt $this.Nodes.Count) { return $this.Nodes[$index + 1] }; return $null }',
+    '$root = [pscustomobject]@{}',
+    scanAndMatch,
+  ].join('\n');
+  const encodedCommand = Buffer.from(powershell, 'utf16le').toString('base64');
+  let exitCode = 0;
+  let stdout = '';
+  try {
+    ({ stdout } = await runPowerShell('powershell.exe', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedCommand,
+    ], { timeout: 15000, windowsHide: true }));
+  } catch (error) {
+    exitCode = error?.code;
+    stdout = String(error?.stdout ?? '');
+  }
+  const output = stdout.split(/\r?\n/);
+  assert.equal(exitCode, 1, 'the overflow path exits unavailable');
+  assert.ok(output.includes('unavailable'), 'a sibling beyond child 64 emits unavailable');
+  assert.ok(!output.includes('TUS_UIA_CHILD: mismatch'), 'truncated scan is never reported as a definite mismatch');
+  assert.ok(!output.some(line => /^TUS_UIA_CHILD: matched-[01]$/.test(line)),
+    'the beyond-bound prompt is not accepted by a truncated scan');
+});
 
 test('native quit prompt body uses exact message text and bounded STA UI Automation', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
@@ -96,17 +215,19 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
   assert.match(expectedBlock, /Native Goal status:/);
 
   const uia = await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8');
-  assert.match(uia, /TreeScope\]::Children/);
-  assert.match(uia, /\.FindFirst\(/);
+  assert.match(uia, /TreeWalker\]::ControlViewWalker/);
+  assert.match(uia, /\.GetFirstChild\(\$root\)/);
+  assert.doesNotMatch(uia, /\.FindFirst\(/);
+  assert.match(uia, /\$childOrdinal -lt 64/);
   assert.match(uia, /GetNextSibling/);
   assert.match(uia, /detail/);
   assert.match(uia, /TUS_UIA_CHILD: phase-fromhandle-start/);
-  for (const marker of ['phase-child-start', 'phase-payload-read-start', 'phase-payload-parse-start', 'phase-payload-decode-start', 'phase-payload-decode-done', 'phase-payload-json-start', 'phase-payload-json-done', 'phase-addtype-types-start', 'phase-addtype-client-start']) {
+  for (const marker of ['phase-child-start', 'phase-payload-read-start', 'phase-payload-parse-start', 'phase-payload-decode-start', 'phase-payload-decode-done', 'phase-payload-json-start', 'phase-payload-json-done', 'phase-addtype-types-start', 'phase-addtype-client-start', 'phase-first-child-start', 'phase-child-name-start', 'phase-next-sibling-start']) {
     assert.ok(uia.includes('TUS_UIA_CHILD: ' + marker), 'UIA child reports ' + marker);
   }
-  assert.match(uia, /TUS_UIA_CHILD: phase-findfirst-\' \+ \$index \+ \'-start/);
-  assert.match(uia, /TUS_UIA_CHILD: phase-current-name-\' \+ \$index \+ \'-start/);
-  assert.match(uia, /TUS_UIA_CHILD: phase-next-sibling-/);
+  assert.match(uia, /TUS_UIA_CHILD: phase-first-child-start/);
+  assert.match(uia, /TUS_UIA_CHILD: phase-child-name-start/);
+  assert.match(uia, /TUS_UIA_CHILD: phase-next-sibling-start/);
   assert.match(uia, /Test-ExpectedPromptDetail/);
   assert.match(uia, /\[ValidateSet\('STA','MTA'\)\]\[string\]\$Apartment = 'MTA'/);
   assert.match(uia, /NonInteractive -' \+ \$Apartment \+ ' -EncodedCommand/);
@@ -124,26 +245,43 @@ test('native quit prompt body uses exact message text and bounded STA UI Automat
 test('Windows quit prompt acceptance mutates message and detail independently', async () => {
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
-  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'message'\)/);
-  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, process, 'detail'\)/);
+  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, 'message', ownerWindow\)/);
+  assert.match(automation, /assertModifiedPromptIsNotClicked\(app, pid, 'detail', ownerWindow\)/);
   assert.match(automation, /Modified activity detail\./);
-  assert.match(automation, /TUS_UIA_TEST: detail-probe-/);
-  assert.match(automation, /if \(matcherRejected\)\s*\{\s*try\s*\{\s*await ui\('keep-open', pid\)/);
+  assert.match(automation, /mainProcessMatches: app\.isReady\(\) && process\.pid === expectedPid/);
+  assert.doesNotMatch(automation, /mainProcessId/);
+  assert.doesNotMatch(automation, /assert\.equal\(await app\.evaluate\(\(\) => process\.pid\), pid/);
+  assert.match(automation, /rejecting a modified prompt leaves the same TUS main process running/);
+  assert.match(automation, /TUS_QUIT_TEST: ' \+ modifiedField \+ '-probe-'/);
+  assert.match(automation, /if \(matcherRejected\)\s*\{\s*try\s*\{\s*await ui\('keep-open', pid, undefined, 'MTA', ownerWindow\.handleHex\)/);
   assert.match(automation, /prompt-reader-timeout-phase-\(\[a-z0-9-\]\+\)/);
-  assert.match(automation, /TUS_UIA_COMPARE: /);
+  assert.match(automation, /TUS_QUIT_COMPARE: /);
   assert.match(automation, /fromhandle/);
   assert.match(automation, /-ms=\\d\{1,6\}/);
   assert.match(automation, /const apartmentOrder = modifiedField === 'detail' \? \['STA', 'MTA'\] : \['MTA', 'STA'\]/);
-  assert.match(automation, /expected-foreground-prompt-unavailable/);
+  assert.match(automation, /window-title-mismatch/);
   assert.match(automation, /quit-dialog-not-found/);
   assert.match(automation, /automation-error-\[a-z0-9\]\+-at-\[a-z0-9-\]\+/i);
   assert.match(windowsUI, /TUS_UIA: prompt-\$status/);
+  const dismissStart = windowsUI.indexOf("  'dismiss-test-prompt' {");
+  const dismissEnd = windowsUI.indexOf("  'file-menu-open' {", dismissStart);
+  const dismiss = windowsUI.slice(dismissStart, dismissEnd);
+  assert.equal((dismiss.match(/prompt-reader-timeout-\$script:uiaPromptTimeoutPhase/g) ?? []).length, 2,
+    'both prompt-dismissal failure boundaries retain the bounded UIA reader phase');
+  const postActivationStart = dismiss.indexOf("if ([TusWindowLookup]::LastPromptStatus -notin @('expected-body-mismatch', 'matched') -or");
+  const foregroundFailure = dismiss.indexOf("Write-Output 'TUS_UIA: prompt-foreground-activation-rejected'", postActivationStart);
+  const timeoutPhase = dismiss.indexOf('TUS_UIA: prompt-reader-timeout-', postActivationStart);
+  assert.ok(foregroundFailure >= 0 && timeoutPhase > foregroundFailure,
+    'the bounded marker tail preserves post-activation reader failures');
 });
 
 test('Windows quit acceptance recognizes the status-prefixed known detail', async () => {
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
-  assert.match(automation, /assertKnownStatusDetailIsRecognized\(app, pid, process\)/);
+  assert.match(automation, /assertKnownStatusDetailIsRecognized\(app, pid, ownerWindow\)/);
   assert.match(automation, /Native Goal status: active\./);
+  assert.match(automation, /mainProcessMatches: app\.isReady\(\) && process\.pid === expectedPid/);
+  assert.match(automation, /recognizing the known prompt leaves the same TUS main process running/);
+  assert.match(automation, /assert\.equal\(await app\.evaluate\(\(\{ app \}, expectedPid\) => app\.isReady\(\) && process\.pid === expectedPid, pid\), true,/);
 });
 
 
@@ -167,6 +305,9 @@ test('native prompt acceptance uses bounded exact title, text and button checks'
   const prompt = windowsUI.slice(promptStart, promptEnd);
   assert.match(windowsUI, /SMTO_ABORTIFHUNG\s*\|\s*SMTO_BLOCK,\s*1000/);
   assert.match(windowsUI, /GetWindowTitle\(dialog\) != "Codex activity may continue"/);
+  assert.match(windowsUI, /GetWindowProcessId\(dialog\) == expectedProcessId/);
+  assert.match(windowsUI, /expectedDetails/);
+  assert.match(windowsUI, /MatchesExpectedPromptDetail/);
   assert.match(windowsUI, /buttons\.Count != 2/);
   assert.match(windowsUI, /control\.Text == "Keep the game open"/);
   assert.match(windowsUI, /control\.Text == "Quit anyway"/);
@@ -194,19 +335,17 @@ test('production native quit dialog carries the exact known and unknown message 
   assert.deepEqual(calls[1].options.buttons, ['Keep the game open', 'Quit anyway']);
 });
 
-test('native prompt buttons require the exact foreground TUS dialog title', async () => {
+test('native prompt click revalidates the same foreground child', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
-  assert.match(windowsUI, /GetWindowTitle\(dialog\) != "Codex activity may continue"/);
-  assert.match(windowsUI, /buttons\.Count != 2/);
-  assert.match(windowsUI, /control\.Text == "Keep the game open"/);
-  assert.match(windowsUI, /control\.Text == "Quit anyway"/);
-  assert.match(windowsUI, /control\.Text == requestedButton/);
-  const promptStart = windowsUI.indexOf("  { $_ -eq 'keep-open' -or $_ -eq 'quit-anyway' } {");
-  const promptEnd = windowsUI.indexOf("\n  'file-menu-open' {", promptStart);
-  const prompt = windowsUI.slice(promptStart, promptEnd);
-  assert.ok(prompt.indexOf('Find-ValidatedPromptButton') >= 0 &&
-    prompt.indexOf('Find-ValidatedPromptButton') < prompt.indexOf('[TusWindowLookup]::ClickNativePromptButton'));
-  assert.doesNotMatch(windowsUI, /\.FindAll\(/);
+  const clickStart = windowsUI.indexOf('public static bool ClickNativePromptButton');
+  const clickEnd = windowsUI.indexOf('\n  }', clickStart);
+  const click = windowsUI.slice(clickStart, clickEnd);
+  assert.match(click, /GetForegroundWindow\(\) != dialog/);
+  assert.match(click, /GetWindowProcessId\(button\) != dialogProcessId/);
+  assert.match(click, /IsExpectedPromptWindow\(dialog, expectedProcessId, expectedOwner\)/);
+  assert.match(click, /IsChild\(dialog, button\)/);
+  assert.match(click, /GetWindowTitle\(dialog\) != "Codex activity may continue"/);
+  assert.match(click, /GetWindowTitle\(button\) != requestedButton/);
 });
 
 
@@ -237,16 +376,62 @@ test('safe UIA failure classification distinguishes a child that reached the win
     'production UI failures use the safe classifier');
   assert.match(mutationProbe, /\(\?:script-start\|window-api-ready\)-no-status/,
     'the mutation probe recognizes the safe no-status outcome');
-  assert.match(mutationProbe, /console\.log\('TUS_UIA_TEST: detail-probe-' \+ matcherOutcome\)/,
+  assert.match(mutationProbe, /console\.log\('TUS_QUIT_TEST: ' \+ modifiedField \+ '-probe-' \+ matcherOutcome\)/,
     'the mutation probe emits the classified outcome as test evidence');
   const { safeUiFailureOutcome } = await import('../scripts/quit-prompt-acceptance.mjs');
   assert.equal(typeof safeUiFailureOutcome, 'function', 'failure classification is available');
   assert.equal(safeUiFailureOutcome(['script-start', 'window-api-ready']) === 'window-api-ready-no-status', true);
-  assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-findfirst-0-start']) === 'prompt-reader-timeout-phase-findfirst-0-start', true);
+  for (const phase of ['first-child-start', 'child-name-start', 'next-sibling-start']) {
+    const outcome = 'prompt-reader-timeout-phase-' + phase;
+    assert.equal(safeUiFailureOutcome([outcome]), outcome);
+  }
+  assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-first-child-start', 'prompt-expected-body-timeout']),
+    'prompt-reader-timeout-phase-first-child-start', 'the reader timeout phase wins over the generic body-timeout status');
+  assert.equal(safeUiFailureOutcome(['prompt-reader-timeout-phase-first-child-start', 'prompt-expected-body-mismatch']),
+    'prompt-expected-body-mismatch', 'a definite mismatch remains stronger than an earlier reader timeout');
+  assert.equal(safeUiFailureOutcome(['prompt-expected-body-unavailable', 'modified-body-unverified']),
+    'prompt-expected-body-unavailable', 'specific body status wins over the generic unverified marker');
+  assert.equal(safeUiFailureOutcome(['window-api-ready', 'automation-error-invalidoperationexception-at-dismissing-test-prompt']),
+    'automation-error-invalidoperationexception-at-dismissing-test-prompt');
+  assert.equal(safeUiFailureOutcome(['window-api-ready', 'test-prompt-not-found']), 'test-prompt-not-found');
+  for (const status of ['owner-window-unavailable', 'window-not-found', 'window-title-mismatch', 'window-owner-mismatch', 'window-process-mismatch', 'window-ambiguous', 'foreground-activation-rejected']) {
+    assert.equal(safeUiFailureOutcome(['prompt-' + status]), 'prompt-' + status, 'the fixed prompt status is preserved');
+  }
   assert.equal(safeUiFailureOutcome(['script-start', 'window-api-ready', 'private dialog text']) === 'window-api-ready-no-status', true,
     'only allowlisted tokens can become CI evidence');
 });
 
+
+test('owner-window responsiveness probe is bounded and diagnostic-only', async () => {
+  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
+  const reader = await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8');
+  const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
+  const { safeUiDiagnosticLine, safeUiFailureOutcome } = await import('../scripts/quit-prompt-acceptance.mjs');
+  for (const status of ['responsive', 'timeout', 'unknown']) {
+    const line = 'TUS_UIA_DIAG: owner-window-wm-null=' + status;
+    assert.equal(safeUiDiagnosticLine(line), line);
+  }
+  for (const line of [
+    'TUS_UIA_DIAG: owner-window-wm-null=responsive C:\\private',
+    'TUS_UIA_DIAG: owner-window-wm-null=blocked',
+    'The Unfinished Shapes at C:\\private',
+  ]) assert.equal(safeUiDiagnosticLine(line), null);
+  assert.equal(
+    safeUiFailureOutcome(['window-api-ready', 'TUS_UIA_DIAG: owner-window-wm-null=responsive']),
+    'window-api-ready-no-status',
+    'the observer result cannot change the UI action outcome',
+  );
+  assert.match(windowsUI, /private const uint WM_NULL = 0x0000/);
+  assert.match(windowsUI, /GetWindowProcessId\(expectedOwner\) != expectedProcessId/);
+  assert.match(windowsUI, /SendMessageTimeoutCommand\(expectedOwner, WM_NULL/);
+  assert.match(windowsUI, /GetLastWin32Error\(\) == ERROR_TIMEOUT/);
+  assert.match(windowsUI, /Get-UiaPromptBodyResult \$WindowHandle[\s\S]*?-ExpectedProcessId \$ProcessId[\s\S]*?-ExpectedOwnerHandle \$OwnerWindowHandle/);
+  assert.match(reader, /if \(value == "phase-fromhandle-start"\)[\s\S]*?ThreadPool\.QueueUserWorkItem\(ProbeOwnerWindow\)/);
+  assert.match(reader, /Math\.Min\(250, remaining\)/);
+  assert.match(reader, /if \(fromHandleDone\) status = "unknown"/);
+  assert.match(reader, /TUS_UIA_DIAG: owner-window-wm-null=/);
+  assert.match(automation, /outputLines\.map\(safeUiDiagnosticLine\)/);
+});
 
 test('UIA wrapper phases are flushed and safely reach mutation evidence', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
@@ -292,7 +477,29 @@ test('UIA wrapper phases are flushed and safely reach mutation evidence', async 
     'ui-payload-preparing', 'ui-payload-ready', 'ui-payload-writing', 'ui-payload-written',
     'prompt-reader-timeout-phase-payload-decode-start', 'prompt-reader-timeout-phase-payload-json-start',
   ]) assert.ok(safeOutcomeMatcher.test(phase), phase + ' is allowlisted in mutation evidence');
-  assert.match(mutationProbe, /console\.log\('TUS_UIA_TEST: detail-probe-' \+ matcherOutcome\)/);
+  assert.match(mutationProbe, /console\.log\('TUS_QUIT_TEST: ' \+ modifiedField \+ '-probe-' \+ matcherOutcome\)/);
+  assert.match(mutationProbe, /state\.invoked = true/);
+  assert.match(mutationProbe, /state\.ownerWindowMatches/);
+  assert.match(mutationProbe, /process\.pid === expected\.pid/);
+  assert.match(mutationProbe, /window\?\.id === expected\.windowId && handleHex === expected\.handleHex/);
+  assert.match(mutationProbe, /TUS_QUIT_PROMPT: invocation=/);
+  const ownerIdentity = automation.slice(automation.indexOf('async function promptOwnerWindowIdentity'), automation.indexOf('async function assertModifiedPromptIsNotClicked'));
+  assert.match(ownerIdentity, /processId: process\.pid/);
+  assert.match(ownerIdentity, /executablePath: process\.execPath/);
+  assert.doesNotMatch(ownerIdentity, /console\.log\([^)]*(?:processId|executablePath|handleHex|windowId)/i);
+  const installerSmoke = await readFile(new URL('../scripts/windows-installer-smoke.mjs', import.meta.url), 'utf8');
+  assert.match(installerSmoke, /quitPromptAcceptance\(promptApp, page, promptGraphics, installedExe\)/);
+  assert.match(automation, /const pid = ownerWindow\.processId/);
+  assert.match(automation, /const launcherPid = launcher\.pid/);
+  assert.match(automation, /taskkill\.exe', \['\/PID', String\(launcherPid\), '\/T', '\/F'\]/);
+  const quitFlow = automation.slice(automation.indexOf('export async function quitPromptAcceptance'));
+  assert.ok(quitFlow.indexOf('try {') < quitFlow.indexOf('promptOwnerWindowIdentity(app, expectedExecutable)'),
+    'identity failures enter cleanup before native checks');
+  assert.match(automation, /promptOwnerWindowIdentity/);
+  assert.match(ownerIdentity, /const windows = BrowserWindow\.getAllWindows\(\)/);
+  assert.match(automation, /TUS_QUIT_WINDOW: app-exe=match main-process=identified owner-window=captured/);
+  assert.match(automation, /saved-game-thread-fixture/);
+  assert.doesNotMatch(mutationProbe, /console\.log\([^)]*(?:handleHex|windowId|nativeHandle)/i);
 });
 
 

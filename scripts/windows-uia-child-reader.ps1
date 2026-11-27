@@ -5,6 +5,8 @@ function Get-UiaPromptBodyResult {
     [Parameter(Mandatory=$true)][string[]]$ExpectedDetails,
     [Parameter(Mandatory=$true)][string]$GoalStatusPrefix,
     [string]$ChildScriptOverride = '',
+    [Parameter(Mandatory=$true)][int]$ExpectedProcessId,
+    [Parameter(Mandatory=$true)][string]$ExpectedOwnerHandle,
     [ValidateSet('STA','MTA')][string]$Apartment = 'MTA'
   )
   $childScript = @'
@@ -69,40 +71,48 @@ try {
     }
     return $false
   }
-  for ($index = 0; $index -lt $expected.Length; $index++) {
-    $condition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::NameProperty,
-      [string]$expected[$index])
-    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-findfirst-' + $index + '-start')
+  $elements = @()
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-first-child-start')
+  [Console]::Out.Flush()
+  $element = $walker.GetFirstChild($root)
+  [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-first-child-done')
+  [Console]::Out.Flush()
+  # shortcut: 64 direct children, raise only if packaged evidence exceeds this bound.
+  for ($childOrdinal = 0; $null -ne $element -and $childOrdinal -lt 64; $childOrdinal++) {
+    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-child-name-start')
     [Console]::Out.Flush()
-    $messageElement = $root.FindFirst(
-      [System.Windows.Automation.TreeScope]::Children,
-      $condition)
-    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-findfirst-' + $index + '-done')
-    [Console]::Out.Flush()
-    if ($null -eq $messageElement) { continue }
-    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-current-name-' + $index + '-start')
-    [Console]::Out.Flush()
-    $messageName = [string]$messageElement.GetCurrentPropertyValue(
+    $elementName = [string]$element.GetCurrentPropertyValue(
       [System.Windows.Automation.AutomationElement]::NameProperty)
-    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-current-name-' + $index + '-done')
+    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-child-name-done')
     [Console]::Out.Flush()
-    if (-not [string]::Equals($messageName, [string]$expected[$index], [StringComparison]::Ordinal)) { continue }
-    $detailElement = $messageElement
-    for ($detailIndex = 0; $detailIndex -lt 8; $detailIndex++) {
-      [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-next-sibling-' + $index + '-' + $detailIndex + '-start')
-      [Console]::Out.Flush()
-      $detailElement = $walker.GetNextSibling($detailElement)
-      [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-next-sibling-' + $index + '-' + $detailIndex + '-done')
-      [Console]::Out.Flush()
-      if ($null -eq $detailElement) { break }
-      [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-current-name-' + $index + '-' + $detailIndex + '-start')
-      [Console]::Out.Flush()
-      $detailName = [string]$detailElement.GetCurrentPropertyValue(
-        [System.Windows.Automation.AutomationElement]::NameProperty)
-      [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-current-name-' + $index + '-' + $detailIndex + '-done')
-      [Console]::Out.Flush()
-      if (Test-ExpectedPromptDetail $index $detailName) {
+    $elements += [pscustomobject]@{ Element = $element; Name = $elementName }
+    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-next-sibling-start')
+    [Console]::Out.Flush()
+    $nextElement = $walker.GetNextSibling($element)
+    [Console]::Out.WriteLine('TUS_UIA_CHILD: phase-next-sibling-done')
+    [Console]::Out.Flush()
+    if ($childOrdinal -eq 63) {
+      if ($null -ne $nextElement) {
+        [Console]::Out.WriteLine('unavailable')
+        exit 1
+      }
+      break
+    }
+    $element = $nextElement
+  }
+  for ($index = 0; $index -lt $expected.Length; $index++) {
+    $messageChildIndex = -1
+    for ($childIndex = 0; $childIndex -lt $elements.Count; $childIndex++) {
+      if ([string]::Equals([string]$elements[$childIndex].Name, [string]$expected[$index], [StringComparison]::Ordinal)) {
+        $messageChildIndex = $childIndex
+        break
+      }
+    }
+    if ($messageChildIndex -lt 0) { continue }
+    for ($detailIndex = $messageChildIndex + 1;
+         $detailIndex -lt ($messageChildIndex + 9) -and $detailIndex -lt $elements.Count;
+         $detailIndex++) {
+      if (Test-ExpectedPromptDetail $index ([string]$elements[$detailIndex].Name)) {
         [Console]::Out.WriteLine('TUS_UIA_CHILD: matched-' + $index)
         exit 0
       }
@@ -148,11 +158,27 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Threading;
+public delegate string TusExpectedWindowProbe(int expectedProcessId, string expectedOwnerHandle, uint timeoutMilliseconds);
 public sealed class TusUiaOutputCapture
 {
-    private static readonly Regex TokenMatcher = new Regex(@"^TUS_UIA_CHILD: (phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|findfirst-\d+-(?:start|done)|current-name-\d+(?:-\d+)?-(?:start|done)|next-sibling-\d+-\d+-(?:start|done))|matched-[01]|mismatch)$", RegexOptions.CultureInvariant);
+    private static readonly Regex TokenMatcher = new Regex(@"^TUS_UIA_CHILD: (phase-(?:child-start|payload-read-(?:start|done)|payload-parse-(?:start|done)|payload-decode-(?:start|done)|payload-json-(?:start|done)|addtype-(?:types|client)-(?:start|done)|fromhandle-(?:start|done)|first-child-(?:start|done)|child-name-(?:start|done)|next-sibling-(?:start|done))|matched-[01]|mismatch)$", RegexOptions.CultureInvariant);
     public readonly List<string> Tokens = new List<string>();
     private Stopwatch fromHandleWatch;
+    private readonly int expectedProcessId;
+    private readonly string expectedOwnerHandle;
+    private readonly TusExpectedWindowProbe ownerWindowProbe;
+    private readonly Stopwatch probeBudgetWatch = Stopwatch.StartNew();
+    private int ownerProbeQueued;
+    private volatile bool fromHandleObserved;
+    private volatile bool fromHandleDone;
+    private volatile bool ownerProbeComplete;
+    private volatile string ownerProbeStatus = "unknown";
+    public bool FromHandleObserved { get { return fromHandleObserved; } }
+    public string OwnerWindowProbeStatus
+    {
+        get { return ownerProbeComplete &&
+            (ownerProbeStatus == "responsive" || ownerProbeStatus == "timeout") ? ownerProbeStatus : "unknown"; }
+    }
     public long FromHandleMilliseconds
     {
         get { return fromHandleWatch == null || fromHandleWatch.IsRunning ? -1 : fromHandleWatch.ElapsedMilliseconds; }
@@ -160,9 +186,32 @@ public sealed class TusUiaOutputCapture
     public readonly ManualResetEvent OutputReadComplete = new ManualResetEvent(false);
     public readonly DataReceivedEventHandler Handler;
 
-    public TusUiaOutputCapture()
+    public TusUiaOutputCapture(int processId, string ownerWindowHandle, TusExpectedWindowProbe probe)
     {
+        expectedProcessId = processId;
+        expectedOwnerHandle = ownerWindowHandle;
+        ownerWindowProbe = probe;
         Handler = new DataReceivedEventHandler(OnOutputDataReceived);
+    }
+
+    private void ProbeOwnerWindow(object state)
+    {
+        string status = "unknown";
+        try
+        {
+            // Let the child enter FromHandle after its flushed start marker.
+            Thread.Sleep(10);
+            int remaining = 6500 - (int)probeBudgetWatch.ElapsedMilliseconds - 50;
+            if (!fromHandleDone && remaining > 0)
+            {
+                uint timeout = (uint)Math.Min(250, remaining);
+                status = ownerWindowProbe(expectedProcessId, expectedOwnerHandle, timeout);
+                if (fromHandleDone) status = "unknown";
+            }
+        }
+        catch { status = "unknown"; }
+        ownerProbeStatus = status == "responsive" || status == "timeout" ? status : "unknown";
+        ownerProbeComplete = true;
     }
 
     private void OnOutputDataReceived(object sender, DataReceivedEventArgs eventArgs)
@@ -177,14 +226,32 @@ public sealed class TusUiaOutputCapture
         {
             string value = token.Groups[1].Value;
             Tokens.Add(value);
-            if (value == "phase-fromhandle-start") fromHandleWatch = Stopwatch.StartNew();
-            else if (value == "phase-fromhandle-done" && fromHandleWatch != null) fromHandleWatch.Stop();
+            if (value == "phase-fromhandle-start")
+            {
+                fromHandleWatch = Stopwatch.StartNew();
+                fromHandleObserved = true;
+                if (Interlocked.Exchange(ref ownerProbeQueued, 1) == 0)
+                {
+                    try
+                    {
+                        if (!ThreadPool.QueueUserWorkItem(ProbeOwnerWindow)) ownerProbeComplete = true;
+                    }
+                    catch { ownerProbeComplete = true; }
+                }
+            }
+            else if (value == "phase-fromhandle-done")
+            {
+                fromHandleDone = true;
+                if (fromHandleWatch != null) fromHandleWatch.Stop();
+            }
         }
     }
 }
 '@
   }
-  $outputCapture = New-Object TusUiaOutputCapture
+  $probeMethod = [TusWindowLookup].GetMethod('ProbeExpectedOwnerWindow')
+  $ownerWindowProbe = $probeMethod.CreateDelegate([TusExpectedWindowProbe])
+  $outputCapture = New-Object -TypeName TusUiaOutputCapture -ArgumentList @($ExpectedProcessId, $ExpectedOwnerHandle, $ownerWindowProbe)
   $process.add_OutputDataReceived($outputCapture.Handler)
   $setupWatch.Stop()
   Write-UiaTimingMarker 'reader-setup' $setupWatch.ElapsedMilliseconds
@@ -382,6 +449,12 @@ public sealed class TusUiaOutputCapture
           $phaseWatch.Stop()
           Write-UiaTimingMarker 'child-finally-reap' $phaseWatch.ElapsedMilliseconds
         }
+      }
+    } catch {}
+    try {
+      if ($outputCapture.FromHandleObserved) {
+        [Console]::Out.WriteLine('TUS_UIA_DIAG: owner-window-wm-null=' + $outputCapture.OwnerWindowProbeStatus)
+        [Console]::Out.Flush()
       }
     } catch {}
     try {
