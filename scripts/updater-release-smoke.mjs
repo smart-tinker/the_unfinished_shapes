@@ -17,7 +17,7 @@ import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEve
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
 const updateHttpStatusPattern = /\bHTTP (\d{3})\b/;
-// Four 15s paired disk/memory Deflate file arms plus setup/cleanup reserve; timeout fails before production extraction can overlap.
+// Four 15s counterbalanced memory-source Deflate sink arms plus setup/cleanup reserve; production extraction remains separately bounded.
 const zipBatcherComparisonTimeoutMs = 75_000;
 assert.deepEqual(
   'Downloading release package: 1.5 / 42.0 MB.'.match(updateProgressPattern)?.slice(1),
@@ -1555,9 +1555,9 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
       const compare = globalThis.__tusUpdaterSmokeZipBatcherCompare;
       return typeof compare === 'function' ? compare(expected) : null;
     }, { tag, assetName, size: manifestFile.size, sha256: manifestFile.sha256 }),
-    'Verified ZIP disk/memory Deflate file comparison', zipBatcherComparisonTimeoutMs);
+    'Verified-memory ZIP Deflate sink comparison', zipBatcherComparisonTimeoutMs);
     zipBatcherComparison = safeZipBatcherComparison(rawComparison);
-    console.log('TUS_UPDATE_ZIP_SOURCE_COMPARISON ' + JSON.stringify(zipBatcherComparison));
+    console.log('TUS_UPDATE_ZIP_SINK_COMPARISON ' + JSON.stringify(zipBatcherComparison));
   }
   if (distribution === 'installer') {
     assert.ok(handoffProfile, 'the exact installer handoff has an isolated source profile');
@@ -1789,29 +1789,27 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     assert.equal(zipBatcherComparison.batchBytes, 256 * 1024, 'both source modes use the production ZIP batcher size');
     assert.equal(zipBatcherComparison.readHighWaterMarkBytes, 256 * 1024);
     assert.equal(zipBatcherComparison.writeHighWaterMarkBytes, 16 * 1024);
-    assert.equal(zipBatcherComparison.measurementScope, 'disk-vs-memory-file-sink');
+    assert.equal(zipBatcherComparison.measurementScope, 'verified-memory-deflate-file-vs-discard');
     const expectedArms = [
-      { trial: 1, arm: 'disk-file', sink: 'node-fs-file' },
       { trial: 1, arm: 'memory-file', sink: 'node-fs-file' },
-      { trial: 2, arm: 'disk-file', sink: 'node-fs-file' },
+      { trial: 1, arm: 'memory-discard', sink: 'count-discard' },
+      { trial: 2, arm: 'memory-discard', sink: 'count-discard' },
       { trial: 2, arm: 'memory-file', sink: 'node-fs-file' },
     ];
     assert.deepEqual(zipBatcherComparison.arms.map(({ trial, arm, sink }) => ({ trial, arm, sink })), expectedArms);
     for (const arm of zipBatcherComparison.arms) {
       assert.ok(['completed', 'time-limit'].includes(arm.outcome), 'each bounded source arm produced a measurement');
-      assert.equal(arm.batchBytes, zipBatcherComparison.batchBytes, 'both source modes use the same production batcher');
-      assert.equal(arm.cleanupStatus, 'removed', 'each temporary file sink was cleaned');
+      assert.equal(arm.batchBytes, zipBatcherComparison.batchBytes, 'both sink modes use the same production batcher');
+      assert.equal(arm.cleanupStatus, arm.sink === 'node-fs-file' ? 'removed' : 'not-created',
+        'file sink cleanup is confirmed and discard sink creates no temporary file');
       for (const key of ['wallMs', 'cpuUserMs', 'cpuSystemMs', 'sinkBytesProcessed']) {
-        assert.ok(Number.isSafeInteger(arm[key]) && arm[key] >= 0, 'each source arm reports bounded ' + key);
+        assert.ok(Number.isSafeInteger(arm[key]) && arm[key] >= 0, 'each sink arm reports bounded ' + key);
       }
       assert.ok(Number.isSafeInteger(arm.decodedBytes) && arm.decodedBytes >= 0, 'each source arm reports decoded-byte progress');
-      if (arm.arm === 'memory-file') {
-        assert.equal(arm.compressedBytesRead, null, 'yauzl buffer-reader position is not a consumed-byte counter');
-      } else {
-        assert.ok(Number.isSafeInteger(arm.compressedBytesRead) && arm.compressedBytesRead >= 0, 'disk source reports bounded bytes read');
-      }
+      assert.equal(arm.compressedBytesRead, null, 'all arms use the same verified in-memory ZIP buffer');
+      assert.equal(arm.countersMatch, arm.decodedBytes === arm.sinkBytesProcessed);
       if (arm.outcome === 'completed') {
-        assert.equal(arm.compressedBytesRead, arm.arm === 'memory-file' ? null : zipBatcherComparison.entryCompressedSize);
+        assert.equal(arm.compressedBytesRead, null);
         assert.equal(arm.decodedBytes, zipBatcherComparison.entryUncompressedSize);
         assert.equal(arm.sinkBytesProcessed, zipBatcherComparison.entryUncompressedSize);
         assert.equal(arm.countersMatch, true);
