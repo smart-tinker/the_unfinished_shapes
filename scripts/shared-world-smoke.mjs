@@ -48,6 +48,14 @@ async function worldCommand(id, command) {
 }
 const jumpTraceResults = new Set(['accepted', 'stale', 'rejected', 'request-failed']);
 const traceNumber = value => Number.isFinite(value) ? value : null;
+const hasCompleteMoveResponse = response => Number.isSafeInteger(response?.serverRevision) &&
+  ['x', 'y', 'z'].every(axis => Number.isFinite(response.serverPosition?.[axis])) && typeof response.clientApplied === 'boolean';
+const qualifyingStatus = (evidence, complete) => evidence.length ? 'observed' : complete ? 'not_observed' : 'UNKNOWN';
+assert.equal(hasCompleteMoveResponse({ serverRevision: 1, serverPosition: { x: 0, y: 0, z: 0 }, clientApplied: true }), true);
+assert.equal(hasCompleteMoveResponse({ serverRevision: 1, serverPosition: { x: 0, y: 0, z: null }, clientApplied: true }), false);
+assert.equal(qualifyingStatus([], true), 'not_observed');
+assert.equal(qualifyingStatus([], false), 'UNKNOWN');
+assert.equal(qualifyingStatus([{ revision: 1 }], false), 'observed');
 const tracePosition = value => ({ x: traceNumber(value?.x), y: traceNumber(value?.y), z: traceNumber(value?.z) });
 async function jumpTraceState(id) {
   const response = await fetch(url + '/state', { headers: { Authorization: 'Bearer ' + tokens[id] }, signal: AbortSignal.timeout(1000) });
@@ -89,9 +97,14 @@ async function installJumpTrace(client) {
         record('move.skip', { reason, hud: hud() });
       }
       if (name === 'move.result') {
-        const outcome = results.has(value) ? value : null;
+        const response = value && typeof value === 'object' ? value : {};
+        const rawOutcome = typeof value === 'string' ? value : response.outcome;
+        const outcome = results.has(rawOutcome) ? rawOutcome : null;
+        const serverPosition = tracePosition(response.position);
+        const serverRevision = Number.isSafeInteger(response.revision) ? response.revision : null;
+        const clientApplied = typeof response.clientApplied === 'boolean' ? response.clientApplied : null;
         if (trace.spaceKeydown && trace.firstMoveResult === null && outcome) trace.firstMoveResult = outcome;
-        record('move.response', { outcome, hud: hud() });
+        record('move.response', { outcome, serverPosition, serverRevision, clientApplied, hud: hud() });
       }
       if (name === 'move.jump-response') {
         const position = value?.serverPosition, response = {
@@ -169,7 +182,7 @@ async function reportJumpTrace(client, trace, gateResult, gateAt, initialSnapsho
   const movementResponsesComplete = raw.droppedEvents === 0 && !badOrder && pending === 0 && requests.length === responses.length && jumpResponsesComplete &&
     responses.every(event => jumpTraceResults.has(event.outcome) && event.outcome !== 'request-failed');
   // Polling can miss intermediate revisions; only a state-bearing result per POST proves a negative.
-  const movementStateResponsesComplete = responses.every(event => Number.isSafeInteger(event.serverRevision) && Object.values(event.serverPosition ?? {}).every(Number.isFinite));
+  const movementStateResponsesComplete = responses.length > 0 && responses.every(hasCompleteMoveResponse);
   const times = observations.map(item => item.at - startAt), maxGapMs = times.slice(1).reduce((max, at, index) => Math.max(max, at - times[index]), 0);
   const samplesComplete = trace.droppedObservations === 0 && observations.length > 0 && times[0] <= 200 &&
     times.at(-1) >= durationMs - 300 && maxGapMs <= 200 &&
@@ -182,8 +195,9 @@ async function reportJumpTrace(client, trace, gateResult, gateAt, initialSnapsho
   const serverStates = [
     initialState,
     ...observations.filter(item => item.state.valid).map(item => ({ revision: item.state.revision, position: item.state.position })),
+    ...events.filter(event => event.type === 'move.response' && hasCompleteMoveResponse(event)).map(event => ({ revision: event.serverRevision, position: event.serverPosition })),
     ...jumpStates.map(event => ({ revision: event.serverRevision, position: event.serverPosition })),
-  ].filter(state => Number.isSafeInteger(state.revision) && Object.values(state.position).every(Number.isFinite));
+  ].filter(state => Number.isSafeInteger(state.revision) && ['x', 'y', 'z'].every(axis => Number.isFinite(state.position?.[axis])));
   const matchesHudState = hud => Number.isSafeInteger(hud?.uiRevision) && ['x', 'y', 'z'].every(axis => Number.isFinite(hud[axis])) &&
     serverStates.some(state => state.revision === hud.uiRevision && ['x', 'y', 'z'].every(axis => Number(state.position[axis].toFixed(1)) === hud[axis]));
   const linkedHudSamples = observations.filter(item => matchesHudState(item.hud)).length;
@@ -191,11 +205,12 @@ async function reportJumpTrace(client, trace, gateResult, gateAt, initialSnapsho
   const hudRevisionStatus = observations.length && linkedHudSamples === observations.length && hudGateStateLinked ? 'linked' : 'UNKNOWN';
   const qualifying = [
     ...observations.filter(item => item.state.valid && item.state.position.x >= 15 && item.state.position.x < 17 && item.state.position.y > 0).map(item => ({ revision: item.state.revision, source: 'sample', atMs: item.state.at - startAt })),
+    ...events.filter(event => event.type === 'move.response' && hasCompleteMoveResponse(event) && event.serverPosition.x >= 15 && event.serverPosition.x < 17 && event.serverPosition.y > 0).map(event => ({ revision: event.serverRevision, source: 'move-response', atMs: event.at - startAt })),
     ...jumpStates.filter(event => event.serverPosition.x >= 15 && event.serverPosition.x < 17 && event.serverPosition.y > 0).map(event => ({ revision: event.serverRevision, source: 'jump-response', atMs: event.at - startAt })),
   ];
   const fullWindow = gateResult === 'timeout' && durationMs >= 5000;
   const serverCoverageComplete = fullWindow && movementResponsesComplete && movementStateResponsesComplete && samplesComplete && hudRevisionStatus === 'linked' && trace.stateErrors === 0;
-  const qualifyingRevision = { status: qualifying.length ? 'observed' : serverCoverageComplete ? 'not_observed' : 'UNKNOWN',
+  const qualifyingRevision = { status: qualifyingStatus(qualifying, serverCoverageComplete),
     revisions: [...new Set(qualifying.map(item => item.revision))], evidence: qualifying };
   assert.ok(qualifyingRevision.status !== 'not_observed' || serverCoverageComplete, 'A negative revision result requires complete trace coverage.');
   const finalState = await jumpTraceState(client.id).catch(() => null);

@@ -906,15 +906,22 @@ async function syncPosition() {
       if (jump) jumpRequested = false;
       lastPosition = positionKey(result.position ?? position);
       responseOutcome = 'accepted';
-      traceSmokeJump('move.result', 'accepted');
     } else if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && movementVersion === localMovementVersion) {
       lastPosition = positionKey(playerPosition);
       responseOutcome = 'stale';
-      traceSmokeJump('move.result', 'stale');
     } else {
       responseOutcome = result.error ? 'rejected' : 'stale';
-      traceSmokeJump('move.result', responseOutcome);
     }
+    traceSmokeJump('move.result', {
+      outcome: responseOutcome,
+      revision: Number.isSafeInteger(result.revision) ? result.revision : null,
+      position: {
+        x: Number.isFinite(result.position?.x) ? result.position.x : null,
+        y: Number.isFinite(result.position?.y) ? result.position.y : null,
+        z: Number.isFinite(result.position?.z) ? result.position.z : null,
+      },
+      clientApplied,
+    });
     if (jump) traceSmokeJump('move.jump-response', {
       postAttempted: true, responseReceived: true, outcome: responseOutcome, serverPosition: result.position,
       serverVelocityY: result.velocityY, serverRevision: result.revision, clientApplied,
