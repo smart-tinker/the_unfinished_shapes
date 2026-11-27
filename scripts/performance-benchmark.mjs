@@ -46,25 +46,46 @@ function seedWorld(objectCount, clientCount) {
   return {version:1,revision:0,lighting:{version:0,ambientIntensity:2.6,sunIntensity:3.1},objects:[...lamps,...blocks],players};
 }
 function sleep(ms) { return new Promise(resolve=>setTimeout(resolve,ms)); }
-async function measureFrames(page,durationMs) {
-  const values=await page.evaluate(duration=>new Promise(resolve=>{
-    const samples=[];let previous=null,done=false;
-    const finish=()=>{if(done)return;done=true;clearTimeout(safety);resolve(samples);};
-    const safety=setTimeout(finish,duration+2500),started=performance.now();
+async function measureFrames(page,durationMs,context) {
+  const nodeStarted=performance.now();
+  const result=await page.evaluate(duration=>new Promise(resolve=>{
+    const samples=[];let previous=null,done=false,firstCallbackOffsetMs=null,safety;
+    const pageState=()=>({
+      hidden:document.hidden,
+      visibilityState:document.visibilityState,
+      focused:document.hasFocus(),
+      readyState:document.readyState,
+      canvasPresent:Boolean(document.querySelector('#viewport canvas')),
+      contextLost:typeof window.__smokeContextLost==='boolean'?window.__smokeContextLost:null,
+    });
+    const startState=pageState(),started=performance.now();
+    const finish=reason=>{
+      if(done)return;
+      done=true;
+      clearTimeout(safety);
+      const endState=pageState(),pageElapsedMs=performance.now()-started;
+      resolve({samples,diagnostic:{
+        rafCallbacks:samples.length+Number(previous!==null),
+        callbackOffsetsMs:firstCallbackOffsetMs===null?[]:[firstCallbackOffsetMs],
+        finishReason:reason,pageElapsedMs,pageState:{start:startState,end:endState},
+      }});
+    };
+    safety=setTimeout(()=>finish('safety-timeout'),duration+2500);
     const frame=now=>{
       if(done)return;
-      if(previous!==null)samples.push(now-previous);
+      if(previous!==null)samples.push(now-previous);else firstCallbackOffsetMs=now-started;
       previous=now;
-      if(now-started>=duration)finish();else requestAnimationFrame(frame);
+      if(now-started>=duration)finish('duration-reached');else requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
   }),durationMs);
-  if (!values.length) {
-    const state = await page.evaluate(() => ({ hidden: document.hidden, visibilityState: document.visibilityState, focused: document.hasFocus(), readyState: document.readyState })).catch(error => ({ error: error.message }));
-    assert.fail('the packaged renderer produced no animation-frame samples; page=' + JSON.stringify(state));
+  const nodeWaitMs=performance.now()-nodeStarted;
+  if (!result.samples.length) {
+    console.log('TUS_BENCHMARK_EMPTY_FRAME_WINDOW '+JSON.stringify({...context,durationMs,...result.diagnostic,nodeWaitMs}));
+    assert.fail('the packaged renderer produced no animation-frame samples; page='+JSON.stringify(result.diagnostic.pageState.end));
   }
-  assert.ok(values.every(value=>Number.isFinite(value)&&value>0),'renderer frame samples must be finite and positive');
-  return values;
+  assert.ok(result.samples.every(value=>Number.isFinite(value)&&value>0),'renderer frame samples must be finite and positive');
+  return result.samples;
 }
 async function waitForRevision(page,revision) {
   await page.waitForFunction(target=>{
@@ -146,7 +167,7 @@ async function runScenario(root,scenario) {
       return {renderer:extension?context.getParameter(extension.UNMASKED_RENDERER_WEBGL):context.getParameter(context.RENDERER),vendor:extension?context.getParameter(extension.UNMASKED_VENDOR_WEBGL):context.getParameter(context.VENDOR),width:canvas.width,height:canvas.height,dpr:devicePixelRatio};
     });
     assert.ok(gl,'benchmark requires the packaged WebGL scene');
-    const idleFrames=await measureFrames(alice.page,3000);
+    const idleFrames=await measureFrames(alice.page,3000,{objects:scenario.objects,clients:scenario.clients,measuredClient:'alice',phase:'idle'});
     const beforePoll=saves.length,polls=[];
     for(let i=0;i<20;i++)polls.push(...await Promise.all(clients.map(client=>getState(ctx,client.id))));
     assert.equal(saves.length,beforePoll,'GET /state must not persist changes');
@@ -154,7 +175,7 @@ async function runScenario(root,scenario) {
     saves.length=0;
     const updateRtt=[],updateFrames=[];
     for(let i=0;i<8;i++){
-      const framePromise=measureFrames(alice.page,1200);
+      const framePromise=measureFrames(alice.page,1200,{objects:scenario.objects,clients:scenario.clients,measuredClient:'alice',phase:'update',iteration:i+1});
       const command=await postCommand(ctx,'alice',{type:'update',id:'object-0',color:i%2?'#c8a570':'#aabbcc'});
       await Promise.all(clients.map(client=>waitForRevision(client.page,command.revision)));
       updateRtt.push(command.elapsedMs);updateFrames.push(...await framePromise);
@@ -163,7 +184,7 @@ async function runScenario(root,scenario) {
     assert.equal(updateSaves.length,8,'each one-object update must be saved exactly once');
     assert.ok(updateSaves.every(sample=>sample.commandType==='update'&&sample.objects===scenario.objects&&sample.bytes>0));
     saves.length=0;
-    const movementRtt=[],movementFramesPromise=measureFrames(alice.page,3000);
+    const movementRtt=[],movementFramesPromise=measureFrames(alice.page,3000,{objects:scenario.objects,clients:scenario.clients,measuredClient:'alice',phase:'movement'});
     let latestRevision=0;
     for(let i=1;i<=20;i++){
       const command=await postCommand(ctx,'alice',{type:'move',position:{x:-22+i*.2,y:0,z:-22}});
