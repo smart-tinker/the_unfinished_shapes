@@ -1329,7 +1329,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
   await current.page.waitForFunction(() => !document.querySelector('#updates-notice')?.hidden, null, { timeout: 30000 });
   const startupNotice = await current.page.locator('#updates-notice').getAttribute('title');
-  const startupErrorCode = await current.page.locator('#updates-notice').getAttribute('data-error-code');
+  const startupErrorCode = (await current.page.locator('#updates-notice').getAttribute('data-error-code')) || null;
   if (startupErrorCode) {
     const allowedStartupErrorCodes = new Set(['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed']);
     const errorCode = allowedStartupErrorCodes.has(startupErrorCode) ? startupErrorCode : 'check_failed';
