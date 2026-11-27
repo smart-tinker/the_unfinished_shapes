@@ -149,23 +149,34 @@ test('bounded UIA child overflow is unavailable, not a definite mismatch', async
 });
 
 
-test('Windows UIA child scan treats a 65th sibling as unavailable', { skip: process.platform !== 'win32' }, async () => {
+test('Windows UIA child scan rejects an expected message and detail beyond child 64 as unavailable', { skip: process.platform !== 'win32' }, async () => {
   const source = (await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8'))
     .replace(/\r\n/g, '\n');
   const childStart = source.indexOf("$childScript = @'\n");
   const childEnd = source.indexOf("\n'@", childStart);
   assert.ok(childStart >= 0 && childEnd > childStart, 'the production child script is present');
   const childScript = source.slice(childStart + "$childScript = @'\n".length, childEnd);
-  const scanStart = childScript.indexOf('$elements = @()');
-  const scanEnd = childScript.indexOf('  for ($index = 0; $index -lt $expected.Length;', scanStart);
-  const productionScan = childScript.slice(scanStart, scanEnd);
-  assert.ok(scanStart >= 0 && scanEnd > scanStart, 'the production child scan is present');
+  const scanStart = childScript.indexOf('$expected = @($payload.expectedMessages)');
+  const scanEnd = childScript.indexOf('\n} catch {', scanStart);
+  assert.ok(scanStart >= 0 && scanEnd > scanStart, 'the production scan and matcher are present');
+  const productionWalker = '$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker';
+  const productionScanAndMatch = childScript.slice(scanStart, scanEnd);
+  assert.ok(productionScanAndMatch.includes(productionWalker), 'the production UIA walker is identified');
+  const scanAndMatch = productionScanAndMatch.replace(productionWalker, '');
 
   const powershell = [
     'Add-Type -AssemblyName UIAutomationTypes',
+    '$payload = [pscustomobject]@{',
+    '  expectedMessages = @("Codex may still be working in this conversation.", "The current Codex activity is unknown.")',
+    '  expectedDetails = @("Quitting TUS closes its Codex connection but does not confirm that a Goal or turn stopped. Keep the game open to pause or clear the Goal, or quit anyway.", "Codex state could not be confirmed. Keep the game open and reconnect to check the conversation, or quit anyway.")',
+    '  goalStatusPrefix = "Native Goal status: "',
+    '}',
     '$nodes = @()',
-    'for ($index = 0; $index -lt 65; $index++) {',
-    "  $node = [pscustomobject]@{ Name = 'child-' + $index }",
+    'for ($index = 0; $index -lt 66; $index++) {',
+    '  $name = "child-" + ($index + 1)',
+    '  if ($index -eq 64) { $name = $payload.expectedMessages[0] }',
+    '  if ($index -eq 65) { $name = $payload.goalStatusPrefix + "active. " + $payload.expectedDetails[0] }',
+    '  $node = [pscustomobject]@{ Name = $name }',
     '  $node | Add-Member -MemberType ScriptMethod -Name GetCurrentPropertyValue -Value { param($property) return $this.Name }',
     '  $nodes += $node',
     '}',
@@ -173,7 +184,7 @@ test('Windows UIA child scan treats a 65th sibling as unavailable', { skip: proc
     '$walker | Add-Member -MemberType ScriptMethod -Name GetFirstChild -Value { param($root) return $this.Nodes[0] }',
     '$walker | Add-Member -MemberType ScriptMethod -Name GetNextSibling -Value { param($current) $index = [array]::IndexOf($this.Nodes, $current); if ($index + 1 -lt $this.Nodes.Count) { return $this.Nodes[$index + 1] }; return $null }',
     '$root = [pscustomobject]@{}',
-    productionScan,
+    scanAndMatch,
   ].join('\n');
   const encodedCommand = Buffer.from(powershell, 'utf16le').toString('base64');
   let exitCode = 0;
@@ -187,11 +198,12 @@ test('Windows UIA child scan treats a 65th sibling as unavailable', { skip: proc
     stdout = String(error?.stdout ?? '');
   }
   const output = stdout.split(/\r?\n/);
-  assert.equal(exitCode, 1, 'overflow exits through the unavailable path');
-  assert.ok(output.includes('unavailable'), 'the 65th sibling emits unavailable');
-  assert.ok(!output.includes('TUS_UIA_CHILD: mismatch'), 'overflow is never reported as a complete mismatch');
+  assert.equal(exitCode, 1, 'the overflow path exits unavailable');
+  assert.ok(output.includes('unavailable'), 'a sibling beyond child 64 emits unavailable');
+  assert.ok(!output.includes('TUS_UIA_CHILD: mismatch'), 'truncated scan is never reported as a definite mismatch');
+  assert.ok(!output.some(line => /^TUS_UIA_CHILD: matched-[01]$/.test(line)),
+    'the beyond-bound prompt is not accepted by a truncated scan');
 });
-
 
 test('native quit prompt body uses exact message text and bounded STA UI Automation', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
