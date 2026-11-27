@@ -27,6 +27,8 @@ public static class TusWindowLookup {
   public static string LastWindowLookupStatus = "not-checked";
   public static List<string> LastPromptEvidence = new List<string>();
   public static string LastPromptEvidenceText = "";
+  private const uint WM_NULL = 0x0000;
+  private const int ERROR_TIMEOUT = 1460;
   private const uint WM_GETTEXT = 0x000D;
   private const uint BM_CLICK = 0x00F5;
   private const uint SMTO_ABORTIFHUNG = 0x0002;
@@ -72,8 +74,18 @@ public static class TusWindowLookup {
   private static extern int GetClassName(IntPtr window, StringBuilder className, int maximumLength);
   [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode)]
   private static extern IntPtr SendMessageTimeoutText(IntPtr window, uint message, IntPtr wParam, StringBuilder lParam, uint flags, uint timeout, out IntPtr result);
-  [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode)]
+  [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern IntPtr SendMessageTimeoutCommand(IntPtr window, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+  public static string ProbeExpectedOwnerWindow(int expectedProcessId, string expectedOwnerHandle, uint timeoutMilliseconds) {
+    IntPtr expectedOwner = ParseWindowHandle(expectedOwnerHandle);
+    if (timeoutMilliseconds == 0 || expectedProcessId <= 0 || expectedOwner == IntPtr.Zero ||
+        GetWindowProcessId(expectedOwner) != expectedProcessId) return "unknown";
+    IntPtr ignored;
+    IntPtr sent = SendMessageTimeoutCommand(expectedOwner, WM_NULL, IntPtr.Zero, IntPtr.Zero,
+      SMTO_ABORTIFHUNG | SMTO_BLOCK, timeoutMilliseconds, out ignored);
+    if (sent != IntPtr.Zero) return "responsive";
+    return Marshal.GetLastWin32Error() == ERROR_TIMEOUT ? "timeout" : "unknown";
+  }
   public static string GetWindowTitle(IntPtr window) {
     var text = new StringBuilder(256);
     IntPtr ignored;
@@ -362,7 +374,7 @@ function Find-ValidatedPromptButton {
   $cacheKey = $WindowHandle.ToInt64().ToString()
   if (-not $script:uiaPromptResults.ContainsKey($cacheKey)) {
     $script:uiPhase = 'checking-accessible-prompt-body'
-    $script:uiaPromptResults[$cacheKey] = Get-UiaPromptBodyResult $WindowHandle $ExpectedMessages $ExpectedDetails $GoalStatusPrefix -Apartment $script:uiaApartment
+    $script:uiaPromptResults[$cacheKey] = Get-UiaPromptBodyResult $WindowHandle $ExpectedMessages $ExpectedDetails $GoalStatusPrefix -ExpectedProcessId $ProcessId -ExpectedOwnerHandle $OwnerWindowHandle -Apartment $script:uiaApartment
   }
   $uiaResult = [string]$script:uiaPromptResults[$cacheKey]
   if ($uiaResult -match '^timeout-(phase-[a-z0-9-]+|no-phase)$') {

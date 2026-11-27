@@ -402,6 +402,37 @@ test('safe UIA failure classification distinguishes a child that reached the win
 });
 
 
+test('owner-window responsiveness probe is bounded and diagnostic-only', async () => {
+  const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
+  const reader = await readFile(new URL('../scripts/windows-uia-child-reader.ps1', import.meta.url), 'utf8');
+  const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');
+  const { safeUiDiagnosticLine, safeUiFailureOutcome } = await import('../scripts/quit-prompt-acceptance.mjs');
+  for (const status of ['responsive', 'timeout', 'unknown']) {
+    const line = 'TUS_UIA_DIAG: owner-window-wm-null=' + status;
+    assert.equal(safeUiDiagnosticLine(line), line);
+  }
+  for (const line of [
+    'TUS_UIA_DIAG: owner-window-wm-null=responsive C:\\private',
+    'TUS_UIA_DIAG: owner-window-wm-null=blocked',
+    'The Unfinished Shapes at C:\\private',
+  ]) assert.equal(safeUiDiagnosticLine(line), null);
+  assert.equal(
+    safeUiFailureOutcome(['window-api-ready', 'TUS_UIA_DIAG: owner-window-wm-null=responsive']),
+    'window-api-ready-no-status',
+    'the observer result cannot change the UI action outcome',
+  );
+  assert.match(windowsUI, /private const uint WM_NULL = 0x0000/);
+  assert.match(windowsUI, /GetWindowProcessId\(expectedOwner\) != expectedProcessId/);
+  assert.match(windowsUI, /SendMessageTimeoutCommand\(expectedOwner, WM_NULL/);
+  assert.match(windowsUI, /GetLastWin32Error\(\) == ERROR_TIMEOUT/);
+  assert.match(windowsUI, /Get-UiaPromptBodyResult \$WindowHandle[\s\S]*?-ExpectedProcessId \$ProcessId[\s\S]*?-ExpectedOwnerHandle \$OwnerWindowHandle/);
+  assert.match(reader, /if \(value == "phase-fromhandle-start"\)[\s\S]*?ThreadPool\.QueueUserWorkItem\(ProbeOwnerWindow\)/);
+  assert.match(reader, /Math\.Min\(250, remaining\)/);
+  assert.match(reader, /if \(fromHandleDone\) status = "unknown"/);
+  assert.match(reader, /TUS_UIA_DIAG: owner-window-wm-null=/);
+  assert.match(automation, /outputLines\.map\(safeUiDiagnosticLine\)/);
+});
+
 test('UIA wrapper phases are flushed and safely reach mutation evidence', async () => {
   const windowsUI = await readFile(new URL('../scripts/windows-quit-prompt.ps1', import.meta.url), 'utf8');
   const automation = await readFile(new URL('../scripts/quit-prompt-acceptance.mjs', import.meta.url), 'utf8');

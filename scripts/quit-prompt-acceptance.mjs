@@ -35,6 +35,11 @@ export function safeUiTimingLine(line) {
   return typeof line === 'string' && safeUiTimingPattern.test(line) ? line : null;
 }
 
+const safeUiDiagnosticPattern = /^TUS_UIA_DIAG: owner-window-wm-null=(?:responsive|timeout|unknown)$/;
+export function safeUiDiagnosticLine(line) {
+  return typeof line === 'string' && safeUiDiagnosticPattern.test(line) ? line : null;
+}
+
 export function safeUiFailureOutcome(tokens = [], processFailure = 'probe-failed') {
   if (Array.isArray(tokens) && tokens.includes('prompt-expected-body-timeout')) {
     for (let index = tokens.length - 1; index >= 0; index--) {
@@ -76,7 +81,9 @@ async function ui(action, pid, menuKey, apartment = 'MTA', ownerWindowHandle) {
     const outputLines = output.split(/\r?\n/).map(line => line.trim());
     const markers = outputLines.filter(line => /^TUS_UIA: [a-z0-9-]+$/i.test(line));
     const timingLines = outputLines.map(safeUiTimingLine).filter(Boolean);
+    const diagnosticLines = outputLines.map(safeUiDiagnosticLine).filter(Boolean);
     if (timingLines.length) console.log([...new Set(timingLines)].join('\n'));
+    if (diagnosticLines.length) console.log([...new Set(diagnosticLines)].join('\n'));
     const processFailure = error.killed
       ? 'timeout-' + String(error.signal ?? 'unknown').toLowerCase().replace(/[^a-z0-9-]/g, '')
       : 'exit-' + (String(error.code ?? 'unknown').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'unknown');
