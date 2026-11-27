@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import * as diagnostics from '../scripts/updater-smoke-diagnostics.mjs';
 import { Readable, Writable } from 'node:stream';
@@ -44,86 +45,98 @@ test('ZIP pipeline diagnostic uses each requested batch size without changing by
     assert.equal(chunks.reduce((total, chunk) => total + chunk.length, 0), expected.length);
     assert.deepEqual(Buffer.concat(chunks), expected);
   }
+
+  let discardedBytes = 0;
+  const discardedHash = createHash('sha256');
+  const discardSink = new Writable({
+    highWaterMark: 16 * 1024,
+    write(chunk, _encoding, callback) {
+      discardedBytes += chunk.length;
+      discardedHash.update(chunk);
+      callback();
+    },
+  });
+  await diagnostics.runZipSinkPipeline(Readable.from(input), discardSink, 256 * 1024);
+  assert.equal(discardedBytes, expected.length);
+  assert.equal(discardedHash.digest('hex'), createHash('sha256').update(expected).digest('hex'));
+  assert.equal(discardSink.writableFinished, true);
 });
 
-test('ZIP comparison exposes raw, batched and direct Deflate measurements', () => {
+test('ZIP comparison exposes counterbalanced verified-memory Deflate file/discard measurements', () => {
   const plan = [
-    { trial: 1, arm: 'raw-read', sink: 'count-discard' },
-    { trial: 1, arm: 'deflate-discard', sink: 'count-discard' },
-    { trial: 1, arm: 'deflate-file', sink: 'node-fs-file' },
-    { trial: 2, arm: 'deflate-direct', sink: 'count-discard' },
+    { trial: 1, arm: 'memory-file', sink: 'node-fs-file' },
+    { trial: 1, arm: 'memory-discard', sink: 'count-discard' },
+    { trial: 2, arm: 'memory-discard', sink: 'count-discard' },
+    { trial: 2, arm: 'memory-file', sink: 'node-fs-file' },
   ];
   const arms = plan.map(({ trial, arm, sink }) => ({
-    trial,
-    arm,
-    sink,
-    batchBytes: ['deflate-discard', 'deflate-file'].includes(arm) ? 256 * 1024 : null,
-    outcome: 'completed',
-    wallMs: 10_000,
-    cpuUserMs: 100,
-    cpuSystemMs: 20,
-    compressedBytesRead: 111_522_616,
-    decodedBytes: arm === 'raw-read' ? null : 249_832_448,
-    sinkBytesProcessed: arm === 'raw-read' ? 111_522_616 : 249_832_448,
-    sinkWritableLength: 0,
-    sinkNeedDrain: false,
-    writeCallbackWaitMs: sink === 'node-fs-file' ? 900 : 0,
-    sourceReadableEnded: true,
-    sinkWritableFinished: true,
-    sinkClosed: true,
+    trial, arm, sink, batchBytes: 256 * 1024, outcome: 'completed',
+    wallMs: 10_000, cpuUserMs: 100, cpuSystemMs: 20, compressedBytesRead: null,
+    decodedBytes: 249_832_448, sinkBytesProcessed: 249_832_448,
+    sinkWritableLength: 0, sinkNeedDrain: false, writeCallbackWaitMs: 900,
+    sourceReadableEnded: true, sinkWritableFinished: true, sinkClosed: true,
     cleanupStatus: sink === 'node-fs-file' ? 'removed' : 'not-created',
-    privatePath: 'C:/private/archive.zip',
-    privateError: 'private filesystem error',
+    privatePath: 'C:/private/archive.zip', privateError: 'private filesystem error',
   }));
   const comparison = diagnostics.safeZipBatcherComparison({
-    assetMatches: true,
-    entrySequence: 12,
-    compression: 'deflate',
-    entryCompressedSize: 111_522_616,
-    entryUncompressedSize: 249_832_448,
-    entryNonAsar: true,
-    entryMatches: true,
-    batchBytes: 256 * 1024,
-    readHighWaterMarkBytes: 256 * 1024,
-    writeHighWaterMarkBytes: 16 * 1024,
-    arms,
+    assetMatches: true, memorySourceVerified: true,
+    entrySequence: 12, compression: 'deflate', entryCompressedSize: 111_522_616,
+    entryUncompressedSize: 249_832_448, entryNonAsar: true, entryMatches: true,
+    batchBytes: 256 * 1024, readHighWaterMarkBytes: 256 * 1024,
+    writeHighWaterMarkBytes: 16 * 1024, arms,
     privatePath: 'C:/private/archive.zip',
   });
 
+  const [invalid] = diagnostics.safeZipBatcherComparison({
+    arms: [{
+      trial: 1, arm: 'C:/private/invalid-arm', sink: 'C:/private/sink',
+      batchBytes: 256 * 1024, privatePath: 'C:/private/path', privateError: 'private error',
+    }],
+  }).arms;
+  const [bounded] = diagnostics.safeZipBatcherComparison({
+    arms: [{
+      trial: 1, arm: 'memory-discard', sink: 'count-discard',
+      batchBytes: 256 * 1024, wallMs: 60_001, cpuUserMs: Number.MAX_SAFE_INTEGER,
+      cpuSystemMs: 'private', decodedBytes: 1_073_741_825,
+      sinkBytesProcessed: 1_073_741_825, sinkWritableLength: Number.MAX_SAFE_INTEGER,
+      sinkNeedDrain: 'private', writeCallbackWaitMs: 120_001,
+      cleanupStatus: 'private', sourcePath: 'C:/private/archive/entry.bin', error: 'private error',
+    }],
+  }).arms;
+  const serialized = JSON.stringify(comparison) + JSON.stringify([invalid, bounded]);
+  for (const privateValue of [
+    'C:/private/archive.zip', 'C:/private/archive/entry.bin', 'C:/private/path',
+    'C:/private/invalid-arm', 'C:/private/sink', 'private filesystem error', 'private error',
+  ]) assert.equal(serialized.includes(privateValue), false);
+
+  assert.equal(invalid.arm, 'unknown');
+  assert.equal(invalid.sink, 'unknown');
+  assert.equal(invalid.batchBytes, null);
+  assert.equal(bounded.arm, 'memory-discard');
+  assert.equal(bounded.sink, 'count-discard');
+  assert.equal(bounded.batchBytes, 256 * 1024);
+  assert.deepEqual({
+    wallMs: bounded.wallMs, cpuUserMs: bounded.cpuUserMs, cpuSystemMs: bounded.cpuSystemMs,
+    decodedBytes: bounded.decodedBytes, sinkBytesProcessed: bounded.sinkBytesProcessed,
+    sinkWritableLength: bounded.sinkWritableLength, sinkNeedDrain: bounded.sinkNeedDrain,
+    writeCallbackWaitMs: bounded.writeCallbackWaitMs, cleanupStatus: bounded.cleanupStatus,
+    countersMatch: bounded.countersMatch,
+  }, {
+    wallMs: null, cpuUserMs: null, cpuSystemMs: null, decodedBytes: null,
+    sinkBytesProcessed: null, sinkWritableLength: null, sinkNeedDrain: null,
+    writeCallbackWaitMs: null, cleanupStatus: 'unknown', countersMatch: null,
+  });
   assert.equal(comparison.assetMatches, true);
+  assert.equal(comparison.memorySourceVerified, true);
   assert.equal(comparison.entryMatches, true);
   assert.equal(comparison.batchBytes, 256 * 1024);
   assert.deepEqual(comparison.armOrder, plan.map(({ arm }) => arm));
   assert.deepEqual(comparison.sinkOrder, plan.map(({ sink }) => sink));
-  assert.deepEqual(comparison.arms.map(({ trial, arm, sink, batchBytes, countersMatch }) => ({ trial, arm, sink, batchBytes, countersMatch })), [
-    { ...plan[0], batchBytes: null, countersMatch: null },
-    { ...plan[1], batchBytes: 256 * 1024, countersMatch: true },
-    { ...plan[2], batchBytes: 256 * 1024, countersMatch: true },
-    { ...plan[3], batchBytes: null, countersMatch: true },
-  ]);
-  assert.equal(comparison.arms[0].sinkBytesProcessed, 111_522_616);
-  assert.equal(comparison.arms[2].cleanupStatus, 'removed');
-  assert.equal(comparison.arms[0].cleanupStatus, 'not-created');
-  assert.equal(comparison.cacheCaveat, 'post-digest; filesystem-read-cache-not-reset');
-  assert.equal(comparison.measurementScope, 'raw-reader-and-deflate-pipeline');
-  assert.deepEqual(comparison.arms.map(({ sinkWritableLength, sinkNeedDrain, writeCallbackWaitMs }) => [
-    sinkWritableLength, sinkNeedDrain, writeCallbackWaitMs,
-  ]), [[0, false, 0], [0, false, 0], [0, false, 900], [0, false, 0]]);
-  assert.equal(JSON.stringify(comparison).includes('C:/private'), false);
-  assert.equal(JSON.stringify(comparison).includes('private filesystem error'), false);
-  assert.equal(Object.keys(comparison).includes('privatePath'), false);
-  assert.deepEqual(comparison.arms.map(({ sink }) => sink), plan.map(({ sink }) => sink));
-
-  const bounded = diagnostics.safeZipBatcherComparison({
-    assetMatches: true,
-    batchBytes: Number.MAX_SAFE_INTEGER,
-    sinkOrder: ['C:/private/path'],
-    arms: [{ trial: 1, sink: 'C:/private/sink', batchBytes: 333, privatePath: 'C:/private/path', privateError: 'private error' }],
-  });
-  assert.equal(bounded.batchBytes, null);
-  assert.equal(bounded.sinkOrder[0], 'unknown');
-  assert.equal(bounded.arms[0].sink, 'unknown');
-  assert.equal(bounded.arms[0].batchBytes, null);
-  assert.equal(JSON.stringify(bounded).includes('C:/private'), false);
-  assert.equal(JSON.stringify(bounded).includes('private error'), false);
+  assert.equal(comparison.cacheCaveat, 'verified-buffer; filesystem-write-cache-not-reset');
+  assert.equal(comparison.measurementScope, 'verified-memory-deflate-file-vs-discard');
+  assert.deepEqual(comparison.arms.map(({ trial, arm, sink, batchBytes, compressedBytesRead, countersMatch, cleanupStatus }) =>
+    ({ trial, arm, sink, batchBytes, compressedBytesRead, countersMatch, cleanupStatus })), plan.map(({ trial, arm, sink }) => ({
+      trial, arm, sink, batchBytes: 256 * 1024, compressedBytesRead: null,
+      countersMatch: true, cleanupStatus: sink === 'node-fs-file' ? 'removed' : 'not-created',
+    })));
 });

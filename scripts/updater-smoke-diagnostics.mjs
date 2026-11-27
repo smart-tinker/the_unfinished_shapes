@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
-import path from 'node:path';
 import { Writable } from 'node:stream';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import yauzl from 'yauzl';
 import { createZipWriteBatcher, openZipReadStream, safeArchiveExtractionOperation, safeArchiveExtractionStage, safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, trackZipWriteCallback, zipReadChunkBytes, zipWriteBatchBytes } from '../src/update-package.mjs';
@@ -23,6 +24,8 @@ const safeVerifierSetupSteps = new Set([
 ]);
 
 const safeModuleFailureCodes = new Set(['MODULE_IMPORT_REJECTED', 'ERR_MODULE_NOT_FOUND', 'SyntaxError']);
+const safeReleaseFetchPhases = new Set(['startup', 'manual']);
+const safeReleaseFetchFailures = new Set(['none', 'rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed', 'unknown']);
 const safeExtractRendererStatuses = new Map([
   ['Choose a destination folder…', 'pending'],
   ['Verified archive extracted. You can now launch the new copy.', 'verified'],
@@ -150,13 +153,13 @@ export function zipBatcherScratchPrefix(archivePath) {
   return path.join(path.dirname(archivePath), 'tus-zip-batcher-');
 }
 const zipBatcherArmPlan = Object.freeze([
-  { trial: 1, arm: 'raw-read' },
-  { trial: 1, arm: 'deflate-discard' },
-  { trial: 1, arm: 'deflate-file' },
-  { trial: 2, arm: 'deflate-direct' },
+  { trial: 1, arm: 'memory-file' },
+  { trial: 1, arm: 'memory-discard' },
+  { trial: 2, arm: 'memory-discard' },
+  { trial: 2, arm: 'memory-file' },
 ]);
-const safeZipArms = new Set(['raw-read', 'deflate-discard', 'deflate-file', 'deflate-direct']);
-const safeZipSinks = new Set(['count-discard', 'node-fs-file']);
+const safeZipArms = new Set(['memory-file', 'memory-discard']);
+const safeZipSinks = new Set(['node-fs-file', 'count-discard']);
 const safeZipBatcherOutcomes = new Set(['completed', 'time-limit', 'failed', 'unknown']);
 const safeZipCleanupStatuses = new Set(['removed', 'not-created', 'failed', 'unknown']);
 
@@ -173,8 +176,10 @@ export function safeZipBatcherComparison(value) {
   const entryNonAsar = value?.entryNonAsar === true;
   const arms = (Array.isArray(value?.arms) ? value.arms : []).slice(0, zipBatcherArmPlan.length).map(arm => {
     const armName = safeZipArms.has(arm?.arm) ? arm.arm : 'unknown';
-    const sink = safeZipSinks.has(arm?.sink) ? arm.sink : 'unknown';
-    const usesBatcher = armName === 'deflate-discard' || armName === 'deflate-file';
+    const expectedSink = armName === 'memory-file' ? 'node-fs-file'
+      : armName === 'memory-discard' ? 'count-discard' : null;
+    const sink = safeZipSinks.has(arm?.sink) && arm.sink === expectedSink ? arm.sink : 'unknown';
+    const usesBatcher = safeZipArms.has(armName) && sink !== 'unknown';
     const decodedBytes = safeZipSinkMetric(arm?.decodedBytes, 1_073_741_824);
     const sinkBytesProcessed = safeZipSinkMetric(arm?.sinkBytesProcessed, 1_073_741_824);
     return {
@@ -186,7 +191,7 @@ export function safeZipBatcherComparison(value) {
       wallMs: safeZipSinkMetric(arm?.wallMs, 60_000),
       cpuUserMs: safeZipSinkMetric(arm?.cpuUserMs, 120_000),
       cpuSystemMs: safeZipSinkMetric(arm?.cpuSystemMs, 120_000),
-      compressedBytesRead: safeZipSinkMetric(arm?.compressedBytesRead, 500_000_000),
+      compressedBytesRead: null,
       decodedBytes,
       sinkBytesProcessed,
       countersMatch: decodedBytes !== null && sinkBytesProcessed !== null ? decodedBytes === sinkBytesProcessed : null,
@@ -201,6 +206,7 @@ export function safeZipBatcherComparison(value) {
   });
   return {
     assetMatches: value?.assetMatches === true,
+    memorySourceVerified: value?.memorySourceVerified === true,
     entrySequence,
     compression,
     entryCompressedSize,
@@ -214,8 +220,8 @@ export function safeZipBatcherComparison(value) {
     sinkOrder: arms.map(arm => arm.sink),
     readHighWaterMarkBytes: safeZipSinkMetric(value?.readHighWaterMarkBytes, 1_073_741_824),
     writeHighWaterMarkBytes: safeZipSinkMetric(value?.writeHighWaterMarkBytes, 1_073_741_824),
-    cacheCaveat: 'post-digest; filesystem-read-cache-not-reset',
-    measurementScope: 'raw-reader-and-deflate-pipeline',
+    cacheCaveat: 'verified-buffer; filesystem-write-cache-not-reset',
+    measurementScope: 'verified-memory-deflate-file-vs-discard',
     arms,
   };
 }
@@ -258,26 +264,22 @@ export function runZipSinkPipeline(source, sink, batchBytes, signal) {
   return pipeline(source, createZipWriteBatcher(batchBytes), sink, { signal });
 }
 
-async function measureZipBatcherArm(archivePath, trial, armName) {
+async function measureZipBatcherArm(archivePath, archiveBuffer, trial, armName) {
   let entryInfo = {
     entrySequence: null, compression: 'unknown',
     entryCompressedSize: null, entryUncompressedSize: null,
     entryNonAsar: false, entryMatches: false,
   };
-  const rawRead = armName === 'raw-read';
-  const directDeflate = armName === 'deflate-direct';
-  const useBatcher = !rawRead && !directDeflate;
-  const sinkType = armName === 'deflate-file' ? 'node-fs-file' : 'count-discard';
+  const fileSink = armName === 'memory-file';
   const arm = {
-    trial, arm: armName, sink: sinkType,
-    batchBytes: useBatcher ? zipWriteBatchBytes : null,
+    trial, arm: armName, sink: fileSink ? 'node-fs-file' : 'count-discard',
+    batchBytes: zipWriteBatchBytes,
     outcome: 'failed', wallMs: null, cpuUserMs: null, cpuSystemMs: null,
     compressedBytesRead: null, decodedBytes: null, sinkBytesProcessed: null,
     sinkWritableLength: null, sinkNeedDrain: null, writeCallbackWaitMs: null,
     sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
     cleanupStatus: 'not-created',
   };
-  let sinkByteCount = 0;
   let zip, selected, source, compressedReadStream, sink, tempDirectory, filePath, timer, timedOut = false;
   let writeCallbackSnapshot;
   const sampleSink = () => {
@@ -289,7 +291,8 @@ async function measureZipBatcherArm(archivePath, trial, armName) {
       ? snapshot.writeCallbackWaitMs : null;
   };
   try {
-    zip = await yauzl.openPromise(archivePath, { strictFileNames: true, validateEntrySizes: true });
+    const options = { strictFileNames: true, validateEntrySizes: true };
+    zip = await yauzl.fromBufferPromise(archiveBuffer, options);
     selected = await readZipEntryAt(zip, zipSinkEntrySequence);
     if (!selected) return { entryInfo, arm };
 
@@ -312,10 +315,10 @@ async function measureZipBatcherArm(archivePath, trial, armName) {
       entry.uncompressedSize === zipSinkEntryUncompressedSize && entryNonAsar;
     if (!entryInfo.entryMatches) return { entryInfo, arm };
 
-    const opened = await openZipReadStream(zip, entry, true, zipReadChunkBytes, !rawRead);
+    const opened = await openZipReadStream(zip, entry, true, zipReadChunkBytes, true);
     source = opened.stream;
     compressedReadStream = opened.compressedReadStream;
-    if (sinkType === 'node-fs-file') {
+    if (fileSink) {
       tempDirectory = await mkdtemp(zipBatcherScratchPrefix(archivePath));
       filePath = path.join(tempDirectory, 'entry.bin');
       sink = createWriteStream(filePath, {
@@ -325,7 +328,7 @@ async function measureZipBatcherArm(archivePath, trial, armName) {
       sink = new Writable({
         highWaterMark: zipBatcherWriteHighWaterMarkBytes,
         write(chunk, _encoding, callback) {
-          sinkByteCount += chunk.length;
+          arm.sinkBytesProcessed = (arm.sinkBytesProcessed ?? 0) + chunk.length;
           callback();
         },
       });
@@ -341,8 +344,7 @@ async function measureZipBatcherArm(archivePath, trial, armName) {
       controller.abort();
     }, zipBatcherArmTimeoutMs);
     try {
-      if (useBatcher) await runZipSinkPipeline(source, sink, zipWriteBatchBytes, controller.signal);
-      else await pipeline(source, sink, { signal: controller.signal });
+      await runZipSinkPipeline(source, sink, zipWriteBatchBytes, controller.signal);
       arm.outcome = 'completed';
       sampleSink();
     } catch {
@@ -355,20 +357,18 @@ async function measureZipBatcherArm(archivePath, trial, armName) {
       const cpu = process.cpuUsage(cpuStart);
       arm.cpuUserMs = Math.round(cpu.user / 1000);
       arm.cpuSystemMs = Math.round(cpu.system / 1000);
-      arm.compressedBytesRead = zipStreamPositionBytes(compressedReadStream);
-      arm.decodedBytes = rawRead ? null
-        : Number.isSafeInteger(source?.actualByteCount) ? source.actualByteCount : zipStreamPositionBytes(source);
+      arm.decodedBytes = Number.isSafeInteger(source?.actualByteCount) ? source.actualByteCount : zipStreamPositionBytes(source);
       arm.sourceReadableEnded = source?.readableEnded === true;
       arm.sinkWritableFinished = sink?.writableFinished === true;
       arm.sinkClosed = sink?.closed === true;
-      try {
-        if (sinkType === 'node-fs-file') {
+      if (fileSink) {
+        try {
           const result = await stat(filePath);
           arm.sinkBytesProcessed = Number.isSafeInteger(result.size) ? result.size : null;
-        } else {
-          arm.sinkBytesProcessed = sinkByteCount;
-        }
-      } catch {}
+        } catch {}
+      } else {
+        arm.sinkBytesProcessed ??= 0;
+      }
     }
   } catch {
     arm.outcome = timedOut ? 'time-limit' : 'failed';
@@ -391,15 +391,27 @@ async function measureZipBatcherArm(archivePath, trial, armName) {
   }
   return { entryInfo, arm };
 }
-export async function compareVerifiedWindowsZipBatcher(archivePath, assetMatches) {
-  if (assetMatches !== true || typeof archivePath !== 'string') {
-    return safeZipBatcherComparison({ assetMatches: false });
+
+export async function compareVerifiedWindowsZipBatcher(archivePath, assetMatches, expected) {
+  const expectedSize = expected?.size;
+  const expectedSha256 = expected?.sha256;
+  if (assetMatches !== true || typeof archivePath !== 'string' ||
+      !Number.isSafeInteger(expectedSize) || expectedSize < 1 || expectedSize > 500_000_000 ||
+      typeof expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expectedSha256)) {
+    return safeZipBatcherComparison({ assetMatches: false, memorySourceVerified: false });
   }
+  let archiveBuffer;
+  try { archiveBuffer = await readFile(archivePath); }
+  catch { return safeZipBatcherComparison({ assetMatches: true, memorySourceVerified: false }); }
+  const memorySourceVerified = archiveBuffer.length === expectedSize &&
+    createHash('sha256').update(archiveBuffer).digest('hex') === expectedSha256;
+  if (!memorySourceVerified) return safeZipBatcherComparison({ assetMatches: true, memorySourceVerified: false });
+
   const arms = [];
   let entryInfo = null;
   let allEntriesMatch = true;
   for (const { trial, arm } of zipBatcherArmPlan) {
-    const measured = await measureZipBatcherArm(archivePath, trial, arm);
+    const measured = await measureZipBatcherArm(archivePath, archiveBuffer, trial, arm);
     if (entryInfo === null) {
       entryInfo = measured.entryInfo;
       allEntriesMatch = entryInfo.entryMatches;
@@ -416,6 +428,7 @@ export async function compareVerifiedWindowsZipBatcher(archivePath, assetMatches
   }
   return safeZipBatcherComparison({
     assetMatches: true,
+    memorySourceVerified,
     ...(entryInfo ?? {}),
     entryMatches: allEntriesMatch && arms.length === zipBatcherArmPlan.length,
     batchBytes: zipWriteBatchBytes,
@@ -433,9 +446,11 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
   return (Array.isArray(live) ? live : []).slice(0, 40).map(item => ({
     bundleIndex: Number.isInteger(item?.bundleIndex) && item.bundleIndex >= 0 && item.bundleIndex < 20 ? item.bundleIndex : null,
     bundleSha256: typeof item?.bundleSha256 === 'string' && /^[a-f0-9]{64}$/.test(item.bundleSha256) ? item.bundleSha256 : null,
-    stage: ['updater-module-import', 'download-verified-asset', 'renderer-invoke', 'extract-archive', 'extract-failed', 'main-catch-fallback', 'verify-start', 'verify-result', 'verifier-setup', 'verifier-verify', 'verifier-tampered-control', 'update-launch'].includes(item?.stage) ? item.stage : 'unknown',
-    status: ['not-started', 'pending', 'fulfilled', 'starting', 'ready', 'synthetic-other', 'verified', 'rejected', 'tampered-rejected', 'tampered-accepted', 'tampered-unavailable'].includes(item?.status)
-      ? item.status : item?.stage === 'verify-start' ? 'started' : 'unknown',
+    stage: ['updater-module-import', 'download-verified-asset', 'renderer-invoke', 'extract-archive', 'extract-failed', 'main-catch-fallback', 'verify-start', 'verify-result', 'verifier-setup', 'verifier-verify', 'verifier-tampered-control', 'update-launch', 'release-fetch'].includes(item?.stage) ? item.stage : 'unknown',
+    status: item?.stage === 'release-fetch'
+      ? (Number.isInteger(item.status) && item.status >= 100 && item.status <= 599 ? item.status : null)
+      : (['not-started', 'pending', 'fulfilled', 'starting', 'ready', 'synthetic-other', 'verified', 'rejected', 'tampered-rejected', 'tampered-accepted', 'tampered-unavailable'].includes(item?.status)
+        ? item.status : item?.stage === 'verify-start' ? 'started' : 'unknown'),
     assetMatches: item?.assetName === assetName && item?.assetSha256 === manifestFile.sha256 && item?.tag === tag,
     ...(item?.status === 'rejected' && item?.stage !== 'updater-module-import' && item?.stage !== 'renderer-invoke' && item?.stage !== 'extract-failed' && item?.stage !== 'extract-archive' && item?.stage !== 'update-launch' ? {
       failureCode: safeUpdaterFailureCode(item.failureCode),
@@ -489,6 +504,13 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
         stagedAsarExists: item.fileFlags?.stagedAsarExists === true,
       },
       streamSnapshot: safeExtractStreamSnapshot(item.extractStreamSnapshot, item.previousStreamSnapshot, item.streamIntervalMs),
+    } : {}),
+    ...(item?.stage === 'release-fetch' ? {
+      phase: safeReleaseFetchPhases.has(item.phase) ? item.phase : 'unknown',
+      page: Number.isInteger(item.page) && item.page >= 1 && item.page <= 10 ? item.page : null,
+      count: Number.isInteger(item.count) && item.count >= 1 && item.count <= 10 ? item.count : null,
+      remainingZero: typeof item.remainingZero === 'boolean' ? item.remainingZero : null,
+      safeFailure: safeReleaseFetchFailures.has(item.safeFailure) ? item.safeFailure : 'unknown',
     } : {}),
     trustedRootTarget: safeRootTarget(item?.trustedRootTarget),
   }));

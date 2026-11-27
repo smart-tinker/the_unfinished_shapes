@@ -17,7 +17,7 @@ import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEve
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
 const updateHttpStatusPattern = /\bHTTP (\d{3})\b/;
-// Four 15s reader/Deflate/sink arms plus setup/cleanup reserve; timeout fails before production extraction can overlap.
+// Four 15s counterbalanced memory-source Deflate sink arms plus setup/cleanup reserve; production extraction remains separately bounded.
 const zipBatcherComparisonTimeoutMs = 75_000;
 assert.deepEqual(
   'Downloading release package: 1.5 / 42.0 MB.'.match(updateProgressPattern)?.slice(1),
@@ -285,6 +285,27 @@ async function fileDigest(filePath) {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(filePath)) hash.update(chunk);
   return hash.digest('hex');
+}
+
+async function logUpdaterReleaseFetchObservation(current, checkpoint) {
+  const live = await withTimeout(
+    current.instance.evaluate(() => globalThis.__tusUpdaterSmokeBoundary?.releaseFetches ?? null),
+    'Updater release fetch snapshot',
+    5000,
+  ).catch(() => null);
+  const available = Array.isArray(live);
+  const requests = safeMainDiagnostics(
+    available ? live : [],
+    { sha256: '' },
+    '',
+    '',
+  ).map(({ phase, page, count, status, remainingZero, safeFailure }) => ({
+    phase, page, count, status, remainingZero, safeFailure,
+  }));
+  console.log('TUS_UPDATER_RELEASE_FETCH ' + JSON.stringify({
+    checkpoint, available, count: requests.length, requests,
+  }));
+  return { available, requests };
 }
 
 async function updaterRuntimeBoundary(current, manifestFile, assetName, tag, snapshotTimeoutMs = 5000) {
@@ -1313,6 +1334,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     'prerelease',
     'keyboard activation saves the selected channel',
   );
+  await logUpdaterReleaseFetchObservation(current, 'before-first-exit');
   const firstProcess = current.instance.process();
   const firstExit = waitForExit(firstProcess);
   await current.instance.evaluate(({ app }) => app.quit());
@@ -1327,7 +1349,12 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   await current.page.locator('#settings').waitFor({ state: 'visible', timeout: 5000 });
   assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'the keyboard-selected channel survives restart and reopening');
   if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
-  await current.page.waitForFunction(() => !document.querySelector('#updates-notice')?.hidden, null, { timeout: 30000 });
+  let restartStartupFetches;
+  try {
+    await current.page.waitForFunction(() => !document.querySelector('#updates-notice')?.hidden, null, { timeout: 30000 });
+  } finally {
+    restartStartupFetches = await logUpdaterReleaseFetchObservation(current, 'restart-startup');
+  }
   const startupNotice = await current.page.locator('#updates-notice').getAttribute('title');
   const startupErrorCode = (await current.page.locator('#updates-notice').getAttribute('data-error-code')) || null;
   if (startupErrorCode) {
@@ -1337,13 +1364,24 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     console.log('Updater startup release diagnostic ' + JSON.stringify({ status: 'error', errorCode }));
   }
   const startupAvailable = !startupErrorCode && /available\./.test(startupNotice || '');
+  const manualRequestsBeforeDispatch = restartStartupFetches?.available
+    ? restartStartupFetches.requests.filter(item => item.phase === 'manual').length : null;
   if (!startupAvailable) {
     console.log('TUS_UPDATER_MANUAL_CHECK ' + JSON.stringify({
       startup: 'unavailable',
       uiAction: 'not-dispatched',
-      manualGetObservation: 'not-instrumented',
+      manualGetObservation: manualRequestsBeforeDispatch === 0 ? 'not-observed'
+        : manualRequestsBeforeDispatch === null ? 'unknown' : 'observed',
+      manualGetCount: manualRequestsBeforeDispatch,
     }));
   }
+  assert.equal(restartStartupFetches?.available, true, 'the packaged main release-fetch observer is available');
+  assert.ok(restartStartupFetches.requests.some(item => item.phase === 'startup'), 'startup selection uses an observed release GET');
+  if (startupAvailable) {
+    assert.ok(restartStartupFetches.requests.filter(item => item.phase === 'startup')
+      .every(item => item.status !== null && item.safeFailure === 'none'), 'available startup check completed its observed HTTP pages');
+  }
+  if (!startupAvailable) assert.equal(manualRequestsBeforeDispatch, 0, 'failed startup is not followed by a manual release GET');
   assert.equal(startupErrorCode, null, 'manual update check is not dispatched after startup failure');
   assert.match(startupNotice || '', /available\./, 'startup checks expose a published update without installing it');
   const startupTag = startupNotice?.match(/Prerelease (v\d+\.\d+\.\d+-rc\.?\d+) is available\./)?.[1];
@@ -1352,13 +1390,21 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
 
   await observeUpdaterKeyboardActions(current.page);
   await activateUpdaterButtonByKeyboard(current.page, 'updates-check');
-  console.log('TUS_UPDATER_MANUAL_CHECK ' + JSON.stringify({
-    startup: 'available',
-    uiAction: 'dispatched',
-    manualGetObservation: 'not-instrumented',
-  }));
-
-  await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.includes(' is available.'), null, { timeout: 30000 });
+  let manualFetches;
+  try {
+    await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.includes(' is available.'), null, { timeout: 30000 });
+  } finally {
+    const manualSnapshot = await logUpdaterReleaseFetchObservation(current, 'restart-manual');
+    manualFetches = manualSnapshot.available ? manualSnapshot.requests.filter(item => item.phase === 'manual') : null;
+    console.log('TUS_UPDATER_MANUAL_CHECK ' + JSON.stringify({
+      startup: 'available',
+      uiAction: 'dispatched',
+      manualGetObservation: manualFetches === null ? 'unknown' : manualFetches.length ? 'observed' : 'not-observed',
+      manualGetCount: manualFetches?.length ?? null,
+    }));
+  }
+  assert.ok(manualFetches?.length > 0, 'keyboard manual check performs a real release GET');
+  assert.ok(manualFetches.every(item => item.status !== null && item.safeFailure === 'none'), 'manual release GET pages returned successful HTTP responses');
   const availability = await current.page.locator('#updates-status').innerText();
   assert.match(availability, /^Prerelease · may be unstable: /, 'manual check uses the saved prerelease channel');
   const tag = availability.match(/(v\d+\.\d+\.\d+-rc\.?\d+)/)?.[1];
@@ -1555,9 +1601,9 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
       const compare = globalThis.__tusUpdaterSmokeZipBatcherCompare;
       return typeof compare === 'function' ? compare(expected) : null;
     }, { tag, assetName, size: manifestFile.size, sha256: manifestFile.sha256 }),
-    'Verified ZIP raw/direct/batched Deflate comparison', zipBatcherComparisonTimeoutMs);
+    'Verified-memory ZIP Deflate sink comparison', zipBatcherComparisonTimeoutMs);
     zipBatcherComparison = safeZipBatcherComparison(rawComparison);
-    console.log('TUS_UPDATE_ZIP_BATCHER_COMPARISON ' + JSON.stringify(zipBatcherComparison));
+    console.log('TUS_UPDATE_ZIP_SINK_COMPARISON ' + JSON.stringify(zipBatcherComparison));
   }
   if (distribution === 'installer') {
     assert.ok(handoffProfile, 'the exact installer handoff has an isolated source profile');
@@ -1576,8 +1622,10 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     });
     const pendingStatus = 'Choose a destination folder…';
     const successStatus = 'Verified archive extracted. You can now launch the new copy.';
+    const extractChooserMarker = path.join(workDir, 'extract-folder-chooser.json');
+    await rm(extractChooserMarker, { force: true });
     await activateUpdaterButtonByKeyboard(current.page, 'updates-extract');
-    const folderChooserInvoked = await waitForFile(path.join(workDir, 'extract-folder-chooser.json'), 5000);
+    const folderChooserInvoked = await waitForFile(extractChooserMarker, 5000);
     const extractDiagnostic = {
       folderChooserInvoked,
       outcome: folderChooserInvoked ? 'pending' : 'chooser-not-invoked',
@@ -1782,38 +1830,35 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
 
   if (zipBatcherComparison) {
     assert.equal(zipBatcherComparison.assetMatches, true, 'sink comparison uses the exact verified RC11 asset');
+    assert.equal(zipBatcherComparison.memorySourceVerified, true, 'the in-memory source rehashes to the exact published size and digest');
     assert.equal(zipBatcherComparison.entryMatches, true, 'each arm reads the exact published non-ASAR Deflate entry');
-    assert.equal(zipBatcherComparison.batchBytes, 256 * 1024, 'the production ZIP batcher size is fixed');
+    assert.equal(zipBatcherComparison.batchBytes, 256 * 1024, 'both source modes use the production ZIP batcher size');
     assert.equal(zipBatcherComparison.readHighWaterMarkBytes, 256 * 1024);
     assert.equal(zipBatcherComparison.writeHighWaterMarkBytes, 16 * 1024);
-    assert.equal(zipBatcherComparison.measurementScope, 'raw-reader-and-deflate-pipeline');
+    assert.equal(zipBatcherComparison.measurementScope, 'verified-memory-deflate-file-vs-discard');
     const expectedArms = [
-      { trial: 1, arm: 'raw-read', sink: 'count-discard' },
-      { trial: 1, arm: 'deflate-discard', sink: 'count-discard' },
-      { trial: 1, arm: 'deflate-file', sink: 'node-fs-file' },
-      { trial: 2, arm: 'deflate-direct', sink: 'count-discard' },
+      { trial: 1, arm: 'memory-file', sink: 'node-fs-file' },
+      { trial: 1, arm: 'memory-discard', sink: 'count-discard' },
+      { trial: 2, arm: 'memory-discard', sink: 'count-discard' },
+      { trial: 2, arm: 'memory-file', sink: 'node-fs-file' },
     ];
     assert.deepEqual(zipBatcherComparison.arms.map(({ trial, arm, sink }) => ({ trial, arm, sink })), expectedArms);
     for (const arm of zipBatcherComparison.arms) {
-      assert.ok(['completed', 'time-limit'].includes(arm.outcome), 'each bounded sink arm produced a measurement');
-      const usesBatcher = ['deflate-discard', 'deflate-file'].includes(arm.arm);
-      assert.equal(arm.batchBytes, usesBatcher ? zipBatcherComparison.batchBytes : null, 'only production Deflate sink arms use the batcher');
-      assert.equal(arm.cleanupStatus, arm.sink === 'node-fs-file' ? 'removed' : 'not-created');
-      for (const key of ['wallMs', 'cpuUserMs', 'cpuSystemMs', 'compressedBytesRead', 'sinkBytesProcessed']) {
+      assert.ok(['completed', 'time-limit'].includes(arm.outcome), 'each bounded source arm produced a measurement');
+      assert.equal(arm.batchBytes, zipBatcherComparison.batchBytes, 'both sink modes use the same production batcher');
+      assert.equal(arm.cleanupStatus, arm.sink === 'node-fs-file' ? 'removed' : 'not-created',
+        'file sink cleanup is confirmed and discard sink creates no temporary file');
+      for (const key of ['wallMs', 'cpuUserMs', 'cpuSystemMs', 'sinkBytesProcessed']) {
         assert.ok(Number.isSafeInteger(arm[key]) && arm[key] >= 0, 'each sink arm reports bounded ' + key);
       }
-      if (arm.arm === 'raw-read') assert.equal(arm.decodedBytes, null);
-      else assert.ok(Number.isSafeInteger(arm.decodedBytes) && arm.decodedBytes >= 0, 'Deflate arms report decoded-byte progress');
+      assert.ok(Number.isSafeInteger(arm.decodedBytes) && arm.decodedBytes >= 0, 'each source arm reports decoded-byte progress');
+      assert.equal(arm.compressedBytesRead, null, 'all arms use the same verified in-memory ZIP buffer');
+      assert.equal(arm.countersMatch, arm.decodedBytes === arm.sinkBytesProcessed);
       if (arm.outcome === 'completed') {
-        assert.equal(arm.compressedBytesRead, zipBatcherComparison.entryCompressedSize);
-        if (arm.arm === 'raw-read') {
-          assert.equal(arm.sinkBytesProcessed, zipBatcherComparison.entryCompressedSize);
-          assert.equal(arm.countersMatch, null);
-        } else {
-          assert.equal(arm.decodedBytes, zipBatcherComparison.entryUncompressedSize);
-          assert.equal(arm.sinkBytesProcessed, zipBatcherComparison.entryUncompressedSize);
-          assert.equal(arm.countersMatch, true);
-        }
+        assert.equal(arm.compressedBytesRead, null);
+        assert.equal(arm.decodedBytes, zipBatcherComparison.entryUncompressedSize);
+        assert.equal(arm.sinkBytesProcessed, zipBatcherComparison.entryUncompressedSize);
+        assert.equal(arm.countersMatch, true);
         assert.equal(arm.sourceReadableEnded, true);
         assert.equal(arm.sinkWritableFinished, true);
         assert.equal(arm.sinkClosed, true);
