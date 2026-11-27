@@ -11,6 +11,8 @@ let selectedKind = 'block', selectedPreset = 'block', buildPreview = null, agent
 let settingsGeneration = 0, ordinaryTurn = false;
 let agentControlState = null, agentControlRead = 0, agentControlLoading = false, agentControlBusy = false, goalMessageContextId = null;
 let pollRunning = false, moveRunning = false, playerPosition = { x: 0, y: 0, z: 0 }, playerVelocityY = 0, jumpRequested = false, meId = null, localMovementVersion = 0, latestStateRevision = -1;
+const MAX_SMOKE_RAF_FRAMES = 512;
+let smokeMovementFrameSequence = 0, smokeMoveRequestSequence = 0, latestSmokeMovementFrame = null;
 let worldState = { lighting:{version:0,ambientIntensity:2.6,sunIntensity:3.1}, objects: [] };
 let scene, renderer, camera, controls, player, companion, ambientLight, sunLight, worldLightingPreview=null, lightingInputVersion=-1;
 const lampLights = new Map();
@@ -210,14 +212,26 @@ function initScene() {
     let z = typing ? 0 : Number(keys.has('s')) - Number(keys.has('w'));
     const length = Math.hypot(x, z);
     if (length) { x /= length; z /= length; }
+    const before = { x: playerPosition.x, y: playerPosition.y, z: playerPosition.z }, velocityYBefore = playerVelocityY;
     const target = {
-      x: playerPosition.x + x * dt * WALK_SPEED,
-      y: playerPosition.y,
-      z: playerPosition.z + z * dt * WALK_SPEED,
+      x: before.x + x * dt * WALK_SPEED,
+      y: before.y,
+      z: before.z + z * dt * WALK_SPEED,
     };
     const moved = movePlayer(worldState,{position:playerPosition,velocityY:playerVelocityY},{position:target,jump:jumpRequested},dt);
     if (moved.position.x !== playerPosition.x || moved.position.y !== playerPosition.y || moved.position.z !== playerPosition.z || moved.velocityY !== playerVelocityY) {
       playerPosition = moved.position; playerVelocityY = moved.velocityY; localMovementVersion++;
+    }
+    const traceState = window.__TUS_SMOKE_JUMP_TRACE_STATE;
+    if (traceState?.captureRafFrames === true) {
+      latestSmokeMovementFrame = {
+        frameId: ++smokeMovementFrameSequence, at: Date.now(), dt,
+        focused: document.hasFocus(), dHeld: keys.has('d'), typing, inputX: x, jumpRequested,
+        before, desired: target, resolved: moved.position, velocityYBefore, velocityYAfter: moved.velocityY,
+        movementVersion: localMovementVersion,
+      };
+      if (traceState.rafFrames.length < MAX_SMOKE_RAF_FRAMES) traceState.rafFrames.push(latestSmokeMovementFrame);
+      else traceState.droppedRafFrames++;
     }
     player.position.set(playerPosition.x, playerPosition.y, playerPosition.z);
     companion.position.lerp(new THREE.Vector3(playerPosition.x + 1.5, playerPosition.y + 1.7 + Math.sin(performance.now() / 700) * .12, playerPosition.z + 1.2), .05); companion.rotation.y += dt * .4;
@@ -885,15 +899,24 @@ let lastPosition = '';
 function traceSmokeJump(event, value, details) {
   try { window.__TUS_SMOKE_JUMP_TRACE?.(event, value, details); } catch {}
 }
+function currentSmokeMovementFrame() {
+  const trace = window.__TUS_SMOKE_JUMP_TRACE_STATE, frame = latestSmokeMovementFrame;
+  return trace?.active === true && trace.captureRafFrames === true && frame && frame.at >= trace.startedAt ? frame : null;
+}
 async function syncPosition() {
-  const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration, movementVersion = localMovementVersion, jump = jumpRequested;
-  if (moveRunning) { traceSmokeJump('move.skip', 'move-running'); return; }
-  if (key === lastPosition && !jump && playerVelocityY === 0) { traceSmokeJump('move.skip', 'stationary'); return; }
-  if (!meId) { traceSmokeJump('move.skip', 'no-player'); return; }
-  if (!bridge) { traceSmokeJump('move.skip', 'no-bridge'); return; }
+  const position = { ...playerPosition }, key = positionKey(playerPosition), generation = settingsGeneration, movementVersion = localMovementVersion, jump = jumpRequested;
+  const traceActive = window.__TUS_SMOKE_JUMP_TRACE_STATE?.active === true;
+  if (moveRunning) { traceSmokeJump('move.skip', 'move-running', { movementFrame: currentSmokeMovementFrame() }); return; }
+  if (key === lastPosition && !jump && playerVelocityY === 0) { traceSmokeJump('move.skip', 'stationary', { movementFrame: currentSmokeMovementFrame() }); return; }
+  if (!meId) { traceSmokeJump('move.skip', 'no-player', { movementFrame: currentSmokeMovementFrame() }); return; }
+  if (!bridge) { traceSmokeJump('move.skip', 'no-bridge', { movementFrame: currentSmokeMovementFrame() }); return; }
+  const requestId = traceActive ? ++smokeMoveRequestSequence : null;
+  const requestFrame = traceActive ? currentSmokeMovementFrame() : null;
   moveRunning = true;
+  let responseFrame = null;
   try {
     traceSmokeJump('move.jump', jump, {
+      requestId, movementFrame: requestFrame,
       position: {
         x: Number.isFinite(position.x) ? position.x : null,
         y: Number.isFinite(position.y) ? position.y : null,
@@ -901,6 +924,7 @@ async function syncPosition() {
       },
     });
     const result = await request('/command', 'POST', { type: 'move', position, jump });
+    responseFrame = currentSmokeMovementFrame();
     let responseOutcome, clientApplied = false;
     if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && result.revision >= latestStateRevision) {
       latestStateRevision = result.revision;
@@ -919,6 +943,8 @@ async function syncPosition() {
       responseOutcome = result.error ? 'rejected' : 'stale';
     }
     traceSmokeJump('move.result', responseOutcome, {
+      requestId, requestFrameId: requestFrame?.frameId ?? null, responseFrameId: responseFrame?.frameId ?? null,
+      requestMovementVersion: movementVersion, responseMovementVersion: localMovementVersion,
       revision: Number.isSafeInteger(result.revision) ? result.revision : null,
       position: {
         x: Number.isFinite(result.position?.x) ? result.position.x : null,
@@ -928,12 +954,20 @@ async function syncPosition() {
       clientApplied,
     });
     if (jump) traceSmokeJump('move.jump-response', {
+      requestId, requestFrameId: requestFrame?.frameId ?? null, responseFrameId: responseFrame?.frameId ?? null,
       postAttempted: true, responseReceived: true, outcome: responseOutcome, serverPosition: result.position,
       serverVelocityY: result.velocityY, serverRevision: result.revision, clientApplied,
     });
   } catch {
-    if (jump) traceSmokeJump('move.jump-response', { postAttempted: true, responseReceived: false, outcome: 'request-failed', clientApplied: false });
-    traceSmokeJump('move.result', 'request-failed');
+    responseFrame = currentSmokeMovementFrame();
+    if (jump) traceSmokeJump('move.jump-response', {
+      requestId, requestFrameId: requestFrame?.frameId ?? null, responseFrameId: responseFrame?.frameId ?? null,
+      postAttempted: true, responseReceived: false, outcome: 'request-failed', clientApplied: false,
+    });
+    traceSmokeJump('move.result', 'request-failed', {
+      requestId, requestFrameId: requestFrame?.frameId ?? null, responseFrameId: responseFrame?.frameId ?? null,
+      requestMovementVersion: movementVersion, responseMovementVersion: localMovementVersion,
+    });
     /* The status poll reports connectivity failures. */
   } finally { moveRunning = false; }
 }

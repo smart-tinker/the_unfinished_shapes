@@ -70,6 +70,20 @@ assert.equal(qualifyingStatus([], true), 'not_observed');
 assert.equal(qualifyingStatus([], false), 'UNKNOWN');
 assert.equal(qualifyingStatus([{ revision: 1 }], false), 'observed');
 const tracePosition = value => ({ x: traceNumber(value?.x), y: traceNumber(value?.y), z: traceNumber(value?.z) });
+const safeMovementFrame = frame => Number.isSafeInteger(frame?.frameId) ? {
+  frameId: frame.frameId, at: Number.isSafeInteger(frame.at) ? frame.at : null, dt: traceNumber(frame.dt),
+  focused: typeof frame.focused === 'boolean' ? frame.focused : null,
+  dHeld: typeof frame.dHeld === 'boolean' ? frame.dHeld : null,
+  typing: typeof frame.typing === 'boolean' ? frame.typing : null,
+  inputX: traceNumber(frame.inputX), jumpRequested: typeof frame.jumpRequested === 'boolean' ? frame.jumpRequested : null,
+  before: tracePosition(frame.before), desired: tracePosition(frame.desired), resolved: tracePosition(frame.resolved),
+  velocityYBefore: traceNumber(frame.velocityYBefore), velocityYAfter: traceNumber(frame.velocityYAfter),
+  movementVersion: Number.isSafeInteger(frame.movementVersion) ? frame.movementVersion : null,
+} : null;
+assert.equal(safeMovementFrame(null), null);
+assert.equal(safeMovementFrame({ frameId: 1, dHeld: true })?.dHeld, true);
+assert.equal(safeMovementFrame({ frameId: 2, dt: .1, focused: true, typing: false, before: { x: 1 }, desired: { x: 2 }, resolved: { x: 1.5 } })?.desired.x, 2);
+assert.equal(safeMovementFrame({ frameId: 2, dt: .1, focused: true, typing: false, before: { x: 1 }, desired: { x: 2 }, resolved: { x: 1.5 } })?.resolved.x, 1.5);
 async function jumpTraceState(id) {
   const response = await fetch(url + '/state', { headers: { Authorization: 'Bearer ' + tokens[id] }, signal: AbortSignal.timeout(1000) });
   if (!response.ok) throw new Error('State trace unavailable');
@@ -80,7 +94,7 @@ async function jumpTraceState(id) {
 async function installJumpTrace(client) {
   const trace = { observations: [], stateErrors: 0, droppedObservations: 0 };
   await client.page.evaluate(() => {
-    const trace = { active: true, events: [], droppedEvents: 0, droppedBeforeGate: 0, droppedAfterGate: 0, gateAt: null,
+    const trace = { active: true, captureRafFrames: true, startedAt: Date.now(), rafFrames: [], droppedRafFrames: 0, events: [], droppedEvents: 0, droppedBeforeGate: 0, droppedAfterGate: 0, gateAt: null,
       spaceKeydown: false, jumpRequested: null, firstMoveJump: null, firstMoveSkip: null,
       firstMoveResult: null, jumpPostResponse: null, hudGate: null };
     const skips = new Set(['move-running', 'stationary', 'no-player', 'no-bridge']), results = new Set(['accepted', 'stale', 'rejected', 'request-failed']);
@@ -110,16 +124,22 @@ async function installJumpTrace(client) {
         const jump = value === true;
         if (trace.spaceKeydown && trace.firstMoveJump === null) trace.firstMoveJump = jump;
         const target = details?.position;
-        record('move.request', { jump, targetPosition: {
-          x: Number.isFinite(target?.x) ? target.x : null,
-          y: Number.isFinite(target?.y) ? target.y : null,
-          z: Number.isFinite(target?.z) ? target.z : null,
-        }, hud: hud() });
+        record('move.request', {
+          jump,
+          requestId: Number.isSafeInteger(details?.requestId) ? details.requestId : null,
+          requestFrameId: Number.isSafeInteger(details?.movementFrame?.frameId) ? details.movementFrame.frameId : null,
+          targetPosition: {
+            x: Number.isFinite(target?.x) ? target.x : null,
+            y: Number.isFinite(target?.y) ? target.y : null,
+            z: Number.isFinite(target?.z) ? target.z : null,
+          },
+          movementFrame: details?.movementFrame ?? null, hud: hud(),
+        });
       }
       if (name === 'move.skip') {
         const reason = skips.has(value) ? value : null;
         if (trace.spaceKeydown && trace.firstMoveSkip === null && reason) trace.firstMoveSkip = reason;
-        record('move.skip', { reason, hud: hud() });
+        record('move.skip', { reason, movementFrame: details?.movementFrame ?? null, hud: hud() });
       }
       if (name === 'move.result') {
         const response = details && typeof details === 'object' ? details : value && typeof value === 'object' ? value : {};
@@ -134,10 +154,20 @@ async function installJumpTrace(client) {
           Number.isSafeInteger(response.serverRevision) ? response.serverRevision : null;
         const clientApplied = typeof response.clientApplied === 'boolean' ? response.clientApplied : null;
         if (trace.spaceKeydown && trace.firstMoveResult === null && outcome) trace.firstMoveResult = outcome;
-        record('move.response', { outcome, serverPosition, serverRevision, clientApplied, hud: hud() });
+        record('move.response', {
+          requestId: Number.isSafeInteger(response.requestId) ? response.requestId : null,
+          requestFrameId: Number.isSafeInteger(response.requestFrameId) ? response.requestFrameId : null,
+          responseFrameId: Number.isSafeInteger(response.responseFrameId) ? response.responseFrameId : null,
+          requestMovementVersion: Number.isSafeInteger(response.requestMovementVersion) ? response.requestMovementVersion : null,
+          responseMovementVersion: Number.isSafeInteger(response.responseMovementVersion) ? response.responseMovementVersion : null,
+          outcome, serverPosition, serverRevision, clientApplied, hud: hud(),
+        });
       }
       if (name === 'move.jump-response') {
         const position = value?.serverPosition, response = {
+          requestId: Number.isSafeInteger(value?.requestId) ? value.requestId : null,
+          requestFrameId: Number.isSafeInteger(value?.requestFrameId) ? value.requestFrameId : null,
+          responseFrameId: Number.isSafeInteger(value?.responseFrameId) ? value.responseFrameId : null,
           responseReceived: value?.responseReceived === true, outcome: results.has(value?.outcome) ? value.outcome : null,
           serverPosition: { x: Number.isFinite(position?.x) ? position.x : null, y: Number.isFinite(position?.y) ? position.y : null, z: Number.isFinite(position?.z) ? position.z : null },
           serverVelocityY: Number.isFinite(value?.serverVelocityY) ? value.serverVelocityY : null,
@@ -183,7 +213,7 @@ async function stopJumpTraceWindow(client, trace, gateAt) {
   trace.gateAt = gateAt; trace.stopped = true;
   await client.page.evaluate(gateAt => {
     const current = window.__TUS_SMOKE_JUMP_TRACE_STATE;
-    if (current && current.gateAt === null) current.gateAt = gateAt;
+    if (current) { current.gateAt = gateAt; current.captureRafFrames = false; }
   }, gateAt).catch(() => {});
 }
 async function reportJumpTrace(client, trace, gateResult, gateAt, initialSnapshot, landingResult = 'not-reached') {
@@ -192,8 +222,9 @@ async function reportJumpTrace(client, trace, gateResult, gateAt, initialSnapsho
     if (!current) return {};
     current.active = false;
     return {
-      spaceKeydown: current.spaceKeydown, jumpRequested: current.jumpRequested, firstMoveJump: current.firstMoveJump,
+      startedAt: current.startedAt, spaceKeydown: current.spaceKeydown, jumpRequested: current.jumpRequested, firstMoveJump: current.firstMoveJump,
       firstMoveSkip: current.firstMoveSkip, firstMoveResult: current.firstMoveResult, jumpPostResponse: current.jumpPostResponse,
+      rafFrames: current.rafFrames, droppedRafFrames: current.droppedRafFrames,
       events: current.events, droppedEvents: current.droppedEvents, droppedBeforeGate: current.droppedBeforeGate,
       droppedAfterGate: current.droppedAfterGate, gateAt: current.gateAt, endAt: Date.now(), hudGate: current.hudGate,
     };
@@ -201,6 +232,7 @@ async function reportJumpTrace(client, trace, gateResult, gateAt, initialSnapsho
   await Promise.allSettled([trace.sampleTask]);
   const startAt = trace.startedAt ?? gateAt, durationMs = Math.max(0, gateAt - startAt);
   const gateBoundaryAt = Number.isSafeInteger(raw.gateAt) ? raw.gateAt : gateAt, endAt = Number.isSafeInteger(raw.endAt) ? raw.endAt : Date.now();
+  const rafStartAt = Number.isSafeInteger(raw.startedAt) ? raw.startedAt : startAt;
   const allEvents = (raw.events ?? []).filter(event => event.at <= endAt);
   const events = allEvents.filter(event => event.at <= gateBoundaryAt), postGateEvents = allEvents.filter(event => event.at > gateBoundaryAt);
   const observations = trace.observations.filter(item => item.at <= gateBoundaryAt);
@@ -260,6 +292,10 @@ async function reportJumpTrace(client, trace, gateResult, gateAt, initialSnapsho
       stateErrors: trace.stateErrors, droppedEvents: raw.droppedEvents ?? null,
       droppedBeforeGate: raw.droppedBeforeGate ?? null, droppedAfterGate: raw.droppedAfterGate ?? null,
       droppedObservations: trace.droppedObservations,
+      rafFramesComplete: Number.isSafeInteger(raw.droppedRafFrames) && raw.droppedRafFrames === 0 && Array.isArray(raw.rafFrames) && raw.rafFrames.length > 0,
+      droppedRafFrames: raw.droppedRafFrames ?? null,
+      rafFrames: (raw.rafFrames ?? []).filter(frame => Number.isSafeInteger(frame.at) && frame.at <= gateBoundaryAt)
+        .map(frame => { const safe = safeMovementFrame(frame); return safe && { ...safe, atMs: safe.at - rafStartAt, at: undefined }; }),
       timeline: events.map(event => ({ ...event, atMs: event.at - startAt, at: undefined })),
       postGate: { status: postGateStatus, landingResult, eventCount: postGateEvents.length,
         timeline: postGateEvents.map(event => ({ ...event, afterGateMs: event.at - gateBoundaryAt, at: undefined })) },
