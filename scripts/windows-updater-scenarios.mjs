@@ -117,10 +117,8 @@ export async function runWindowsRelaunch({ child, click, waitForExit, cleanup, v
     failure.tusScenarioDiagnostic = { stage, category: safeWindowsScenarioFailureCategory(failure) };
     return { order: order++, error: failure };
   });
-  const [clickFailure, exitFailure] = await Promise.all([
-    capture('relaunch-click', click),
-    capture('relaunch-source-exit', () => waitForExit(child)),
-  ]);
+  const clickFailure = await capture('relaunch-click', click);
+  const exitFailure = clickFailure ? null : await capture('relaunch-source-exit', () => waitForExit(child));
   const failures = [clickFailure, exitFailure].filter(Boolean);
   if (validateRequest) {
     const requestFailure = await capture('relaunch-request', validateRequest);

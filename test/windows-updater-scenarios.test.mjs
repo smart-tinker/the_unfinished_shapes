@@ -1188,3 +1188,63 @@ test('NSIS directory-set result enums are sanitized and mapped from the native p
   const emitted = source.indexOf('Write-WizardEvent -Name $messageOutcomeEvent');
   assert.ok(dispatchMapping >= 0 && rejectedMapping > dispatchMapping && emitted > rejectedMapping);
 });
+test('installer starts the source-exit window after late confirmation', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const child = new EventEmitter();
+  child.exitCode = null;
+  let confirmApproval;
+  const approval = new Promise(resolve => { confirmApproval = resolve; });
+  let markClickStarted;
+  const clickStarted = new Promise(resolve => { markClickStarted = resolve; });
+  let cleanedChild;
+  const events = [];
+
+  try {
+    const outcomesPromise = runWindowsUpdaterScenarios({
+      portable: async () => {},
+      installer: () => runWindowsRelaunch({
+        child,
+        click: async () => {
+          markClickStarted();
+          await approval;
+          events.push('approval');
+          child.exitCode = 0;
+          child.emit('exit', 0);
+        },
+        waitForExit: observedChild => {
+          events.push('exit-window');
+          return waitForExit(observedChild, 30000);
+        },
+        cleanup: async observedChild => { cleanedChild = observedChild; },
+      }),
+    });
+
+    await clickStarted;
+    t.mock.timers.tick(30000);
+    confirmApproval();
+
+    const outcomes = await outcomesPromise;
+    assert.equal(outcomes.installer.status, 'fulfilled', 'a fast source exit after late approval must still be observed');
+    assert.deepEqual(events, ['approval', 'exit-window']);
+    assert.equal(cleanedChild, child);
+    assert.equal(child.listenerCount('exit'), 0);
+  } finally {
+    t.mock.timers.reset();
+  }
+});
+test('bounded child exit observes a signal received before listener setup', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = 'SIGTERM';
+  child.emit('exit', null, 'SIGTERM');
+
+  try {
+    const result = waitForExit(child, 30000).then(() => null, error => error);
+    t.mock.timers.tick(30000);
+    assert.equal(await result, null);
+    assert.equal(child.listenerCount('exit'), 0);
+  } finally {
+    t.mock.timers.reset();
+  }
+});
