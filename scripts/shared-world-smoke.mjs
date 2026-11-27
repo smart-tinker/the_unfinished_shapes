@@ -168,23 +168,33 @@ async function reportJumpTrace(client, trace, gateResult, gateAt, initialSnapsho
     Number.isSafeInteger(event.serverRevision) && Object.values(event.serverPosition ?? {}).every(Number.isFinite));
   const movementResponsesComplete = raw.droppedEvents === 0 && !badOrder && pending === 0 && requests.length === responses.length && jumpResponsesComplete &&
     responses.every(event => jumpTraceResults.has(event.outcome) && event.outcome !== 'request-failed');
+  // Polling can miss intermediate revisions; only a state-bearing result per POST proves a negative.
+  const movementStateResponsesComplete = responses.every(event => Number.isSafeInteger(event.serverRevision) && Object.values(event.serverPosition ?? {}).every(Number.isFinite));
   const times = observations.map(item => item.at - startAt), maxGapMs = times.slice(1).reduce((max, at, index) => Math.max(max, at - times[index]), 0);
   const samplesComplete = trace.droppedObservations === 0 && observations.length > 0 && times[0] <= 200 &&
     times.at(-1) >= durationMs - 300 && maxGapMs <= 200 &&
     observations.every(item => item.state.valid && [item.hud.x, item.hud.y, item.hud.z].every(Number.isFinite) && Number.isSafeInteger(item.hud.uiRevision));
-  const matchedRevisions = observations.filter(item => item.state.revision === item.hud.uiRevision).length;
+  const sameRevisionSamples = observations.filter(item => item.state.revision === item.hud.uiRevision).length;
   const jumpStates = events.filter(event => event.type === 'jump.response' && event.responseReceived && Number.isSafeInteger(event.serverRevision) &&
     Object.values(event.serverPosition ?? {}).every(Number.isFinite));
-  const knownRevisions = new Set([...observations.map(item => item.state.revision), ...jumpStates.map(event => event.serverRevision), initialSnapshot?.revision].filter(Number.isSafeInteger));
-  const linkedHudSamples = observations.filter(item => Number.isSafeInteger(item.hud.uiRevision) && knownRevisions.has(item.hud.uiRevision)).length;
-  const hudGateRevisionLinked = gateResult !== 'airborne' || (Number.isSafeInteger(raw.hudGate?.uiRevision) && knownRevisions.has(raw.hudGate.uiRevision));
-  const hudRevisionStatus = observations.length && linkedHudSamples === observations.length && hudGateRevisionLinked ? 'linked' : 'UNKNOWN';
+  const initialPlayer = initialSnapshot?.players?.find(item => item.id === client.id);
+  const initialState = { revision: initialSnapshot?.revision, position: tracePosition(initialPlayer?.position) };
+  const serverStates = [
+    initialState,
+    ...observations.filter(item => item.state.valid).map(item => ({ revision: item.state.revision, position: item.state.position })),
+    ...jumpStates.map(event => ({ revision: event.serverRevision, position: event.serverPosition })),
+  ].filter(state => Number.isSafeInteger(state.revision) && Object.values(state.position).every(Number.isFinite));
+  const matchesHudState = hud => Number.isSafeInteger(hud?.uiRevision) && ['x', 'y', 'z'].every(axis => Number.isFinite(hud[axis])) &&
+    serverStates.some(state => state.revision === hud.uiRevision && ['x', 'y', 'z'].every(axis => Number(state.position[axis].toFixed(1)) === hud[axis]));
+  const linkedHudSamples = observations.filter(item => matchesHudState(item.hud)).length;
+  const hudGateStateLinked = gateResult !== 'airborne' || matchesHudState(raw.hudGate);
+  const hudRevisionStatus = observations.length && linkedHudSamples === observations.length && hudGateStateLinked ? 'linked' : 'UNKNOWN';
   const qualifying = [
     ...observations.filter(item => item.state.valid && item.state.position.x >= 15 && item.state.position.x < 17 && item.state.position.y > 0).map(item => ({ revision: item.state.revision, source: 'sample', atMs: item.state.at - startAt })),
     ...jumpStates.filter(event => event.serverPosition.x >= 15 && event.serverPosition.x < 17 && event.serverPosition.y > 0).map(event => ({ revision: event.serverRevision, source: 'jump-response', atMs: event.at - startAt })),
   ];
   const fullWindow = gateResult === 'timeout' && durationMs >= 5000;
-  const serverCoverageComplete = fullWindow && movementResponsesComplete && samplesComplete && hudRevisionStatus === 'linked' && trace.stateErrors === 0;
+  const serverCoverageComplete = fullWindow && movementResponsesComplete && movementStateResponsesComplete && samplesComplete && hudRevisionStatus === 'linked' && trace.stateErrors === 0;
   const qualifyingRevision = { status: qualifying.length ? 'observed' : serverCoverageComplete ? 'not_observed' : 'UNKNOWN',
     revisions: [...new Set(qualifying.map(item => item.revision))], evidence: qualifying };
   assert.ok(qualifyingRevision.status !== 'not_observed' || serverCoverageComplete, 'A negative revision result requires complete trace coverage.');
@@ -197,9 +207,9 @@ async function reportJumpTrace(client, trace, gateResult, gateAt, initialSnapsho
   console.log('TUS_JUMP_TRACE ' + JSON.stringify({
     summary,
     window: { result: gateResult, durationMs, fullWindow, qualifyingRevision,
-      hudRevisionStatus, hudGateStatus: gateResult === 'airborne' ? (hudGateRevisionLinked ? 'linked' : 'UNKNOWN') : 'not_observed',
-      hudGate: raw.hudGate && Number.isSafeInteger(raw.hudGate.at) ? { atMs: raw.hudGate.at - startAt, x: raw.hudGate.x, y: raw.hudGate.y, uiRevision: raw.hudGate.uiRevision } : null,
-      matchedRevisions, linkedHudSamples, sampleCount: observations.length, samplesComplete, movementResponsesComplete, jumpResponsesComplete, serverCoverageComplete,
+      hudRevisionStatus, hudGateStatus: gateResult === 'airborne' ? (hudGateStateLinked ? 'linked' : 'UNKNOWN') : 'not_observed',
+      hudGate: raw.hudGate && Number.isSafeInteger(raw.hudGate.at) ? { atMs: raw.hudGate.at - startAt, x: raw.hudGate.x, y: raw.hudGate.y, z: raw.hudGate.z, uiRevision: raw.hudGate.uiRevision } : null,
+      sameRevisionSamples, linkedHudSamples, sampleCount: observations.length, samplesComplete, movementResponsesComplete, movementStateResponsesComplete, jumpResponsesComplete, serverCoverageComplete,
       stateErrors: trace.stateErrors, droppedEvents: raw.droppedEvents ?? null, droppedObservations: trace.droppedObservations,
       timeline: events.map(event => ({ ...event, atMs: event.at - startAt, at: undefined })),
       observations: observations.map(item => ({
@@ -417,19 +427,19 @@ await withSmokeCleanup(async () => {
   await focus(alice);
   const jumpTrace = await installJumpTrace(alice);
   await alice.page.keyboard.up('d');
-  await startJumpTraceWindow(alice, jumpTrace);
   await alice.page.keyboard.down('d');
   await alice.page.keyboard.down('Space');
+  await startJumpTraceWindow(alice, jumpTrace);
   let gateAt, gateResult = 'timeout';
   try {
     await alice.page.waitForFunction(() => {
       const parts = document.querySelector('#coordinates')?.textContent.split(' · ');
-      const x = Number(parts?.[0]?.slice(2)), y = Number(parts?.[1]?.slice(2));
+      const x = Number(parts?.[0]?.slice(2)), y = Number(parts?.[1]?.slice(2)), z = Number(parts?.[2]?.slice(2));
       const qualifies = Number.isFinite(x) && Number.isFinite(y) && x >= 15 && x < 17 && y > 0;
       const trace = window.__TUS_SMOKE_JUMP_TRACE_STATE;
       if (qualifies && trace && trace.hudGate === null) {
         const revision = /^REV (\d+)$/.exec(document.querySelector('#revision')?.textContent || '');
-        trace.hudGate = { at: Date.now(), x, y, uiRevision: revision && Number.isSafeInteger(Number(revision[1])) ? Number(revision[1]) : null };
+        trace.hudGate = { at: Date.now(), x, y, z, uiRevision: revision && Number.isSafeInteger(Number(revision[1])) ? Number(revision[1]) : null };
       }
       return qualifies;
     }, undefined, { polling: 'raf', timeout: 5000 });
