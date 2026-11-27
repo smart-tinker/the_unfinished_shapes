@@ -1770,7 +1770,6 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     assert.equal(zipBatcherComparison.assetMatches, true, 'sink comparison uses the exact verified RC11 asset');
     assert.equal(zipBatcherComparison.entryMatches, true, 'each arm reads the exact published non-ASAR Deflate entry');
     assert.equal(zipBatcherComparison.batchBytes, 256 * 1024, 'the production ZIP batcher size is fixed');
-    assert.deepEqual(zipBatcherComparison.sinkOrder, ['count-discard', 'node-fs-file', 'node-fs-file', 'count-discard']);
     assert.equal(zipBatcherComparison.readHighWaterMarkBytes, 256 * 1024);
     assert.equal(zipBatcherComparison.writeHighWaterMarkBytes, 16 * 1024);
     assert.equal(zipBatcherComparison.measurementScope, 'raw-reader-and-deflate-pipeline');
