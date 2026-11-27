@@ -153,6 +153,59 @@ test('TUS main diagnostic preserves a bounded tampered-bundle verifier result', 
   assert.equal(control.assetMatches, true);
   assert.doesNotMatch(JSON.stringify(control), /raw verifier exception/);
 });
+test('TUS release fetch diagnostics retain bounded quota evidence by phase and page', () => {
+  const records = safeMainDiagnostics([
+    {
+      stage: 'release-fetch', phase: 'startup', page: 1, count: 1,
+      status: 429, remainingZero: false, safeFailure: 'rate_limited',
+      requestUrl: 'https://api.github.com/private-query-token',
+      responseHeaders: { authorization: 'PRIVATE_HEADER' }, responseBody: 'private response body',
+    },
+    {
+      stage: 'release-fetch', phase: 'manual', page: 1, count: 1,
+      status: 403, remainingZero: true, safeFailure: 'rate_limited',
+    },
+    {
+      stage: 'release-fetch', phase: 'manual', page: 2, count: 2,
+      status: 200, remainingZero: false, safeFailure: 'none',
+    },
+    {
+      stage: 'release-fetch', phase: 'private phase', page: 11, count: 41,
+      status: 999, remainingZero: '0', safeFailure: 'C:/private/error',
+    },
+  ], { sha256: 'a'.repeat(64) }, 'candidate.zip', 'v0.1.0-rc11');
+
+  assert.deepEqual(records.map(({ stage, phase, page, count, status, remainingZero, safeFailure }) => [
+    stage, phase, page, count, status, remainingZero, safeFailure,
+  ]), [
+    ['release-fetch', 'startup', 1, 1, 429, false, 'rate_limited'],
+    ['release-fetch', 'manual', 1, 1, 403, true, 'rate_limited'],
+    ['release-fetch', 'manual', 2, 2, 200, false, 'none'],
+    ['release-fetch', 'unknown', null, null, null, null, 'unknown'],
+  ]);
+});
+
+test('TUS release fetch diagnostics never retain request details or response data', () => {
+  const [diagnostic] = safeMainDiagnostics([{
+    stage: 'release-fetch',
+    phase: 'manual',
+    page: 1,
+    count: 1,
+    status: 403,
+    remainingZero: true,
+    safeFailure: 'rate_limited',
+    requestUrl: 'https://api.github.com/private-query-token',
+    responseHeaders: { authorization: 'Bearer private-test-token' },
+    responseBody: 'private response body',
+    rawError: 'C:/private/path',
+  }], { sha256: 'a'.repeat(64) }, 'candidate.zip', 'v0.1.0-rc11');
+
+  const serialized = JSON.stringify(diagnostic);
+  for (const forbidden of ['private-query-token', 'private-test-token', 'private response body', 'C:/private/path']) {
+    assert.equal(serialized.includes(forbidden), false, 'raw request or response data is omitted');
+  }
+});
+
 test('TUS runtime boundary preserves only fixed import and renderer-invoke outcomes', () => {
   const manifestFile = { sha256: 'a'.repeat(64) };
   const assetName = 'candidate.zip';
