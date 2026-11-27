@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Writable } from 'node:stream';
 import * as updatePackage from '../src/update-package.mjs';
-import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from '../scripts/updater-smoke-diagnostics.mjs';
+import { safeMainDiagnostics, safeZipBatcherComparison, updaterZipStreamSampleOffsetsMs } from '../scripts/updater-smoke-diagnostics.mjs';
 
 test('TUS Windows ZIP writer reports bounded finish-to-close time at the safe log boundary', async () => {
   const sink = new EventEmitter();
@@ -153,6 +153,64 @@ test('TUS main diagnostic preserves a bounded tampered-bundle verifier result', 
   assert.equal(control.assetMatches, true);
   assert.doesNotMatch(JSON.stringify(control), /raw verifier exception/);
 });
+test('TUS release fetch diagnostics retain bounded quota evidence by phase and page', () => {
+  const records = safeMainDiagnostics([
+    {
+      stage: 'release-fetch', phase: 'startup', page: 1, count: 1,
+      status: 429, remainingZero: false, safeFailure: 'rate_limited',
+      requestUrl: 'https://api.github.com/private-query-token',
+      responseHeaders: { authorization: 'PRIVATE_HEADER' }, responseBody: 'private response body',
+    },
+    {
+      stage: 'release-fetch', phase: 'manual', page: 1, count: 1,
+      status: 403, remainingZero: true, safeFailure: 'rate_limited',
+    },
+    {
+      stage: 'release-fetch', phase: 'manual', page: 2, count: 2,
+      status: 200, remainingZero: false, safeFailure: 'none',
+    },
+    {
+      stage: 'release-fetch', phase: 'manual', page: 3, count: 3,
+      status: null, remainingZero: null, safeFailure: 'timeout',
+    },
+    {
+      stage: 'release-fetch', phase: 'private phase', page: 11, count: 41,
+      status: 999, remainingZero: '0', safeFailure: 'C:/private/error',
+    },
+  ], { sha256: 'a'.repeat(64) }, 'candidate.zip', 'v0.1.0-rc11');
+
+  assert.deepEqual(records.map(({ stage, phase, page, count, status, remainingZero, safeFailure }) => [
+    stage, phase, page, count, status, remainingZero, safeFailure,
+  ]), [
+    ['release-fetch', 'startup', 1, 1, 429, false, 'rate_limited'],
+    ['release-fetch', 'manual', 1, 1, 403, true, 'rate_limited'],
+    ['release-fetch', 'manual', 2, 2, 200, false, 'none'],
+    ['release-fetch', 'manual', 3, 3, null, null, 'timeout'],
+    ['release-fetch', 'unknown', null, null, null, null, 'unknown'],
+  ]);
+});
+
+test('TUS release fetch diagnostics never retain request details or response data', () => {
+  const [diagnostic] = safeMainDiagnostics([{
+    stage: 'release-fetch',
+    phase: 'manual',
+    page: 1,
+    count: 1,
+    status: 403,
+    remainingZero: true,
+    safeFailure: 'rate_limited',
+    requestUrl: 'https://api.github.com/private-query-token',
+    responseHeaders: { authorization: 'Bearer private-test-token' },
+    responseBody: 'private response body',
+    rawError: 'C:/private/path',
+  }], { sha256: 'a'.repeat(64) }, 'candidate.zip', 'v0.1.0-rc11');
+
+  const serialized = JSON.stringify(diagnostic);
+  for (const forbidden of ['private-query-token', 'private-test-token', 'private response body', 'C:/private/path']) {
+    assert.equal(serialized.includes(forbidden), false, 'raw request or response data is omitted');
+  }
+});
+
 test('TUS runtime boundary preserves only fixed import and renderer-invoke outcomes', () => {
   const manifestFile = { sha256: 'a'.repeat(64) };
   const assetName = 'candidate.zip';
@@ -336,6 +394,42 @@ test('TUS extraction snapshot preserves only fixed ZIP write substages and exact
   assert.deepEqual(diagnostics.map(item => item.extractSubstage), [...substages, 'unknown']);
   assert.deepEqual(diagnostics.map(item => item.extractAppAsarEntry), [false, false, false, true, false, false]);
   assert.equal(JSON.stringify(diagnostics).includes('C:/private/path'), false);
+});
+
+
+test('TUS ZIP entry timing separates pre-pipeline setup from pipeline and keeps only bounded values', () => {
+  const raw = updatePackage.safeZipExtractionStreamSnapshot(
+    null, null, 12,
+    { compressionMethod: 8, compressedSize: 10, uncompressedSize: 20 },
+    null, null,
+    {
+      stage: 'pipeline', prePipelineMs: 31, pipelineMs: 47,
+      sourcePath: 'C:/private/archive.zip', entryName: 'private-entry',
+    },
+  );
+  const [diagnostic] = safeMainDiagnostics([{
+    stage: 'extract-archive', status: 'starting', extractStreamSnapshot: raw,
+  }], { sha256: 'a'.repeat(64) }, 'candidate.zip', 'v0.1.0-rc11');
+  assert.deepEqual({
+    stage: diagnostic.streamSnapshot.streamTimingStage,
+    prePipelineMs: diagnostic.streamSnapshot.prePipelineMs,
+    pipelineMs: diagnostic.streamSnapshot.pipelineMs,
+  }, { stage: 'pipeline', prePipelineMs: 31, pipelineMs: 47 });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /C:\/private\/archive\.zip|private-entry/);
+
+  const [bounded] = safeMainDiagnostics([{
+    stage: 'extract-archive', status: 'starting',
+    extractStreamSnapshot: {
+      ...raw, streamTimingStage: 'private-stage',
+      prePipelineMs: 120_001, pipelineMs: -1, privateField: 'C:/private/path',
+    },
+  }], { sha256: 'a'.repeat(64) }, 'candidate.zip', 'v0.1.0-rc11');
+  assert.deepEqual({
+    stage: bounded.streamSnapshot.streamTimingStage,
+    prePipelineMs: bounded.streamSnapshot.prePipelineMs,
+    pipelineMs: bounded.streamSnapshot.pipelineMs,
+  }, { stage: 'unknown', prePipelineMs: 120_000, pipelineMs: null });
+  assert.doesNotMatch(JSON.stringify(bounded), /private-stage|privateField|C:\/private\/path/);
 });
 
 
@@ -627,4 +721,60 @@ test('TUS launch snapshot keeps bounded file rehash read state', () => {
     ['reading', 0xffff_ffff],
   ]);
   assert.equal(JSON.stringify(diagnostics).includes('C:/private/path'), false);
+});
+
+test('TUS verified ZIP comparison keeps counterbalanced memory Deflate sink arms safe', () => {
+  const sinkArm = (trial, arm, sink, decodedBytes, sinkBytesProcessed) => ({
+    trial, arm, sink, outcome: 'time-limit', batchBytes: 262_144,
+    wallMs: 15_000, cpuUserMs: 30, cpuSystemMs: 20,
+    compressedBytesRead: null, decodedBytes, sinkBytesProcessed,
+    sinkWritableLength: 16_384, sinkNeedDrain: true, writeCallbackWaitMs: 900,
+    sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: true,
+    cleanupStatus: sink === 'node-fs-file' ? 'removed' : 'not-created',
+    sourcePath: 'C:/private/archive.zip', entryName: 'private-entry',
+    error: 'private read error',
+  });
+  const comparison = safeZipBatcherComparison({
+    assetMatches: true, memorySourceVerified: true,
+    entrySequence: 12, compression: 'deflate', entryCompressedSize: 111_522_616,
+    entryUncompressedSize: 249_832_448, entryNonAsar: true, entryMatches: true,
+    batchBytes: 262_144, readHighWaterMarkBytes: 262_144, writeHighWaterMarkBytes: 16_384,
+    arms: [
+      sinkArm(1, 'memory-file', 'node-fs-file', 20_000, 19_000),
+      sinkArm(1, 'memory-discard', 'count-discard', 20_000, 20_000),
+      sinkArm(2, 'memory-discard', 'count-discard', 24_000, 24_000),
+      sinkArm(2, 'memory-file', 'node-fs-file', 24_000, 24_000),
+    ],
+  });
+  const [invalid] = safeZipBatcherComparison({
+    arms: [{
+      trial: 1, arm: 'C:/private/invalid-arm', sink: 'C:/private/sink',
+      batchBytes: 262_144, wallMs: 60_001, cpuUserMs: Number.MAX_SAFE_INTEGER,
+      cpuSystemMs: 'private', decodedBytes: 1_073_741_825,
+      sinkBytesProcessed: 1_073_741_825, sinkWritableLength: Number.MAX_SAFE_INTEGER,
+      sinkNeedDrain: 'private', writeCallbackWaitMs: 120_001,
+      cleanupStatus: 'private', sourcePath: 'C:/private/archive/entry.bin', error: 'private error',
+    }],
+  }).arms;
+  const serialized = JSON.stringify([comparison, invalid]);
+  for (const privateValue of [
+    'C:/private/archive.zip', 'C:/private/archive/entry.bin', 'C:/private/invalid-arm',
+    'C:/private/sink', 'private-entry', 'private read error', 'private error',
+  ]) assert.equal(serialized.includes(privateValue), false);
+  assert.deepEqual([invalid.arm, invalid.sink, invalid.batchBytes, invalid.wallMs, invalid.cpuUserMs,
+    invalid.cpuSystemMs, invalid.decodedBytes, invalid.sinkBytesProcessed, invalid.sinkWritableLength,
+    invalid.sinkNeedDrain, invalid.writeCallbackWaitMs, invalid.cleanupStatus, invalid.countersMatch], [
+    'unknown', 'unknown', null, null, null, null, null, null, null, null, null, 'unknown', null,
+  ]);
+  assert.equal(comparison.entryMatches, true);
+  assert.equal(comparison.memorySourceVerified, true);
+  assert.equal(comparison.measurementScope, 'verified-memory-deflate-file-vs-discard');
+  assert.equal(comparison.cacheCaveat, 'verified-buffer; filesystem-write-cache-not-reset');
+  assert.deepEqual(comparison.arms.map(({ trial, arm, batchBytes, sink, compressedBytesRead, decodedBytes, sinkBytesProcessed, sinkWritableLength, sinkNeedDrain, writeCallbackWaitMs, cleanupStatus }) =>
+    ({ trial, arm, batchBytes, sink, compressedBytesRead, decodedBytes, sinkBytesProcessed, sinkWritableLength, sinkNeedDrain, writeCallbackWaitMs, cleanupStatus })), [
+    { trial: 1, arm: 'memory-file', batchBytes: 262_144, sink: 'node-fs-file', compressedBytesRead: null, decodedBytes: 20_000, sinkBytesProcessed: 19_000, sinkWritableLength: 16_384, sinkNeedDrain: true, writeCallbackWaitMs: 900, cleanupStatus: 'removed' },
+    { trial: 1, arm: 'memory-discard', batchBytes: 262_144, sink: 'count-discard', compressedBytesRead: null, decodedBytes: 20_000, sinkBytesProcessed: 20_000, sinkWritableLength: 16_384, sinkNeedDrain: true, writeCallbackWaitMs: 900, cleanupStatus: 'not-created' },
+    { trial: 2, arm: 'memory-discard', batchBytes: 262_144, sink: 'count-discard', compressedBytesRead: null, decodedBytes: 24_000, sinkBytesProcessed: 24_000, sinkWritableLength: 16_384, sinkNeedDrain: true, writeCallbackWaitMs: 900, cleanupStatus: 'not-created' },
+    { trial: 2, arm: 'memory-file', batchBytes: 262_144, sink: 'node-fs-file', compressedBytesRead: null, decodedBytes: 24_000, sinkBytesProcessed: 24_000, sinkWritableLength: 16_384, sinkNeedDrain: true, writeCallbackWaitMs: 900, cleanupStatus: 'removed' },
+  ]);
 });
