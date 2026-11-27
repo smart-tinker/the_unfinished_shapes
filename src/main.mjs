@@ -18,7 +18,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld, gameToolSession, fullscreenRestoreBounds;
 let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, extractedUpdate = null, updateDownloadController = null;
 const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic')
-  ? { moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null, launchStatus: 'not-started', launchPhase: 'unknown', launchSubstage: 'not-started', launchReadPhase: 'not-started', launchReadBytes: 0, launchDialog: 'not-started', launchDecision: 'not-started' }
+  ? { releaseFetches: [], moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null, launchStatus: 'not-started', launchPhase: 'unknown', launchSubstage: 'not-started', launchReadPhase: 'not-started', launchReadBytes: 0, launchDialog: 'not-started', launchDecision: 'not-started' }
   : null;
 if (updaterSmokeBoundary) {
   globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
@@ -81,6 +81,57 @@ const attachQuitGuard = installQuitGuard({
 function assertSender(event) { if(event.sender !== win.webContents) throw new Error('Untrusted sender'); }
 function handle(name, fn) { ipcMain.handle(name, (event,...args) => { assertSender(event); return fn(...args); }); }
 function serverUrl(value) { const u = new URL(value); if(!['http:','https:'].includes(u.protocol) || u.username || u.password || u.pathname !== '/' || u.search || u.hash) throw new Error('Use an HTTP(S) server origin without credentials or paths'); return u.origin; }
+async function listPublishedReleasesForSmoke(phase) {
+  if (!updaterSmokeBoundary) return listPublishedReleases();
+  const firstRecord = updaterSmokeBoundary.releaseFetches.length;
+  let requestCount = 0;
+  const observedFetch = async (input, init) => {
+    let url;
+    try { url = new URL(typeof input === 'string' ? input : input?.url); } catch {}
+    const method = typeof init?.method === 'string' ? init.method.toUpperCase()
+      : typeof input?.method === 'string' ? input.method.toUpperCase() : 'GET';
+    if (!url || method !== 'GET' || url.origin !== 'https://api.github.com' ||
+        url.pathname !== '/repos/smart-tinker/the_unfinished_shapes/releases' ||
+        url.searchParams.get('per_page') !== '100') return fetch(input, init);
+
+    const rawPage = url.searchParams.get('page');
+    const page = /^\d{1,2}$/.test(rawPage || '') && Number(rawPage) >= 1 && Number(rawPage) <= 10
+      ? Number(rawPage) : null;
+    const record = {
+      phase, page, count: ++requestCount, status: null, remainingZero: null, safeFailure: 'unknown',
+    };
+    if (updaterSmokeBoundary.releaseFetches.length < 40) updaterSmokeBoundary.releaseFetches.push(record);
+    try {
+      const response = await fetch(input, init);
+      const status = Number.isInteger(response?.status) && response.status >= 100 && response.status <= 599
+        ? response.status : null;
+      let remaining = null;
+      try { remaining = response?.headers?.get?.('x-ratelimit-remaining') ?? null; } catch {}
+      const remainingZero = typeof remaining === 'string' && /^\d{1,6}$/.test(remaining)
+        ? Number(remaining) === 0 : null;
+      record.status = status;
+      record.remainingZero = remainingZero;
+      record.safeFailure = status === 429 || (status === 403 && remainingZero === true)
+        ? 'rate_limited'
+        : response?.ok === true ? 'none'
+          : response?.ok === false && status !== null ? 'http_error' : 'unknown';
+      return response;
+    } catch (error) {
+      record.safeFailure = safeReleaseCheckErrorCode(error);
+      throw error;
+    }
+  };
+  try {
+    return await listPublishedReleases(observedFetch);
+  } catch (error) {
+    const last = updaterSmokeBoundary.releaseFetches.slice(firstRecord).at(-1);
+    if (last && ['none', 'unknown'].includes(last.safeFailure)) {
+      last.safeFailure = safeReleaseCheckErrorCode(error);
+    }
+    throw error;
+  }
+}
+
 function currentControlBridge(threadId) {
   const current = bridge;
   if (!current?.threadId) throw new Error('Codex is disconnected.');
@@ -113,14 +164,14 @@ app.whenReady().then(async()=>{
   handle('settings:load', async()=>{const current=await settings();return {...current,serverUrl:current.serverUrl||localUrl,token:current.serverUrl?'':localToken};});
   handle('settings:save', async(s)=>{ const clean={...s,serverUrl:serverUrl(s.serverUrl||localUrl) === localUrl ? '' : serverUrl(s.serverUrl)}; await saveSettings(app.getPath('userData'),clean); });
   handle('updates:startup-check', async () => {
-    try { return { status: 'checked', options: startupUpdateOptions(await listPublishedReleases(), app.getVersion()) }; }
+    try { return { status: 'checked', options: startupUpdateOptions(await listPublishedReleasesForSmoke('startup'), app.getVersion()) }; }
     catch (error) { return { status: 'unavailable', errorCode: safeReleaseCheckErrorCode(error) }; }
   });
   handle('updates:check', async distribution => {
     if (updateDownloadController) throw new Error('Wait for the current update download to finish or cancel it.');
     if (typeof distribution !== 'string' || !['installer', 'portable'].includes(distribution)) throw new Error('Invalid update package choice.');
     const channel = (await settings()).updateChannel || 'stable';
-    const releases = await listPublishedReleases();
+    const releases = await listPublishedReleasesForSmoke('manual');
     const release = releases[channel];
     availableUpdate = null; downloadedUpdate = null; extractedUpdate = null;
     if (!release) return { status: 'none', channel, currentVersion: app.getVersion() };

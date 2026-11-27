@@ -170,6 +170,10 @@ test('TUS release fetch diagnostics retain bounded quota evidence by phase and p
       status: 200, remainingZero: false, safeFailure: 'none',
     },
     {
+      stage: 'release-fetch', phase: 'manual', page: 3, count: 3,
+      status: null, remainingZero: null, safeFailure: 'timeout',
+    },
+    {
       stage: 'release-fetch', phase: 'private phase', page: 11, count: 41,
       status: 999, remainingZero: '0', safeFailure: 'C:/private/error',
     },
@@ -181,6 +185,7 @@ test('TUS release fetch diagnostics retain bounded quota evidence by phase and p
     ['release-fetch', 'startup', 1, 1, 429, false, 'rate_limited'],
     ['release-fetch', 'manual', 1, 1, 403, true, 'rate_limited'],
     ['release-fetch', 'manual', 2, 2, 200, false, 'none'],
+    ['release-fetch', 'manual', 3, 3, null, null, 'timeout'],
     ['release-fetch', 'unknown', null, null, null, null, 'unknown'],
   ]);
 });

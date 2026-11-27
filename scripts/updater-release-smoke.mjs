@@ -287,6 +287,27 @@ async function fileDigest(filePath) {
   return hash.digest('hex');
 }
 
+async function logUpdaterReleaseFetchObservation(current, checkpoint) {
+  const live = await withTimeout(
+    current.instance.evaluate(() => globalThis.__tusUpdaterSmokeBoundary?.releaseFetches ?? null),
+    'Updater release fetch snapshot',
+    5000,
+  ).catch(() => null);
+  const available = Array.isArray(live);
+  const requests = safeMainDiagnostics(
+    available ? live : [],
+    { sha256: '' },
+    '',
+    '',
+  ).map(({ phase, page, count, status, remainingZero, safeFailure }) => ({
+    phase, page, count, status, remainingZero, safeFailure,
+  }));
+  console.log('TUS_UPDATER_RELEASE_FETCH ' + JSON.stringify({
+    checkpoint, available, count: requests.length, requests,
+  }));
+  return { available, requests };
+}
+
 async function updaterRuntimeBoundary(current, manifestFile, assetName, tag, snapshotTimeoutMs = 5000) {
   const [main, rendererInvoke, rendererLaunch] = await Promise.all([
     withTimeout(current.instance.evaluate(() => globalThis.__tusUpdaterSmokeBoundary || null), 'Updater main boundary snapshot', snapshotTimeoutMs).catch(() => null),
@@ -1313,6 +1334,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     'prerelease',
     'keyboard activation saves the selected channel',
   );
+  await logUpdaterReleaseFetchObservation(current, 'before-first-exit');
   const firstProcess = current.instance.process();
   const firstExit = waitForExit(firstProcess);
   await current.instance.evaluate(({ app }) => app.quit());
@@ -1327,7 +1349,12 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   await current.page.locator('#settings').waitFor({ state: 'visible', timeout: 5000 });
   assert.equal(await current.page.locator('#update-channel').inputValue(), 'prerelease', 'the keyboard-selected channel survives restart and reopening');
   if (process.platform === 'win32') await current.page.locator('#update-distribution').selectOption(distribution);
-  await current.page.waitForFunction(() => !document.querySelector('#updates-notice')?.hidden, null, { timeout: 30000 });
+  let restartStartupFetches;
+  try {
+    await current.page.waitForFunction(() => !document.querySelector('#updates-notice')?.hidden, null, { timeout: 30000 });
+  } finally {
+    restartStartupFetches = await logUpdaterReleaseFetchObservation(current, 'restart-startup');
+  }
   const startupNotice = await current.page.locator('#updates-notice').getAttribute('title');
   const startupErrorCode = (await current.page.locator('#updates-notice').getAttribute('data-error-code')) || null;
   if (startupErrorCode) {
@@ -1337,13 +1364,24 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     console.log('Updater startup release diagnostic ' + JSON.stringify({ status: 'error', errorCode }));
   }
   const startupAvailable = !startupErrorCode && /available\./.test(startupNotice || '');
+  const manualRequestsBeforeDispatch = restartStartupFetches?.available
+    ? restartStartupFetches.requests.filter(item => item.phase === 'manual').length : null;
   if (!startupAvailable) {
     console.log('TUS_UPDATER_MANUAL_CHECK ' + JSON.stringify({
       startup: 'unavailable',
       uiAction: 'not-dispatched',
-      manualGetObservation: 'not-instrumented',
+      manualGetObservation: manualRequestsBeforeDispatch === 0 ? 'not-observed'
+        : manualRequestsBeforeDispatch === null ? 'unknown' : 'observed',
+      manualGetCount: manualRequestsBeforeDispatch,
     }));
   }
+  assert.equal(restartStartupFetches?.available, true, 'the packaged main release-fetch observer is available');
+  assert.ok(restartStartupFetches.requests.some(item => item.phase === 'startup'), 'startup selection uses an observed release GET');
+  if (startupAvailable) {
+    assert.ok(restartStartupFetches.requests.filter(item => item.phase === 'startup')
+      .every(item => item.status !== null && item.safeFailure === 'none'), 'available startup check completed its observed HTTP pages');
+  }
+  if (!startupAvailable) assert.equal(manualRequestsBeforeDispatch, 0, 'failed startup is not followed by a manual release GET');
   assert.equal(startupErrorCode, null, 'manual update check is not dispatched after startup failure');
   assert.match(startupNotice || '', /available\./, 'startup checks expose a published update without installing it');
   const startupTag = startupNotice?.match(/Prerelease (v\d+\.\d+\.\d+-rc\.?\d+) is available\./)?.[1];
@@ -1352,13 +1390,21 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
 
   await observeUpdaterKeyboardActions(current.page);
   await activateUpdaterButtonByKeyboard(current.page, 'updates-check');
-  console.log('TUS_UPDATER_MANUAL_CHECK ' + JSON.stringify({
-    startup: 'available',
-    uiAction: 'dispatched',
-    manualGetObservation: 'not-instrumented',
-  }));
-
-  await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.includes(' is available.'), null, { timeout: 30000 });
+  let manualFetches;
+  try {
+    await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.includes(' is available.'), null, { timeout: 30000 });
+  } finally {
+    const manualSnapshot = await logUpdaterReleaseFetchObservation(current, 'restart-manual');
+    manualFetches = manualSnapshot.available ? manualSnapshot.requests.filter(item => item.phase === 'manual') : null;
+    console.log('TUS_UPDATER_MANUAL_CHECK ' + JSON.stringify({
+      startup: 'available',
+      uiAction: 'dispatched',
+      manualGetObservation: manualFetches === null ? 'unknown' : manualFetches.length ? 'observed' : 'not-observed',
+      manualGetCount: manualFetches?.length ?? null,
+    }));
+  }
+  assert.ok(manualFetches?.length > 0, 'keyboard manual check performs a real release GET');
+  assert.ok(manualFetches.every(item => item.status !== null && item.safeFailure === 'none'), 'manual release GET pages returned successful HTTP responses');
   const availability = await current.page.locator('#updates-status').innerText();
   assert.match(availability, /^Prerelease · may be unstable: /, 'manual check uses the saved prerelease channel');
   const tag = availability.match(/(v\d+\.\d+\.\d+-rc\.?\d+)/)?.[1];

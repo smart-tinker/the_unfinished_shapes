@@ -24,6 +24,8 @@ const safeVerifierSetupSteps = new Set([
 ]);
 
 const safeModuleFailureCodes = new Set(['MODULE_IMPORT_REJECTED', 'ERR_MODULE_NOT_FOUND', 'SyntaxError']);
+const safeReleaseFetchPhases = new Set(['startup', 'manual']);
+const safeReleaseFetchFailures = new Set(['none', 'rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed', 'unknown']);
 const safeExtractRendererStatuses = new Map([
   ['Choose a destination folder…', 'pending'],
   ['Verified archive extracted. You can now launch the new copy.', 'verified'],
@@ -444,9 +446,11 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
   return (Array.isArray(live) ? live : []).slice(0, 40).map(item => ({
     bundleIndex: Number.isInteger(item?.bundleIndex) && item.bundleIndex >= 0 && item.bundleIndex < 20 ? item.bundleIndex : null,
     bundleSha256: typeof item?.bundleSha256 === 'string' && /^[a-f0-9]{64}$/.test(item.bundleSha256) ? item.bundleSha256 : null,
-    stage: ['updater-module-import', 'download-verified-asset', 'renderer-invoke', 'extract-archive', 'extract-failed', 'main-catch-fallback', 'verify-start', 'verify-result', 'verifier-setup', 'verifier-verify', 'verifier-tampered-control', 'update-launch'].includes(item?.stage) ? item.stage : 'unknown',
-    status: ['not-started', 'pending', 'fulfilled', 'starting', 'ready', 'synthetic-other', 'verified', 'rejected', 'tampered-rejected', 'tampered-accepted', 'tampered-unavailable'].includes(item?.status)
-      ? item.status : item?.stage === 'verify-start' ? 'started' : 'unknown',
+    stage: ['updater-module-import', 'download-verified-asset', 'renderer-invoke', 'extract-archive', 'extract-failed', 'main-catch-fallback', 'verify-start', 'verify-result', 'verifier-setup', 'verifier-verify', 'verifier-tampered-control', 'update-launch', 'release-fetch'].includes(item?.stage) ? item.stage : 'unknown',
+    status: item?.stage === 'release-fetch'
+      ? (Number.isInteger(item.status) && item.status >= 100 && item.status <= 599 ? item.status : null)
+      : (['not-started', 'pending', 'fulfilled', 'starting', 'ready', 'synthetic-other', 'verified', 'rejected', 'tampered-rejected', 'tampered-accepted', 'tampered-unavailable'].includes(item?.status)
+        ? item.status : item?.stage === 'verify-start' ? 'started' : 'unknown'),
     assetMatches: item?.assetName === assetName && item?.assetSha256 === manifestFile.sha256 && item?.tag === tag,
     ...(item?.status === 'rejected' && item?.stage !== 'updater-module-import' && item?.stage !== 'renderer-invoke' && item?.stage !== 'extract-failed' && item?.stage !== 'extract-archive' && item?.stage !== 'update-launch' ? {
       failureCode: safeUpdaterFailureCode(item.failureCode),
@@ -500,6 +504,13 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
         stagedAsarExists: item.fileFlags?.stagedAsarExists === true,
       },
       streamSnapshot: safeExtractStreamSnapshot(item.extractStreamSnapshot, item.previousStreamSnapshot, item.streamIntervalMs),
+    } : {}),
+    ...(item?.stage === 'release-fetch' ? {
+      phase: safeReleaseFetchPhases.has(item.phase) ? item.phase : 'unknown',
+      page: Number.isInteger(item.page) && item.page >= 1 && item.page <= 10 ? item.page : null,
+      count: Number.isInteger(item.count) && item.count >= 1 && item.count <= 10 ? item.count : null,
+      remainingZero: typeof item.remainingZero === 'boolean' ? item.remainingZero : null,
+      safeFailure: safeReleaseFetchFailures.has(item.safeFailure) ? item.safeFailure : 'unknown',
     } : {}),
     trustedRootTarget: safeRootTarget(item?.trustedRootTarget),
   }));
