@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { Writable } from 'node:stream';
@@ -9,6 +10,10 @@ import { createZipWriteBatcher, openZipReadStream, safeArchiveExtractionOperatio
 import { safeUpdaterModuleName } from '../src/update-release.mjs';
 
 export const updaterZipStreamSampleOffsetsMs = Object.freeze([15_000, 35_000, 55_000, 75_000, 95_000, 110_000]);
+
+export async function assertPortableExtractVerified(runExtract) {
+  assert.equal(await runExtract(), 'verified', 'the selected verified archive reaches a terminal extraction success');
+}
 
 const safeVerifierSetupStages = new Set([
   'tuf-get-trusted-root', 'trust-material', 'verifier-construction',

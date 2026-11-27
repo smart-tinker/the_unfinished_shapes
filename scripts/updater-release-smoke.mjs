@@ -12,7 +12,7 @@ import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, verify
 import { closeSmokeApp, observeGraphics, waitForExit, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 import { cleanupUpdaterTemporaryData, withTimeout } from './updater-cleanup.mjs';
-import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
+import { assertPortableExtractVerified, safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
 import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory, windowsInstallerHandoffInstallDir, windowsRelaunchRequestStatus } from './windows-updater-scenarios.mjs';
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
@@ -1607,93 +1607,95 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
       downloadsDir: path.join(downloadsDir, 'TheUnfinishedShapes-Updates'),
       extractDir, relaunchMarker,
     });
-    const pendingStatus = 'Choose a destination folder…';
-    const successStatus = 'Verified archive extracted. You can now launch the new copy.';
-    const extractChooserMarker = path.join(workDir, 'extract-folder-chooser.json');
-    await rm(extractChooserMarker, { force: true });
-    await activateUpdaterButtonByKeyboard(current.page, 'updates-extract');
-    const folderChooserInvoked = await waitForFile(extractChooserMarker, 5000);
-    const extractDiagnostic = {
-      folderChooserInvoked,
-      outcome: folderChooserInvoked ? 'pending' : 'chooser-not-invoked',
-      reason: folderChooserInvoked ? 'no-terminal-renderer-status' : 'folder-chooser-not-invoked',
-    };
-    if (folderChooserInvoked) {
-      let timedOut = false;
-      let observationFailed = false;
-      let streamSampling = true;
-      let streamSampleTimer;
-      let streamSamples = 0;
-      let previousStreamSnapshot = null;
-      const streamSamplingStartedAtMs = performance.now();
-      const scheduleStreamSample = () => {
-        const offsetMs = updaterZipStreamSampleOffsetsMs[streamSamples];
-        if (!streamSampling || offsetMs === undefined) return;
-        const targetAtMs = streamSamplingStartedAtMs + offsetMs;
-        streamSampleTimer = setTimeout(() => { void captureStreamSample().catch(() => {}); },
-          Math.max(0, targetAtMs - performance.now()));
+    await assertPortableExtractVerified(async () => {
+      const pendingStatus = 'Choose a destination folder…';
+      const successStatus = 'Verified archive extracted. You can now launch the new copy.';
+      const extractChooserMarker = path.join(workDir, 'extract-folder-chooser.json');
+      await rm(extractChooserMarker, { force: true });
+      await activateUpdaterButtonByKeyboard(current.page, 'updates-extract');
+      const folderChooserInvoked = await waitForFile(extractChooserMarker, 5000);
+      const extractDiagnostic = {
+        folderChooserInvoked,
+        outcome: folderChooserInvoked ? 'pending' : 'chooser-not-invoked',
+        reason: folderChooserInvoked ? 'no-terminal-renderer-status' : 'folder-chooser-not-invoked',
       };
-      const captureStreamSample = async () => {
-        streamSampleTimer = null;
-        if (!streamSampling || streamSamples >= updaterZipStreamSampleOffsetsMs.length) return;
-        const stream = await withTimeout(current.instance.evaluate(() => {
-          const snapshot = globalThis.__tusUpdaterSmokeBoundary?.extractStreamSnapshot;
-          return typeof snapshot === 'function' ? snapshot() : null;
-        }), 'Updater ZIP stream sample', 5000).catch(() => null);
-        if (!streamSampling) return;
-        const sampledAtMs = performance.now();
-        const [safe] = safeMainDiagnostics([{
-          stage: 'extract-archive',
-          status: 'starting',
-          ...(previousStreamSnapshot ? {
-            previousStreamSnapshot: previousStreamSnapshot.snapshot,
-            streamIntervalMs: Math.round(sampledAtMs - previousStreamSnapshot.sampledAtMs),
-          } : {}),
-          extractStreamSnapshot: stream,
-        }], manifestFile, assetName, tag);
-        const snapshot = safe?.streamSnapshot ?? null;
-        console.log('TUS_UPDATE_EXTRACT_STREAM ' + JSON.stringify(snapshot));
-        previousStreamSnapshot = { snapshot, sampledAtMs };
-        streamSamples++;
+      if (folderChooserInvoked) {
+        let timedOut = false;
+        let observationFailed = false;
+        let streamSampling = true;
+        let streamSampleTimer;
+        let streamSamples = 0;
+        let previousStreamSnapshot = null;
+        const streamSamplingStartedAtMs = performance.now();
+        const scheduleStreamSample = () => {
+          const offsetMs = updaterZipStreamSampleOffsetsMs[streamSamples];
+          if (!streamSampling || offsetMs === undefined) return;
+          const targetAtMs = streamSamplingStartedAtMs + offsetMs;
+          streamSampleTimer = setTimeout(() => { void captureStreamSample().catch(() => {}); },
+            Math.max(0, targetAtMs - performance.now()));
+        };
+        const captureStreamSample = async () => {
+          streamSampleTimer = null;
+          if (!streamSampling || streamSamples >= updaterZipStreamSampleOffsetsMs.length) return;
+          const stream = await withTimeout(current.instance.evaluate(() => {
+            const snapshot = globalThis.__tusUpdaterSmokeBoundary?.extractStreamSnapshot;
+            return typeof snapshot === 'function' ? snapshot() : null;
+          }), 'Updater ZIP stream sample', 5000).catch(() => null);
+          if (!streamSampling) return;
+          const sampledAtMs = performance.now();
+          const [safe] = safeMainDiagnostics([{
+            stage: 'extract-archive',
+            status: 'starting',
+            ...(previousStreamSnapshot ? {
+              previousStreamSnapshot: previousStreamSnapshot.snapshot,
+              streamIntervalMs: Math.round(sampledAtMs - previousStreamSnapshot.sampledAtMs),
+            } : {}),
+            extractStreamSnapshot: stream,
+          }], manifestFile, assetName, tag);
+          const snapshot = safe?.streamSnapshot ?? null;
+          console.log('TUS_UPDATE_EXTRACT_STREAM ' + JSON.stringify(snapshot));
+          previousStreamSnapshot = { snapshot, sampledAtMs };
+          streamSamples++;
+          scheduleStreamSample();
+        };
         scheduleStreamSample();
-      };
-      scheduleStreamSample();
-      try {
-        await current.page.waitForFunction(({ pending, prior, success }) => {
-          const status = document.querySelector('#updates-status');
-          const text = status?.textContent || '';
-          const invoke = status?.dataset.updateExtractInvokeStatus || 'not-started';
-          if (text === success) return invoke === 'fulfilled' || invoke === 'rejected';
-          return Boolean(text && text !== pending && text !== prior);
-        }, { pending: pendingStatus, prior: verified, success: successStatus }, { timeout: 120000 });
-      } catch (error) {
-        if (error?.name === 'TimeoutError') timedOut = true;
-        else observationFailed = true;
-      } finally {
-        streamSampling = false;
-        clearTimeout(streamSampleTimer);
+        try {
+          await current.page.waitForFunction(({ pending, prior, success }) => {
+            const status = document.querySelector('#updates-status');
+            const text = status?.textContent || '';
+            const invoke = status?.dataset.updateExtractInvokeStatus || 'not-started';
+            if (text === success) return invoke === 'fulfilled' || invoke === 'rejected';
+            return Boolean(text && text !== pending && text !== prior);
+          }, { pending: pendingStatus, prior: verified, success: successStatus }, { timeout: 120000 });
+        } catch (error) {
+          if (error?.name === 'TimeoutError') timedOut = true;
+          else observationFailed = true;
+        } finally {
+          streamSampling = false;
+          clearTimeout(streamSampleTimer);
+        }
+        const runtime = await extractRuntimeBoundary(current, extractDir, manifest.version, manifestFile, assetName, tag, previousStreamSnapshot);
+        extractDiagnostic.runtime = runtime;
+        if (timedOut) {
+          extractDiagnostic.outcome = 'pending';
+          extractDiagnostic.reason = 'renderer-observation-timeout';
+        } else if (observationFailed) {
+          extractDiagnostic.outcome = 'unobserved';
+          extractDiagnostic.reason = 'status-observation-failed';
+        } else if (runtime.rendererStatus === 'verified' && runtime.mainStatus === 'fulfilled' && runtime.rendererInvokeStatus === 'fulfilled') {
+          extractDiagnostic.outcome = 'verified';
+          extractDiagnostic.reason = 'none';
+        } else if (runtime.rendererStatus === 'cancelled' && runtime.rendererInvokeStatus === 'fulfilled') {
+          extractDiagnostic.outcome = 'cancelled';
+          extractDiagnostic.reason = 'folder-selection-cancelled';
+        } else {
+          extractDiagnostic.outcome = 'rejected';
+          extractDiagnostic.reason = 'renderer-reported-error';
+        }
       }
-      const runtime = await extractRuntimeBoundary(current, extractDir, manifest.version, manifestFile, assetName, tag, previousStreamSnapshot);
-      extractDiagnostic.runtime = runtime;
-      if (timedOut) {
-        extractDiagnostic.outcome = 'pending';
-        extractDiagnostic.reason = 'renderer-observation-timeout';
-      } else if (observationFailed) {
-        extractDiagnostic.outcome = 'unobserved';
-        extractDiagnostic.reason = 'status-observation-failed';
-      } else if (runtime.rendererStatus === 'verified' && runtime.mainStatus === 'fulfilled' && runtime.rendererInvokeStatus === 'fulfilled') {
-        extractDiagnostic.outcome = 'verified';
-        extractDiagnostic.reason = 'none';
-      } else if (runtime.rendererStatus === 'cancelled' && runtime.rendererInvokeStatus === 'fulfilled') {
-        extractDiagnostic.outcome = 'cancelled';
-        extractDiagnostic.reason = 'folder-selection-cancelled';
-      } else {
-        extractDiagnostic.outcome = 'rejected';
-        extractDiagnostic.reason = 'renderer-reported-error';
-      }
-    }
-    console.log('TUS_UPDATE_EXTRACT_DIAGNOSTIC ' + JSON.stringify(extractDiagnostic));
-    assert.equal(extractDiagnostic.outcome, 'verified', 'the selected verified archive reaches a terminal extraction success');
+      console.log('TUS_UPDATE_EXTRACT_DIAGNOSTIC ' + JSON.stringify(extractDiagnostic));
+      return extractDiagnostic.outcome;
+    });
     assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'the same published asset remains intact for the positive retry');
     assert.deepEqual(await readdir(path.dirname(downloadedPath)), [path.basename(downloadedPath)], 'the retry reuses the retained download');
     console.log('TUS_UPDATE_WRITE_FAILURE_RETRY outcome=verified injection=synthetic-eacces-after-first-write');

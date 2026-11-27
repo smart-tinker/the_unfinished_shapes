@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Writable } from 'node:stream';
 import * as updatePackage from '../src/update-package.mjs';
-import { safeMainDiagnostics, safeZipBatcherComparison, updaterZipStreamSampleOffsetsMs } from '../scripts/updater-smoke-diagnostics.mjs';
+import { assertPortableExtractVerified, safeMainDiagnostics, safeZipBatcherComparison, updaterZipStreamSampleOffsetsMs } from '../scripts/updater-smoke-diagnostics.mjs';
 
 test('TUS Windows ZIP writer reports bounded finish-to-close time at the safe log boundary', async () => {
   const sink = new EventEmitter();
@@ -777,4 +777,23 @@ test('TUS verified ZIP comparison keeps counterbalanced memory Deflate sink arms
     { trial: 2, arm: 'memory-discard', batchBytes: 262_144, sink: 'count-discard', compressedBytesRead: null, decodedBytes: 24_000, sinkBytesProcessed: 24_000, sinkWritableLength: 16_384, sinkNeedDrain: true, writeCallbackWaitMs: 900, cleanupStatus: 'not-created' },
     { trial: 2, arm: 'memory-file', batchBytes: 262_144, sink: 'node-fs-file', compressedBytesRead: null, decodedBytes: 24_000, sinkBytesProcessed: 24_000, sinkWritableLength: 16_384, sinkNeedDrain: true, writeCallbackWaitMs: 900, cleanupStatus: 'removed' },
   ]);
+});
+
+
+test('portable smoke launches only after the ordinary Extract path is verified', async () => {
+  const events = [];
+  const run = async outcome => {
+    await assertPortableExtractVerified(async () => {
+      events.push('extract');
+      return outcome;
+    });
+    events.push('launch');
+  };
+
+  await assert.rejects(run('pending'), { name: 'AssertionError', actual: 'pending', expected: 'verified' });
+  assert.deepEqual(events, ['extract']);
+
+  events.length = 0;
+  await run('verified');
+  assert.deepEqual(events, ['extract', 'launch']);
 });
