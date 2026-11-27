@@ -21,6 +21,7 @@ const maxArchiveEntries = 20_000;
 export const zipReadChunkBytes = 256 * 1024;
 
 export const zipWriteBatchBytes = 256 * 1024;
+const windowsZipWriteHighWaterMarkBytes = 1024 * 1024;
 
 export function createZipWriteBatcher(batchBytes = zipWriteBatchBytes) {
   if (!Number.isSafeInteger(batchBytes) || batchBytes < 1 || batchBytes > 1024 * 1024) {
@@ -902,7 +903,10 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
       extraction.appAsarEntry = isAppAsar;
       writeStream = isAppAsar && electronFs
         ? electronFs.createWriteStream(output, { flags: 'wx', mode: fileMode })
-        : createWriteStream(output, { flags: 'wx', mode: fileMode });
+        : createWriteStream(output, {
+          flags: 'wx', mode: fileMode,
+          ...(platform === 'win32' && !isAppAsar ? { highWaterMark: windowsZipWriteHighWaterMarkBytes } : {}),
+        });
       writeCallbackSnapshot = platform === 'win32' && extraction.trackDiagnostics && !isAppAsar
         ? trackZipWriteCallback(writeStream) : null;
       const pipelineStreams = platform === 'win32' && !isAppAsar
