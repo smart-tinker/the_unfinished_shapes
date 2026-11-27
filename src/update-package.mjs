@@ -809,6 +809,9 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
   for await (const entry of zip.eachEntry()) {
     extraction.value = 'entry';
     count++;
+    if (count === 12 && smokeBoundary?.extractTiming && smokeBoundary.extractTiming.entry12At === null) {
+      smokeBoundary.extractTiming.entry12At = performance.now();
+    }
     if (count > maxArchiveEntries || !Number.isSafeInteger(entry.uncompressedSize) ||
         entry.uncompressedSize < 0 || (extractedBytes += entry.uncompressedSize) > maxExtractedBytes) {
       throw new Error('Update archive exceeds extraction limits.');
@@ -908,10 +911,14 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
       const pipelineStreams = platform === 'win32' && !isAppAsar
         ? [stream, createZipWriteBatcher(), writeStream]
         : [stream, writeStream];
+      const pipelineStartedAt = streamTiming ? performance.now() : null;
       if (streamTiming) {
         streamTiming.prePipelineMs = elapsedMs(entryStartedAt);
         streamTiming.stage = 'pipeline';
-        streamTiming.pipelineStartedAt = performance.now();
+        streamTiming.pipelineStartedAt = pipelineStartedAt;
+      }
+      if (smokeBoundary?.extractTiming && smokeBoundary.extractTiming.firstZipPipelineAt === null) {
+        smokeBoundary.extractTiming.firstZipPipelineAt = pipelineStartedAt;
       }
       await pipeline(...pipelineStreams);
       if (streamTiming) {
@@ -937,6 +944,7 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
 export async function extractVerifiedArchive({ filePath, directory, tag, assetName, sha256, platform = process.platform }) {
   let phase = 'preflight', archiveFormat = 'unknown';
   const smokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic') ? globalThis.__tusUpdaterSmokeBoundary : null;
+  if (smokeBoundary?.extractTiming) smokeBoundary.extractTiming.extractCallAt = performance.now();
   const extraction = {
     get value() { return phase; },
     get trackDiagnostics() { return smokeBoundary !== null; },
@@ -979,6 +987,7 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     extraction.value = 'digest';
     await verifyDownloadedFile({ filePath, sha256 });
+    if (smokeBoundary?.extractTiming) smokeBoundary.extractTiming.digestVerifiedAt = performance.now();
     extraction.value = 'preflight';
     await mkdir(target, { recursive: false, mode: 0o700 });
     targetCreated = true;
