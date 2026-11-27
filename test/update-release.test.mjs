@@ -43,3 +43,44 @@ test('labels older candidates as downgrades and equal versions as current',async
  assert.equal(releaseRelation('v0.1.0-rc11','0.1.0-rc.11'),'current');
  assert.equal(releaseRelation('v0.1.0','0.1.0-rc.11'),'update');
 });
+
+
+test('reports a release API rate limit from the first request without retrying', async()=>{
+ const {listPublishedReleases,safeReleaseCheckErrorCode}=await updater();
+ for (const response of [
+  new Response('',{status:429}),
+  new Response('',{status:403,headers:{'x-ratelimit-remaining':'0'}}),
+ ]) {
+  let requests=0;
+  await assert.rejects(listPublishedReleases(async()=>{ requests++; return response; }),error=>{
+   assert.equal(error.releaseCheckErrorCode,'rate_limited');
+   assert.equal(safeReleaseCheckErrorCode(error),'rate_limited');
+   return true;
+  });
+  assert.equal(requests,1);
+ }
+ assert.equal(safeReleaseCheckErrorCode(new Error('private release failure')),'check_failed');
+});
+test('reports only allowlisted names for missing updater modules', async()=>{
+ const {safeUpdaterModuleFailureName}=await updater();
+ const classify=error=>safeUpdaterModuleFailureName?.(error);
+ const names=[
+  classify(Object.assign(new Error("Cannot find package '@sigstore/tuf' imported from C:\\private\\app.asar\\src\\update-package.mjs"),{code:'ERR_MODULE_NOT_FOUND'})),
+  classify(Object.assign(new Error('private raw exception'),{code:'ERR_MODULE_NOT_FOUND',url:'file:///C:/private/app.asar/src/update-release.mjs'})),
+  classify(Object.assign(new Error("Cannot find package 'private-module' imported from C:\\private\\app.asar"),{code:'ERR_MODULE_NOT_FOUND'})),
+  classify(Object.assign(new Error("Cannot find package 'sigstore' imported from C:\\private\\app.asar"),{code:'ERR_RUNTIME'})),
+ ];
+ assert.deepEqual(names,['@sigstore/tuf','unknown','unknown','unknown']);
+ assert.doesNotMatch(JSON.stringify(names),/private|app\\.asar/);
+});
+
+test('does not infer a missing module from a nested importer URL', async () => {
+ const {safeUpdaterModuleFailureName}=await updater();
+ const error=Object.assign(new Error('private raw exception'),{
+  code:'ERR_MODULE_NOT_FOUND',
+  url:'file:///C:/private/app.asar/node_modules/minipass-pipeline/node_modules/minipass/index.js',
+ });
+ const moduleName=safeUpdaterModuleFailureName?.(error);
+ assert.equal(moduleName,'unknown');
+ assert.equal(JSON.stringify(moduleName).includes('private'),false);
+});

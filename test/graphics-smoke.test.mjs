@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import vm from 'node:vm';
-import { isGraphicsFailure, observeGraphics, closeSmokeApp, withSmokeCleanup } from '../scripts/graphics-smoke.mjs';
+import { isGraphicsFailure, observeGraphics, closeSmokeApp, waitForExit, withSmokeCleanup } from '../scripts/graphics-smoke.mjs';
 
 function fakePage({ messages = [], errors = [] } = {}) {
   const page = new EventEmitter();
@@ -197,3 +197,128 @@ test('initial GL snapshot is captured while healthy before later loss', async ()
   assert.equal(initial.state.available, true);
 });
 
+
+test('bounded child exit timeout uses ETIMEDOUT and releases its listener', async () => {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  const error = await waitForExit(child, 5).then(() => null, failure => failure);
+
+  assert.equal(error?.code, 'ETIMEDOUT');
+  assert.equal(child.listenerCount('exit'), 0);
+});
+
+test('bounded app-close timeout preserves primary updater failure and reaps the child', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const originalLog = console.log, logs = [];
+  console.log = (...args) => logs.push(args.join(' '));
+  t.after(() => { console.log = originalLog; });
+
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.killed = false;
+  child.kill = signal => {
+    assert.equal(signal, 'SIGKILL');
+    child.killed = true;
+    child.exitCode = 1;
+    child.emit('exit', 1, signal);
+    return true;
+  };
+  const app = { close: () => new Promise(() => {}), process: () => child };
+  const graphics = { phase() {}, assertHealthy: async () => {}, assertNoErrors() {} };
+  const primary = new Error('updater operation failed');
+  let outcome;
+  const completion = withSmokeCleanup(
+    async () => { throw primary; },
+    () => closeSmokeApp(app, graphics, 'updater test cleanup'),
+  ).then(
+    () => { outcome = { status: 'fulfilled' }; },
+    error => { outcome = { status: 'rejected', error }; },
+  );
+
+  await new Promise(resolve => setImmediate(resolve));
+  await t.mock.timers.tick(10_001);
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.ok(outcome, 'a stalled app.close must settle within its cleanup bound');
+  assert.equal(outcome.status, 'rejected');
+  assert.ok(outcome.error instanceof AggregateError);
+  assert.equal(outcome.error.cause, primary);
+  assert.equal(outcome.error.errors[0], primary);
+  assert.equal(outcome.error.errors[1]?.code, 'ETIMEDOUT');
+  assert.equal(child.killed, true);
+  assert.equal(child.exitCode, 1);
+  assert.deepEqual(logs.filter(line => line.startsWith('TUS_SMOKE_CLEANUP ')), [
+    'TUS_SMOKE_CLEANUP stage=graphics-health outcome=started',
+    'TUS_SMOKE_CLEANUP stage=graphics-health outcome=completed',
+    'TUS_SMOKE_CLEANUP stage=app-close outcome=started',
+    'TUS_SMOKE_CLEANUP stage=app-close outcome=timeout',
+    'TUS_SMOKE_CLEANUP stage=app-process outcome=terminated',
+  ]);
+  assert.equal(logs.join(' ').includes(primary.message), false);
+});
+
+test('cleanup bounds a stalled graphics history check, closes and reaps the app, and removes temporary data', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const originalLog = console.log, logs = [];
+  console.log = (...args) => logs.push(args.join(' '));
+  t.after(() => { console.log = originalLog; });
+
+  const { page } = fakePage();
+  const graphics = await observeGraphics(page, { log: () => {} });
+  page.pageErrors = () => new Promise(() => {});
+  let errorsChecked = false;
+  graphics.assertNoErrors = () => { errorsChecked = true; };
+
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.killed = false;
+  child.kill = signal => {
+    assert.equal(signal, 'SIGKILL');
+    child.killed = true;
+    child.exitCode = 1;
+    child.emit('exit', 1, signal);
+    return true;
+  };
+  let closeStarted = false, temporaryDataRemoved = false, outcome;
+  const app = {
+    close() { closeStarted = true; return new Promise(() => {}); },
+    process: () => child,
+  };
+  const primary = new Error('updater operation failed');
+  const completion = withSmokeCleanup(
+    async () => { throw primary; },
+    () => closeSmokeApp(app, graphics, 'updater test cleanup'),
+    () => { temporaryDataRemoved = true; },
+  ).then(
+    () => { outcome = { status: 'fulfilled' }; },
+    error => { outcome = { status: 'rejected', error }; },
+  );
+
+  await new Promise(resolve => setImmediate(resolve));
+  await t.mock.timers.tick(10_001);
+  await new Promise(resolve => setImmediate(resolve));
+  await t.mock.timers.tick(10_001);
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.ok(outcome, 'a stalled graphics observer must not block bounded app/process and temporary-data cleanup');
+  assert.equal(outcome.status, 'rejected');
+  assert.ok(outcome.error instanceof AggregateError);
+  assert.equal(outcome.error.cause, primary);
+  assert.equal(outcome.error.errors[0], primary);
+  const cleanupError = outcome.error.errors[1];
+  assert.ok(cleanupError instanceof AggregateError);
+  assert.deepEqual(cleanupError.errors.map(error => error.code), ['ETIMEDOUT', 'ETIMEDOUT']);
+  assert.equal(closeStarted, true);
+  assert.equal(child.killed, true);
+  assert.equal(child.exitCode, 1);
+  assert.equal(errorsChecked, true);
+  assert.equal(temporaryDataRemoved, true);
+  assert.deepEqual(logs.filter(line => line.startsWith('TUS_SMOKE_CLEANUP ')), [
+    'TUS_SMOKE_CLEANUP stage=graphics-health outcome=started',
+    'TUS_SMOKE_CLEANUP stage=graphics-health outcome=timeout',
+    'TUS_SMOKE_CLEANUP stage=app-close outcome=started',
+    'TUS_SMOKE_CLEANUP stage=app-close outcome=timeout',
+    'TUS_SMOKE_CLEANUP stage=app-process outcome=terminated',
+  ]);
+  assert.equal(logs.join(' ').includes(primary.message), false);
+});

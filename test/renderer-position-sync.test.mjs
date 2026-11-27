@@ -212,3 +212,95 @@ test('a grounded landing is synced when the server position differs below the tw
   assert.equal(sent.length, 2, 'the grounded correction must reach the server');
   assert.equal(sent[1][2].position.y, 2);
 });
+test('Space keydown links the jump POST response to whether the renderer applied it', async () => {
+  const h = syncHarness();
+  const response = { revision: 11, position: { x: 14.4, y: 0.2, z: 0 }, velocityY: 7.4 };
+  h.context.request = async (...args) => { h.context.sent.push(args); return response; };
+  Object.assign(h.context, {
+    meId: 'alice',
+    playerPosition: { x: 14.4, y: 0, z: 0 },
+    playerVelocityY: 0,
+    latestStateRevision: 0,
+  });
+  h.load("window.addEventListener('keydown', event => {", "window.addEventListener('keyup', event =>");
+  h.dispatchWindowEvent('keydown', { code: 'Space', repeat: false, preventDefault() {} });
+  assert.equal(h.run('jumpRequested'), true, 'the actual Space handler sets local jumpRequested');
+
+  await h.run('syncPosition()');
+  const sent = JSON.parse(h.run('JSON.stringify(sent)'));
+  assert.deepEqual(sent[0][2], {
+    type: 'move',
+    position: { x: 14.4, y: 0, z: 0 },
+    jump: true,
+  });
+  const trace = h.jumpTrace();
+  assert.deepEqual(trace, {
+    spaceKeydown: true,
+    jumpRequested: true,
+    firstMoveJump: true,
+    firstMoveSkip: null,
+    firstMoveResult: 'accepted',
+    jumpPostResponse: {
+      postAttempted: true, responseReceived: true, outcome: 'accepted',
+      serverPosition: { x: 14.4, y: 0.2, z: 0 },
+      serverVelocityY: 7.4, serverRevision: 11, clientApplied: true,
+    },
+  }, 'the jump response is tied to the jump POST and reports client application');
+  assert.doesNotMatch(JSON.stringify(trace), /alice|token|private|https|home|tmp/i);
+});
+
+test('jump POST response is reported as unapplied when newer local input wins', async () => {
+  const h = syncHarness();
+  const response = { revision: 11, position: { x: 14.4, y: 0.2, z: 0 }, velocityY: 7.4 };
+  h.context.request = async (...args) => {
+    h.context.sent.push(args);
+    h.context.localMovementVersion++;
+    return response;
+  };
+  Object.assign(h.context, {
+    meId: 'alice',
+    playerPosition: { x: 14.4, y: 0, z: 0 },
+    playerVelocityY: 0,
+    latestStateRevision: 0,
+  });
+  h.load("window.addEventListener('keydown', event => {", "window.addEventListener('keyup', event =>");
+  h.dispatchWindowEvent('keydown', { code: 'Space', repeat: false, preventDefault() {} });
+
+  await h.run('syncPosition()');
+  const trace = h.jumpTrace();
+  assert.equal(h.run('playerPosition.y'), 0, 'the stale response does not replace newer local state');
+  assert.deepEqual(trace.jumpPostResponse, {
+    postAttempted: true, responseReceived: true, outcome: 'accepted',
+    serverPosition: { x: 14.4, y: 0.2, z: 0 },
+    serverVelocityY: 7.4, serverRevision: 11, clientApplied: false,
+  });
+});
+
+test('jump trace captures a move-running skip and a failed request without its error text', async () => {
+  const h = syncHarness();
+  Object.assign(h.context, {
+    meId: 'alice',
+    playerPosition: { x: 14.4, y: 0, z: 0 },
+    playerVelocityY: 0,
+    latestStateRevision: 0,
+    moveRunning: true,
+  });
+  h.load("window.addEventListener('keydown', event => {", "window.addEventListener('keyup', event =>");
+  h.dispatchWindowEvent('keydown', { code: 'Space', repeat: false, preventDefault() {} });
+
+  await h.run('syncPosition()');
+  h.context.moveRunning = false;
+  h.context.request = async () => { throw new Error('private request detail'); };
+  await h.run('syncPosition()');
+
+  const trace = h.jumpTrace();
+  assert.deepEqual(trace, {
+    spaceKeydown: true,
+    jumpRequested: true,
+    firstMoveJump: true,
+    firstMoveSkip: 'move-running',
+    firstMoveResult: 'request-failed',
+    jumpPostResponse: { postAttempted: true, responseReceived: false, outcome: 'request-failed', serverPosition: undefined, serverVelocityY: undefined, serverRevision: undefined, clientApplied: false },
+  });
+  assert.doesNotMatch(JSON.stringify(trace), /private request detail|alice|token/i);
+});

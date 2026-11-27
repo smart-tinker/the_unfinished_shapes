@@ -24,7 +24,7 @@ jobs:
   linux-client:
     needs: test
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,7 +33,9 @@ jobs:
         with:
           node-version: '24'
       - run: npm ci
-      - run: npm run package:linux
+      - run: npm version 0.1.0-rc.1 --no-git-tag-version --ignore-scripts
+      - id: package
+        run: npm run package:linux
       - name: Packaged client lifecycle
         env:
           TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes
@@ -48,6 +50,11 @@ jobs:
           TUS_BENCHMARK_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes
         run: xvfb-run --auto-servernum node scripts/performance-benchmark.mjs
+      - name: Published update download, provenance, extraction and relaunch
+        if: ${{ !cancelled() && steps.package.conclusion == 'success' }}
+        env:
+          TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-linux-x64/TheUnfinishedShapes
+        run: xvfb-run --auto-servernum node scripts/updater-release-smoke.mjs
   model:
     needs: test
     uses: ./.github/workflows/local-cpu-model.yml
@@ -58,7 +65,7 @@ jobs:
     if: github.event.repository.private == false
     # Standard public runner: Apple Silicon, not a paid -large/-xlarge label.
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,6 +81,7 @@ jobs:
           node -e "if(process.platform!=='darwin'||process.arch!=='arm64') throw Error('Expected native macOS arm64'); console.log(process.platform,process.arch)"
       - run: npm ci
       - run: npm run check
+      - run: npm version 0.1.0-rc.1 --no-git-tag-version --ignore-scripts
       - run: node scripts/package-macos.mjs
       - name: Launch the native packaged application
         env:
@@ -81,11 +89,15 @@ jobs:
         run: |
           test "$(lipo -archs "$TUS_SMOKE_EXECUTABLE")" = arm64
           node scripts/electron-smoke.mjs
+      - name: Published update download, provenance, extraction and relaunch
+        env:
+          TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-darwin-arm64/TheUnfinishedShapes.app/Contents/MacOS/TheUnfinishedShapes
+        run: node scripts/updater-release-smoke.mjs
   windows-installer:
     needs: test
     if: github.event.repository.private == false
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -102,14 +114,96 @@ jobs:
             $errors | ForEach-Object { Write-Error $_.Message }
             exit 1
           }
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile('scripts/windows-nsis-wizard.ps1', [ref]$tokens, [ref]$errors) > $null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: npm ci
+      - id: dependencies
+        run: npm ci
       - run: npm run check
-      - run: npm run package:win
-      - run: npm run installer:win
+      - id: metadata
+        if: ${{ !cancelled() && steps.dependencies.conclusion == 'success' }}
+        run: npm version 0.1.0-rc.1 --no-git-tag-version --ignore-scripts
+      - id: package
+        if: ${{ !cancelled() && steps.dependencies.conclusion == 'success' && steps.metadata.conclusion == 'success' }}
+        shell: pwsh
+        run: |
+          $sourceTarRoot = Join-Path $PWD 'node_modules/tar'
+          $sourceTarManifestPath = Join-Path $sourceTarRoot 'package.json'
+          if (-not (Test-Path -LiteralPath $sourceTarManifestPath -PathType Leaf)) {
+            throw 'Installed tar package manifest is missing before packaging'
+          }
+          $sourceTarManifest = Get-Content -Raw -LiteralPath $sourceTarManifestPath | ConvertFrom-Json
+          $sourceTarEntry = $sourceTarManifest.exports.PSObject.Properties['.'].Value.import.default
+          if (($sourceTarEntry -isnot [string]) -or (-not $sourceTarEntry.StartsWith('./'))) {
+            throw 'Installed tar package has no declared ESM root entry'
+          }
+          $sourceTarEntryPath = Join-Path $sourceTarRoot $sourceTarEntry.Substring(2)
+          if (-not (Test-Path -LiteralPath $sourceTarEntryPath -PathType Leaf)) {
+            throw 'Installed tar ESM entry is missing before packaging'
+          }
+          Write-Output 'TUS_TAR_PACKAGE stage=before packageJson=present esmEntry=present'
+
+          $env:DEBUG = 'electron-packager'
+          npm run package:win
+          $packageExit = $LASTEXITCODE
+          Remove-Item Env:DEBUG -ErrorAction SilentlyContinue
+          if ($packageExit -ne 0) { exit $packageExit }
+
+          $tarReadback = @'
+          import { existsSync } from 'node:fs';
+          import path from 'node:path';
+          import { extractFile } from '@electron/asar';
+
+          const archive = path.resolve('dist/TheUnfinishedShapes-win32-x64/resources/app.asar');
+          const container = existsSync(archive) ? 'present' : 'missing';
+          const packageJsonPath = path.join('node_modules', 'tar', 'package.json');
+          let packageJson = 'unknown';
+          let esmEntry = 'unknown';
+          if (container === 'present') {
+            try {
+              const manifest = JSON.parse(extractFile(archive, packageJsonPath).toString('utf8'));
+              packageJson = 'present';
+              const entry = manifest?.exports?.['.']?.import?.default;
+              if (typeof entry === 'string' && entry.startsWith('./')) {
+                const entryPath = path.join('node_modules', 'tar', entry.slice(2));
+                try {
+                  extractFile(archive, entryPath);
+                  esmEntry = 'present';
+                } catch (error) {
+                  esmEntry = error?.message === '"' + entryPath + '" was not found in this archive' ? 'missing' : 'unknown';
+                }
+              } else {
+                esmEntry = 'missing';
+              }
+            } catch (error) {
+              packageJson = error?.message === '"' + packageJsonPath + '" was not found in this archive' ? 'missing' : 'unknown';
+            }
+          } else {
+            packageJson = 'missing';
+          }
+          console.log(`TUS_TAR_PACKAGE stage=after container=${container} packageJson=${packageJson} esmEntry=${esmEntry}`);
+          '@
+          node --input-type=module -e $tarReadback 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output 'TUS_TAR_PACKAGE stage=after container=unknown packageJson=unknown esmEntry=unknown'
+          }
+      - id: installer
+        if: ${{ !cancelled() && steps.package.conclusion == 'success' }}
+        run: npm run installer:win
       - name: Verify clean install, current-candidate lifecycle and retained data
+        if: ${{ !cancelled() && steps.package.conclusion == 'success' && steps.installer.conclusion == 'success' }}
         env:
           TUS_SMOKE_PORTABLE_EXECUTABLE: dist/TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe
         run: node scripts/windows-installer-smoke.mjs
+      - name: Published update download and exact installer/portable acceptance
+        if: ${{ !cancelled() && steps.package.conclusion == 'success' && steps.installer.conclusion == 'success' }}
+        env:
+          TUS_SMOKE_EXECUTABLE: dist/TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe
+        run: node scripts/updater-release-smoke.mjs

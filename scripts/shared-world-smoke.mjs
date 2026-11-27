@@ -9,6 +9,7 @@ import { observeGraphics, closeSmokeApp, withSmokeCleanup } from './graphics-smo
 
 import { stopServerProcess } from './server-smoke-process.mjs';
 import { selectObject } from './ui-acceptance.mjs';
+import { safeJumpTrace } from './shared-world-trace.mjs';
 
 const dir = await mkdtemp(path.join(os.tmpdir(), 'tus-shared-'));
 const tokens = { alice: randomBytes(24).toString('hex'), bob: randomBytes(24).toString('hex') };
@@ -45,6 +46,23 @@ async function worldCommand(id, command) {
   assert.equal(response.status, 200);
   return response.json();
 }
+async function reportJumpTrace(client) {
+  const observed = await client.page.evaluate(() => {
+    const trace = window.__TUS_SMOKE_JUMP_TRACE_STATE;
+    return trace && typeof trace === 'object'
+      ? { spaceKeydown: trace.spaceKeydown, jumpRequested: trace.jumpRequested, firstMoveJump: trace.firstMoveJump, firstMoveSkip: trace.firstMoveSkip, firstMoveResult: trace.firstMoveResult, jumpPostResponse: trace.jumpPostResponse }
+      : {};
+  }).catch(() => ({}));
+  const snapshot = await state(client.id).catch(() => null);
+  const serverPlayer = Array.isArray(snapshot?.players) ? snapshot.players.find(player => player.id === client.id) : null;
+  const trace = safeJumpTrace({ ...observed, serverPlayer });
+  console.log('TUS_JUMP_TRACE ' + JSON.stringify(trace));
+  return trace;
+}
+const atSolidWallFace = x => Number.isFinite(x) && Number(x.toFixed(2)) >= 14.68 && x <= 14.68 + 1e-7;
+assert.equal(atSolidWallFace(14.6765), true, 'the keyed approach reaches the wall face');
+assert.equal(atSolidWallFace(14.69), false, 'a position beyond the wall face is rejected');
+
 async function waitForState(predicate, description, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   let last;
@@ -207,12 +225,12 @@ await withSmokeCleanup(async () => {
   await alice.page.keyboard.down('d');
   let reachedWall;
   try {
-    reachedWall = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.x >= 14.68, 'Alice to reach the solid face at normal walking speed');
+    reachedWall = await waitForState(snapshot => atSolidWallFace(snapshot.players.find(player => player.id === 'alice')?.position.x), 'Alice to reach the solid face at normal walking speed');
   } finally {
     await alice.page.keyboard.up('d');
   }
   const blocked = await worldCommand('alice', { type: 'move', position: { x: 30, y: 999, z: 0 } });
-  assert.ok(blocked.position.x >= 14.68 && blocked.position.x < 14.7, 'the server stops Alice at the solid side');
+  assert.ok(atSolidWallFace(blocked.position.x), 'the server keeps Alice on the solid side');
   assert.equal(blocked.position.y, 0, 'client coordinates cannot grant unsupported height');
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, blocked.revision);
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('X 14.7'));
@@ -246,6 +264,20 @@ await withSmokeCleanup(async () => {
   await focus(alice);
   await alice.page.keyboard.up('d');
   await alice.page.keyboard.down('d');
+  await alice.page.evaluate(() => {
+    const trace = { spaceKeydown: false, jumpRequested: null, firstMoveJump: null, firstMoveSkip: null, firstMoveResult: null, jumpPostResponse: null };
+    window.__TUS_SMOKE_JUMP_TRACE_STATE = trace;
+    window.__TUS_SMOKE_JUMP_TRACE = (event, value) => {
+      if (event === 'jumpRequested') trace.jumpRequested = value;
+      if (event === 'move.jump' && trace.spaceKeydown && trace.firstMoveJump === null) trace.firstMoveJump = value;
+      if (event === 'move.skip' && trace.spaceKeydown && trace.firstMoveSkip === null) trace.firstMoveSkip = value;
+      if (event === 'move.result' && trace.spaceKeydown && trace.firstMoveResult === null) trace.firstMoveResult = value;
+      if (event === 'move.jump-response' && trace.spaceKeydown && trace.jumpPostResponse === null && value?.postAttempted === true) trace.jumpPostResponse = value;
+    };
+    window.addEventListener('keydown', event => {
+      if (event.code === 'Space') trace.spaceKeydown = true;
+    }, { capture: true, once: true });
+  });
   await alice.page.keyboard.down('Space');
   try {
     await alice.page.waitForFunction(() => {
@@ -253,24 +285,37 @@ await withSmokeCleanup(async () => {
       const x = Number(parts?.[0]?.slice(2)), y = Number(parts?.[1]?.slice(2));
       return Number.isFinite(x) && Number.isFinite(y) && x >= 15 && x < 17 && y > 0;
     }, undefined, { polling: 'raf', timeout: 5000 });
-  } catch (error) {
-    const client = await alice.page.evaluate(() => ({
-      focused: document.hasFocus(),
-      coordinates: document.querySelector('#coordinates')?.textContent || '',
-      connected: document.querySelector('#connection')?.textContent || '',
-    }));
-    const server = await state().catch(failure => ({ error: failure.message }));
-    const serverPlayer = server.error ? server : server.players.find(player => player.id === 'alice');
-    throw new Error(error.message + '; client=' + JSON.stringify(client) + '; server=' + JSON.stringify(serverPlayer));
+  } catch {
+    const trace = await reportJumpTrace(alice);
+    try {
+      assert.equal(trace.spaceKeydown, true, 'Space keydown trace is missing');
+      assert.equal(trace.jumpRequested, true, 'local jumpRequested trace is missing');
+      assert.equal(typeof trace.firstMoveJump, 'boolean', 'first move.jump trace is missing');
+      throw new Error('Shared-world jump did not reach airborne acceptance within the existing 5000ms timeout.');
+    } finally {
+      await alice.page.evaluate(() => {
+        delete window.__TUS_SMOKE_JUMP_TRACE;
+        delete window.__TUS_SMOKE_JUMP_TRACE_STATE;
+      }).catch(() => {});
+    }
   } finally {
     await alice.page.keyboard.up('Space');
     await alice.page.keyboard.up('d');
   }
-  await alice.page.waitForFunction(() => {
-    const yPart = document.querySelector('#coordinates')?.textContent.split(' · ')[1];
-    return Number(yPart?.slice(2)) > 0;
-  }, undefined, { polling: 'raf', timeout: 5000 });
-  const landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
+  let landed;
+  try {
+    await alice.page.waitForFunction(() => {
+      const yPart = document.querySelector('#coordinates')?.textContent.split(' · ')[1];
+      return Number(yPart?.slice(2)) > 0;
+    }, undefined, { polling: 'raf', timeout: 5000 });
+    landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
+  } finally {
+    await reportJumpTrace(alice);
+    await alice.page.evaluate(() => {
+      delete window.__TUS_SMOKE_JUMP_TRACE;
+      delete window.__TUS_SMOKE_JUMP_TRACE_STATE;
+    }).catch(() => {});
+  }
   await bob.page.waitForFunction(revision => Number(document.querySelector('#revision').textContent.split(' ')[1]) >= revision, landed.revision);
   assert.equal((await state('bob')).players.find(player => player.id === 'alice').position.y, 2, 'the second client observes the accepted height');
   await alice.page.waitForFunction(() => document.querySelector('#coordinates').textContent.includes('Y 2.0'), undefined, { timeout: 5000 });

@@ -41,7 +41,11 @@ test('startup update discovery is non-blocking and has an accessible entry point
  const preload=readFileSync(new URL('../src/preload.cjs',import.meta.url),'utf8');
  const renderer=readFileSync(new URL('../src/renderer.mjs',import.meta.url),'utf8');
  const html=readFileSync(new URL('../src/index.html',import.meta.url),'utf8');
+ const smoke=readFileSync(new URL('../scripts/updater-release-smoke.mjs',import.meta.url),'utf8');
  assert.match(main,/handle\('updates:startup-check'/);
+ assert.match(main,/safeReleaseCheckErrorCode\(error\)/);
+ assert.match(smoke,/getAttribute\('data-error-code'\)/);
+ assert.doesNotMatch(smoke,/window\.tus\.checkUpdates\(distribution\)/);
  assert.match(preload,/checkStartupUpdates:.*updates:startup-check/);
  assert.match(renderer,/void bridge\.checkStartupUpdates\(\)/);
  assert.match(html,/id="updates-notice"[^>]*hidden/);

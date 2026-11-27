@@ -1,5 +1,49 @@
 const releaseTag = /^(?:v)?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-rc\.?(0|[1-9]\d*))?$/;
 const releasesUrl = 'https://api.github.com/repos/smart-tinker/the_unfinished_shapes/releases';
+const releaseCheckFailureCodes = new Set(['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed']);
+
+function releaseCheckFailure(message, code) {
+  const error = new Error(message);
+  error.releaseCheckErrorCode = code;
+  return error;
+}
+
+export function safeReleaseCheckErrorCode(error) {
+  const code = error?.releaseCheckErrorCode;
+  if (releaseCheckFailureCodes.has(code)) return code;
+  return ['AbortError', 'TimeoutError'].includes(error?.name) || error?.code === 'ABORT_ERR' ? 'timeout' : 'check_failed';
+}
+
+// shortcut: locked updater dependency names; refresh this set when package-lock.json changes.
+const safeUpdaterModuleNames = new Set([
+  "@gar/promise-retry", "@isaacs/fs-minipass", "@isaacs/nonrecursive-glob-match", "@npmcli/agent",
+  "@npmcli/fs", "@npmcli/redact", "@sigstore/bundle", "@sigstore/core",
+  "@sigstore/protobuf-specs", "@sigstore/sign", "@sigstore/tuf", "@sigstore/verify",
+  "@tufjs/canonical-json", "@tufjs/models", "agent-base", "balanced-match",
+  "brace-expansion", "cacache", "chownr", "content-type",
+  "debug", "fs-minipass", "glob", "http-cache-semantics",
+  "http-proxy-agent", "https-proxy-agent", "iconv-lite", "ip-address",
+  "lru-cache", "make-fetch-happen", "minimatch", "minipass",
+  "minipass-collect", "minipass-fetch", "minipass-flush", "minipass-pipeline",
+  "minipass-sized", "minizlib", "ms", "negotiator",
+  "p-map", "path-scurry", "pend", "proc-log",
+  "safer-buffer", "semver", "sigstore", "smart-buffer",
+  "socks", "socks-proxy-agent", "ssri", "tar",
+  "tuf-js", "yallist", "yauzl",
+  'update-package.mjs', 'update-release.mjs',
+]);
+
+export function safeUpdaterModuleName(value) {
+  return typeof value === 'string' && safeUpdaterModuleNames.has(value) ? value : 'unknown';
+}
+
+export function safeUpdaterModuleFailureName(error) {
+  if (error?.code !== 'ERR_MODULE_NOT_FOUND') return 'unknown';
+  const specifier = typeof error.message === 'string'
+    ? error.message.match(/^Cannot find (?:package|module) '([^']+)' imported from /)?.[1]
+    : null;
+  return safeUpdaterModuleName(specifier);
+}
 
 export function parseReleaseTag(value) {
   if (typeof value !== 'string') return null;
@@ -50,20 +94,20 @@ export async function listPublishedReleases(fetcher = fetch, { signal = AbortSig
     const response = await fetcher(`${releasesUrl}?per_page=100&page=${page}`, {
       headers: { accept: 'application/vnd.github+json' }, signal, redirect: 'error',
     });
-    if (!response || !Number.isInteger(response.status)) throw new Error('Invalid GitHub releases response.');
+    if (!response || !Number.isInteger(response.status)) throw releaseCheckFailure('Invalid GitHub releases response.', 'invalid_response');
     if (!response.ok) {
       if (response.status === 429 || (response.status === 403 && response.headers?.get('x-ratelimit-remaining') === '0')) {
-        throw new Error('GitHub release check rate limit reached.');
+        throw releaseCheckFailure('GitHub release check rate limit reached.', 'rate_limited');
       }
-      throw new Error(`GitHub release check failed (HTTP ${response.status}).`);
+      throw releaseCheckFailure(`GitHub release check failed (HTTP ${response.status}).`, 'http_error');
     }
     let pageReleases;
-    try { pageReleases = await response.json(); } catch { throw new Error('Invalid releases response.'); }
-    if (!Array.isArray(pageReleases) || pageReleases.length > 100) throw new Error('Invalid releases response.');
+    try { pageReleases = await response.json(); } catch { throw releaseCheckFailure('Invalid releases response.', 'invalid_response'); }
+    if (!Array.isArray(pageReleases) || pageReleases.length > 100) throw releaseCheckFailure('Invalid releases response.', 'invalid_response');
     releases.push(...pageReleases);
     if (pageReleases.length < 100) return selectReleaseCandidates(releases);
   }
-  throw new Error('GitHub release check page limit reached.');
+  throw releaseCheckFailure('GitHub release check page limit reached.', 'invalid_response');
 }
 
 function assetVersion(tag) {

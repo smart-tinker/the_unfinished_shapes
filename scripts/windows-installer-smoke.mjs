@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
+import { windowsInstallerHandoffInstallDir } from './windows-updater-scenarios.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 
 import { manualEditing } from './ui-acceptance.mjs';
@@ -22,10 +23,19 @@ const packageVersion=JSON.parse(await readFile(new URL('../package.json',import.
 const expectedSourceSha=/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA||'')?process.env.GITHUB_SHA:null;
 const expectedBuildLabel=`v${packageVersion} · ${expectedSourceSha?expectedSourceSha.slice(0,7):'build unknown'}`;
 const expectedBuildTitle=expectedSourceSha?`Version ${packageVersion}; source SHA ${expectedSourceSha}`:`Version ${packageVersion}; source SHA unavailable. This build is not release-identified.`;
-const work = await mkdtemp(path.join(os.tmpdir(), 'tus-installer-'));
-const dataDir = path.join(process.env.APPDATA, 'the-unfinished-shapes');
-try { await access(dataDir); throw new Error('Refusing to modify a pre-existing app data directory.'); }
-catch (error) { if (error.code !== 'ENOENT') throw error; }
+const handoffMode = process.env.TUS_SMOKE_HANDOFF_MODE || '';
+assert.ok(['', 'prepare-source', 'verify-target'].includes(handoffMode), 'installer handoff mode is recognized');
+const handoffRoot = process.env.TUS_SMOKE_HANDOFF_ROOT ? path.resolve(process.env.TUS_SMOKE_HANDOFF_ROOT) : null;
+if (handoffMode) assert.ok(handoffRoot, 'handoff uses the updater smoke temporary root');
+const work = handoffRoot ? path.join(handoffRoot, 'fixture') : await mkdtemp(path.join(os.tmpdir(), 'tus-installer-'));
+const dataDir = path.resolve(process.env.TUS_DATA_DIR || path.join(process.env.APPDATA, 'the-unfinished-shapes'));
+if (handoffMode === 'verify-target') {
+  await access(work);
+  await access(dataDir);
+} else {
+  try { await access(dataDir); throw new Error('Refusing to modify a pre-existing app data directory.'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
 let installer = process.env.TUS_SMOKE_INSTALLER;
 if (!installer) {
   const installerFiles = (await readdir('dist/installer')).filter(name => name.endsWith('.exe'));
@@ -36,31 +46,67 @@ installer = path.resolve(installer);
 await access(installer);
 const portableExecutable = process.env.TUS_SMOKE_PORTABLE_EXECUTABLE && path.resolve(process.env.TUS_SMOKE_PORTABLE_EXECUTABLE);
 if (portableExecutable) await access(portableExecutable);
-const installDir = path.join(process.env.LOCALAPPDATA, 'Programs', 'TUS-Installer-Smoke');
-try { await access(installDir); throw new Error('Refusing to replace an existing installation.'); }
-catch (error) { if (error.code !== 'ENOENT') throw error; }
+const installDir = path.resolve(process.env.TUS_SMOKE_INSTALL_DIR || (handoffMode
+  ? windowsInstallerHandoffInstallDir(process.env.LOCALAPPDATA)
+  : path.join(process.env.LOCALAPPDATA, 'Programs', 'TUS-Installer-Smoke')));
+if (handoffMode === 'verify-target') await access(installDir);
+else {
+  try { await access(installDir); throw new Error('Refusing to replace an existing installation.'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
 const settingsFixture = {
   workspacePath: path.join(work, 'player-workspace'), codexPath: path.join(work, 'codex.exe'),
   serverUrl: '', threadId: 'saved-game-thread-fixture', agentControlThreadId: 'saved-game-thread-fixture', agentModelId: 'qwen3-local-cpu', agentEffort: 'medium', token: 'test-value-that-must-not-be-saved'
 };
-await mkdir(settingsFixture.workspacePath, { recursive: true });
+if (!handoffMode) await mkdir(settingsFixture.workspacePath, { recursive: true });
 let instance, graphics, gpu;
+function checkHandoff(name, matches, message) {
+  if (handoffMode) console.log('TUS_INSTALLER_HANDOFF check=' + name + ':' + (matches ? 'match' : 'mismatch'));
+  try { assert.equal(matches, true, message); }
+  catch (error) { error.tusHandoffCheck = name; throw error; }
+}
+if (handoffMode) assert.equal(installDir.toLowerCase(), path.resolve(windowsInstallerHandoffInstallDir(process.env.LOCALAPPDATA)).toLowerCase(), 'installer handoff uses the pinned product install directory');
 async function launch(executablePath, label, { realQuitPrompt = false } = {}) {
-  gpu = await createGpuDiagnostics(label);
-  // Use an explicit software renderer on the GPU-less runner, as in Linux CI.
-  instance = await electron.launch({ executablePath, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', ...(realQuitPrompt ? [] : ['--tus-smoke-confirm-quit']), ...gpu.args], env: { ...process.env, TUS_DATA_DIR: '' }, timeout: 45000 });
-  await gpu.attach(instance);
-  const page = await instance.firstWindow();
-  graphics = await observeGraphics(page, { label });
-  await page.waitForFunction(() => document.querySelector('#build-version')?.getAttribute('title') !== 'Loading build metadata');
-  assert.equal(await page.locator('#build-version').innerText(), expectedBuildLabel, 'installed UI version and short source SHA match the candidate');
-  assert.equal(await page.locator('#build-version').getAttribute('title'), expectedBuildTitle, 'installed build identifies exact source or marks it unknown');
-  graphics.phase('world connection');
-  const actualDataDir = await instance.evaluate(({ app }) => app.getPath('userData'));
-  assert.equal(path.resolve(actualDataDir).toLowerCase(), path.resolve(dataDir).toLowerCase(), 'stable default user-data path');
-  await page.waitForFunction(() => document.querySelector('#connection')?.textContent.includes('World connected'), null, { timeout: 30000 });
-  await graphics.assertHealthy();
-  return page;
+  let handoffCheck = 'startup-health';
+  try {
+    gpu = await createGpuDiagnostics(label);
+    // Use an explicit software renderer on the GPU-less runner, as in Linux CI.
+    instance = await electron.launch({ executablePath, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', ...(realQuitPrompt ? [] : ['--tus-smoke-confirm-quit']), ...gpu.args], env: { ...process.env, TUS_DATA_DIR: handoffMode ? dataDir : '' }, timeout: 45000 });
+    await gpu.attach(instance);
+    const page = await instance.firstWindow();
+    graphics = await observeGraphics(page, { label });
+    await page.waitForFunction(() => document.querySelector('#build-version')?.getAttribute('title') !== 'Loading build metadata');
+
+    handoffCheck = 'build-label';
+    const buildLabel = await page.locator('#build-version').innerText();
+    checkHandoff('build-label', buildLabel === expectedBuildLabel, 'installed UI version and short source SHA match the candidate');
+
+    handoffCheck = 'build-title-sha';
+    const buildTitle = await page.locator('#build-version').getAttribute('title');
+    checkHandoff('build-title-sha', buildTitle === expectedBuildTitle, 'installed build identifies exact source or marks it unknown');
+
+    handoffCheck = 'app-version';
+    const appVersion = await instance.evaluate(({ app }) => app.getVersion());
+    checkHandoff('app-version', appVersion === packageVersion, 'installed process reports the expected application version');
+
+    handoffCheck = 'user-data';
+    const actualDataDir = await instance.evaluate(({ app }) => app.getPath('userData'));
+    checkHandoff('user-data', path.resolve(actualDataDir).toLowerCase() === path.resolve(dataDir).toLowerCase(), 'isolated profile user-data path matches');
+
+    handoffCheck = 'startup-health';
+    graphics.phase('world connection');
+    await page.waitForFunction(() => document.querySelector('#connection')?.textContent.includes('World connected'), null, { timeout: 30000 });
+    await graphics.assertHealthy();
+    checkHandoff('startup-health', true, 'installed application reaches healthy startup');
+    return page;
+  } catch (error) {
+    if (handoffMode && !error.tusHandoffCheck) {
+      const check = ['build-label', 'build-title-sha', 'app-version', 'user-data', 'startup-health'].includes(handoffCheck) ? handoffCheck : 'other';
+      console.log('TUS_INSTALLER_HANDOFF check=' + check + ':failed');
+      error.tusHandoffCheck = check;
+    }
+    throw error;
+  }
 }
 async function close(phase) {
   const closing = instance, observed = graphics, diagnostic = gpu;
@@ -88,7 +134,43 @@ async function verifyRestored(page) {
   assert.equal(saved.agentEffort, settingsFixture.agentEffort, 'agent reasoning preference survives restart');
   assert.equal('token' in saved, false, 'session tokens must not be persisted');
 }
-await withSmokeCleanup(async () => {
+const installedExe = path.join(installDir, 'TheUnfinishedShapes.exe');
+async function prepareSource() {
+  console.log('TUS_INSTALLER_HANDOFF stage=source-setup-started');
+  await run(installer, ['/S', `/D=${installDir}`], { timeout: 180000 });
+  console.log('TUS_INSTALLER_HANDOFF stage=source-setup-complete');
+  const page = await launch(installedExe, 'installed updater source');
+  console.log('TUS_INSTALLER_HANDOFF stage=source-identity-verified');
+  await mkdir(work, { recursive: true });
+  await mkdir(settingsFixture.workspacePath, { recursive: true });
+  await page.evaluate(async fixture => {
+    await window.tus.saveSettings(fixture);
+    const s = await window.tus.loadSettings();
+    await window.tus.request({ ...s, path: '/command', method: 'POST', body: { type: 'build', objectType: 'bridge', position: { x: 7, y: 1, z: 0 } } });
+  }, settingsFixture);
+  await verifyRestored(page);
+  console.log('TUS_INSTALLER_HANDOFF stage=source-fixture-verified');
+  await close('source fixture ready');
+  console.log(`TUS_INSTALLER_HANDOFF stage=source-verified version=${packageVersion} sourceSha=${expectedSourceSha || 'unknown'} buildInfo=verified userData=verified fixture=written`);
+}
+async function verifyTarget() {
+  await access(installedExe);
+  const page = await launch(installedExe, 'installed updater target');
+  console.log('TUS_INSTALLER_HANDOFF stage=target-identity-verified');
+  await verifyRestored(page);
+  console.log('TUS_INSTALLER_HANDOFF stage=target-fixture-verified');
+  await close('target fixture verified');
+  console.log(`TUS_INSTALLER_HANDOFF stage=target-verified version=${packageVersion} sourceSha=${expectedSourceSha || 'unknown'} buildInfo=verified userData=verified fixture=retained`);
+}
+if (handoffMode) {
+  try {
+    if (handoffMode === 'prepare-source') await prepareSource();
+    else await verifyTarget();
+  } finally {
+    await close('handoff cleanup').catch(() => {});
+  }
+} else {
+  await withSmokeCleanup(async () => {
   // A genuinely clean first install must launch before any profile directory exists.
   await run(installer, ['/S', `/D=${installDir}`], { timeout: 180000 });
   let page = await launch(path.join(installDir, 'TheUnfinishedShapes.exe'), 'clean install');
@@ -144,7 +226,34 @@ await withSmokeCleanup(async () => {
   await dpiSession.send('Emulation.clearDeviceMetricsOverride');
   await dpiSession.detach();
   await instance.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size[0], size[1]), originalWindowSize);
-  await page.waitForFunction(size => innerWidth === size.width && innerHeight === size.height, originalViewport);
+  try {
+    await page.waitForFunction(size => innerWidth === size.width && innerHeight === size.height, originalViewport);
+  } catch (error) {
+    let timer;
+    const snapshot = await Promise.race([
+      Promise.all([
+        page.evaluate(() => ({ width: innerWidth, height: innerHeight, devicePixelRatio })),
+        instance.evaluate(({ BrowserWindow, screen }) => {
+          const win = BrowserWindow.getAllWindows()[0];
+          const bounds = win.getBounds();
+          return {
+            size: win.getSize(),
+            contentSize: win.getContentSize(),
+            bounds,
+            scaleFactor: screen.getDisplayMatching(bounds).scaleFactor,
+          };
+        }),
+      ]).then(([viewport, window]) => ({ viewport, window })).catch(() => null),
+      new Promise(resolve => { timer = setTimeout(() => resolve(null), 1000); }),
+    ]);
+    clearTimeout(timer);
+    console.log('TUS_VIEWPORT: restore-timeout ' + JSON.stringify({
+      expectedViewport: originalViewport,
+      expectedWindowSize: originalWindowSize,
+      actual: snapshot,
+    }));
+    throw error;
+  }
   graphics.phase('manual UI create, select, edit and remove');
   await manualEditing(page);
   graphics.phase('create current-candidate fixture');
@@ -155,7 +264,6 @@ await withSmokeCleanup(async () => {
     await window.tus.request({ ...s, path: '/command', method: 'POST', body: { type: 'build', objectType: 'bridge', position: { x: 7, y: 1, z: 0 } } });
   }, settingsFixture);
   await close();
-  const installedExe = path.join(installDir, 'TheUnfinishedShapes.exe');
   page = await launch(installedExe, 'native quit prompt acceptance', { realQuitPrompt: true });
   graphics.phase('native window close and File -> Exit confirmation');
   await graphics.assertHealthy();
@@ -189,5 +297,8 @@ await withSmokeCleanup(async () => {
   () => rm(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }),
   () => rm(installDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
 );
-console.log(`Windows portable archive smoke: ${portableExecutable ? 'passed with exact supplied executable' : 'not requested; portable archive was not tested'}.`);
-console.log('Windows installer smoke passed: current candidate clean install, synthetic settings/world/thread ID persistence after restart, same-installer reinstall, uninstall data retention and reinstall after uninstall; graphics checked throughout each lifecycle; no credentials saved or model invoked.');
+}
+if (!handoffMode) {
+  console.log(`Windows portable archive smoke: ${portableExecutable ? 'passed with exact supplied executable' : 'not requested; portable archive was not tested'}.`);
+  console.log('Windows installer smoke passed: current candidate clean install, synthetic settings/world/thread ID persistence after restart, same-installer reinstall, uninstall data retention and reinstall after uninstall; graphics checked throughout each lifecycle; no credentials saved or model invoked.');
+}

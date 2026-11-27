@@ -1,5 +1,19 @@
 import assert from 'node:assert/strict';
 
+export function waitForExit(child, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    if (child.exitCode !== null) return resolve();
+    const onExit = () => { clearTimeout(timer); resolve(); };
+    const timer = setTimeout(() => {
+      child.removeListener('exit', onExit);
+      const error = new Error('The packaged updater process did not exit after confirmed launch.');
+      error.code = 'ETIMEDOUT';
+      reject(error);
+    }, timeoutMs);
+    child.once('exit', onExit);
+  });
+}
+
 // Preserve the first failure and still attempt every independent cleanup action.
 export async function withSmokeCleanup(work, ...cleanup) {
   const errors = [];
@@ -13,10 +27,102 @@ export async function withSmokeCleanup(work, ...cleanup) {
   return result;
 }
 
+
+const smokeCleanupStepTimeoutMs = 10000;
+const appProcessTimeoutMs = 5000;
+
+function smokeCleanupMarker(stage, outcome) {
+  try { console.log('TUS_SMOKE_CLEANUP stage=' + stage + ' outcome=' + outcome); } catch {}
+}
+
+async function closePackagedApp(app) {
+  smokeCleanupMarker('app-close', 'started');
+  let timer;
+  const closing = Promise.resolve().then(() => app.close()).then(
+    () => ({ status: 'completed' }),
+    error => ({ status: 'rejected', error }),
+  );
+  let outcome;
+  try {
+    outcome = await Promise.race([
+      closing,
+      new Promise(resolve => { timer = setTimeout(() => resolve({ status: 'timeout' }), smokeCleanupStepTimeoutMs); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  smokeCleanupMarker('app-close', outcome.status);
+  if (outcome.status === 'completed') return;
+
+  const closeError = outcome.status === 'timeout'
+    ? Object.assign(new Error('Packaged app close timed out.'), { code: 'ETIMEDOUT' })
+    : outcome.error;
+  let processOutcome = 'failed', reapError;
+  try {
+    const child = typeof app.process === 'function' ? app.process() : null;
+    if (!child) processOutcome = 'unavailable';
+    else if (child.exitCode !== null) processOutcome = 'already-exited';
+    else {
+      if (!child.kill('SIGKILL') && child.exitCode === null) throw new Error('Packaged app process could not be stopped.');
+      await waitForExit(child, appProcessTimeoutMs);
+      processOutcome = 'terminated';
+    }
+  } catch (error) {
+    reapError = error;
+    processOutcome = error?.code === 'ETIMEDOUT' ? 'timeout' : 'failed';
+  }
+  smokeCleanupMarker('app-process', processOutcome);
+  if (reapError) throw new AggregateError([closeError, reapError], 'Packaged app cleanup failed; close failure preserved', { cause: closeError });
+  throw closeError;
+}
+
 export async function closeSmokeApp(app, graphics, phase = 'normal close') {
   if (!app) return;
-  await withSmokeCleanup(async () => { graphics?.phase(phase); await graphics?.assertHealthy(); },
-    () => app.close(), () => graphics?.assertNoErrors());
+  const windows = process.platform === 'win32';
+  await withSmokeCleanup(async () => {
+    graphics?.phase(phase);
+    const startedAt = Date.now();
+    if (windows) console.log('TUS_WINDOWS_CLOSE: graphics-health-started');
+    try {
+      if (graphics?.assertHealthy) {
+        smokeCleanupMarker('graphics-health', 'started');
+        let timer;
+        const check = Promise.resolve().then(() => graphics.assertHealthy()).then(
+          () => ({ status: 'completed' }),
+          error => ({ status: 'failed', error }),
+        );
+        let outcome;
+        try {
+          outcome = await Promise.race([
+            check,
+            new Promise(resolve => { timer = setTimeout(() => resolve({ status: 'timeout' }), smokeCleanupStepTimeoutMs); }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+        smokeCleanupMarker('graphics-health', outcome.status);
+        if (outcome.status === 'timeout') {
+          throw Object.assign(new Error('Graphics health check timed out during smoke cleanup.'), { code: 'ETIMEDOUT' });
+        }
+        if (outcome.status === 'failed') throw outcome.error;
+      }
+    } finally { if (windows) console.log('TUS_UIA_TIMING: graphics-health-ms=' + (Date.now() - startedAt)); }
+  }, async () => {
+    const startedAt = Date.now();
+    if (windows) console.log('TUS_WINDOWS_CLOSE: app-close-started');
+    let outcome = 'failed';
+    try { await closePackagedApp(app); outcome = 'completed'; }
+    finally {
+      if (windows) {
+        console.log('TUS_UIA_TIMING: app-close-ms=' + (Date.now() - startedAt));
+        console.log('TUS_WINDOWS_CLOSE: app-close-' + outcome);
+      }
+    }
+  }, async () => {
+    const startedAt = Date.now();
+    try { await graphics?.assertNoErrors(); }
+    finally { if (windows) console.log('TUS_UIA_TIMING: graphics-errors-ms=' + (Date.now() - startedAt)); }
+  });
 }
 
 export function isGraphicsFailure(message) {

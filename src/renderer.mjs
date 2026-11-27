@@ -881,20 +881,49 @@ async function poll() {
 }
 function positionKey(position) { return `${position.x.toFixed(2)},${position.y.toFixed(8)},${position.z.toFixed(2)}`; }
 let lastPosition = '';
+// A failed smoke callback must never alter input or movement behavior.
+function traceSmokeJump(event, value) {
+  try { window.__TUS_SMOKE_JUMP_TRACE?.(event, value); } catch {}
+}
 async function syncPosition() {
   const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration, movementVersion = localMovementVersion, jump = jumpRequested;
-  if (moveRunning || (key === lastPosition && !jump && playerVelocityY === 0) || !meId || !bridge) return; moveRunning = true;
+  if (moveRunning) { traceSmokeJump('move.skip', 'move-running'); return; }
+  if (key === lastPosition && !jump && playerVelocityY === 0) { traceSmokeJump('move.skip', 'stationary'); return; }
+  if (!meId) { traceSmokeJump('move.skip', 'no-player'); return; }
+  if (!bridge) { traceSmokeJump('move.skip', 'no-bridge'); return; }
+  moveRunning = true;
   try {
+    traceSmokeJump('move.jump', jump);
     const result = await request('/command', 'POST', { type: 'move', position, jump });
+    let responseOutcome, clientApplied = false;
     if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && result.revision >= latestStateRevision) {
       latestStateRevision = result.revision;
-      if (movementVersion === localMovementVersion && result.position) { playerPosition = result.position; playerVelocityY = result.velocityY ?? 0; }
+      if (movementVersion === localMovementVersion && result.position) {
+        playerPosition = result.position;
+        playerVelocityY = result.velocityY ?? 0;
+        clientApplied = true;
+      }
       if (jump) jumpRequested = false;
       lastPosition = positionKey(result.position ?? position);
+      responseOutcome = 'accepted';
+      traceSmokeJump('move.result', 'accepted');
     } else if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && movementVersion === localMovementVersion) {
       lastPosition = positionKey(playerPosition);
+      responseOutcome = 'stale';
+      traceSmokeJump('move.result', 'stale');
+    } else {
+      responseOutcome = result.error ? 'rejected' : 'stale';
+      traceSmokeJump('move.result', responseOutcome);
     }
-  } catch { /* The status poll reports connectivity failures. */ } finally { moveRunning = false; }
+    if (jump) traceSmokeJump('move.jump-response', {
+      postAttempted: true, responseReceived: true, outcome: responseOutcome, serverPosition: result.position,
+      serverVelocityY: result.velocityY, serverRevision: result.revision, clientApplied,
+    });
+  } catch {
+    if (jump) traceSmokeJump('move.jump-response', { postAttempted: true, responseReceived: false, outcome: 'request-failed', clientApplied: false });
+    traceSmokeJump('move.result', 'request-failed');
+    /* The status poll reports connectivity failures. */
+  } finally { moveRunning = false; }
 }
 async function command(body) { const result = await request('/command', 'POST', body); if (result.error) throw new Error(result.message || result.error); await poll(); return result; }
 
@@ -1077,7 +1106,7 @@ window.addEventListener('keydown', event => {
   if (event.code === 'Escape' && (dragCandidate || movePreview)) { event.preventDefault(); cancelMovePreview(); return; }
   if (event.code === 'F11') { event.preventDefault(); if (!event.repeat) requestFullscreenToggle(); return; }
   if (event.code === 'Escape' && isFullscreen) { event.preventDefault(); requestFullscreenToggle(); return; }
-  if (event.code === 'Space') { event.preventDefault(); if (!event.repeat) jumpRequested = true; return; }
+  if (event.code === 'Space') { event.preventDefault(); if (!event.repeat) { jumpRequested = true; traceSmokeJump('jumpRequested', jumpRequested); } return; }
   keys.add(event.key.toLowerCase());
 });
 window.addEventListener('keyup', event => keys.delete(event.key.toLowerCase())); window.addEventListener('blur', () => keys.clear());
@@ -1160,9 +1189,15 @@ $('settings-form').addEventListener('submit', async event => { event.preventDefa
 const updateStatus = text => { $('updates-status').textContent = text; };
 function showStartupUpdateNotice(result) {
   const button = $('updates-notice');
+  button.dataset.errorCode = '';
   if (result?.status === 'unavailable') {
+    const errorCode = ['rate_limited', 'http_error', 'invalid_response', 'timeout', 'check_failed'].includes(result.errorCode)
+      ? result.errorCode : 'check_failed';
+    button.dataset.errorCode = errorCode;
     button.hidden = false; button.textContent = 'Updates unavailable';
-    button.title = 'The release check failed or timed out. Open Settings to retry.';
+    button.title = errorCode === 'rate_limited'
+      ? 'GitHub rate limit reached. Open Settings to retry later.'
+      : 'The release check failed or timed out. Open Settings to retry.';
     updateStatus(button.title); return;
   }
   const options = result?.status === 'checked' ? result.options : null;
@@ -1221,9 +1256,18 @@ $('updates-check').addEventListener('click', async () => {
 $('update-channel').addEventListener('change', () => { checkedUpdate = null; updateDownloaded = false; updateExtracted = false; updateStatus('Save the channel preference, then check for updates.'); updateButtons(); });
 $('update-distribution').addEventListener('change', () => { checkedUpdate = null; updateDownloaded = false; updateExtracted = false; updateStatus('Check again for the selected Windows package.'); updateButtons(); });
 $('updates-download').addEventListener('click', async () => {
+  const status = $('updates-status');
+  delete status.dataset.updateFailure;
+  delete status.dataset.updatePhase;
+  delete status.dataset.verifierCode;
+  delete status.dataset.verifierErrorType;
+  delete status.dataset.updateFailureCode;
+  delete status.dataset.updateHttpStatus;
   updateDownloading = true; updateBusy = true; updateButtons(); updateStatus('Downloading release package…');
   try {
+    status.dataset.updateInvokeStatus = 'pending';
     const result = await bridge.downloadUpdate();
+    status.dataset.updateInvokeStatus = 'fulfilled';
     if (result?.cancelled === true) {
       updateStatus('Download cancelled. You can try again.');
       return;
@@ -1231,6 +1275,7 @@ $('updates-download').addEventListener('click', async () => {
     updateDownloaded = true;
     updateStatus('Verified ' + result.assetName + ' (SHA-256 ' + result.sha256.slice(0, 12) + '…).');
   } catch (error) {
+    status.dataset.updateInvokeStatus = 'rejected';
     if (error?.name === 'AbortError' || error?.code === 'ABORT_ERR') updateStatus('Download cancelled. You can try again.');
     else updateStatus(String(error?.message || error).slice(0, 300));
   }
@@ -1241,27 +1286,59 @@ $('updates-cancel').addEventListener('click', async () => {
   catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
 });
 $('updates-extract').addEventListener('click', async () => {
+  const status = $('updates-status');
+  delete status.dataset.updateExtractFailureCode;
+  delete status.dataset.updateExtractStage;
+  delete status.dataset.updateExtractOperation;
+  status.dataset.updateExtractInvokeStatus = 'pending';
   updateBusy = true; updateButtons(); updateStatus('Choose a destination folder…');
   try {
     const result = await bridge.extractUpdate();
+    status.dataset.updateExtractInvokeStatus = 'fulfilled';
     if (result.canceled) updateStatus('Folder selection cancelled.');
     else { updateExtracted = true; updateStatus('Verified archive extracted. You can now launch the new copy.'); }
-  } catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
+  } catch (error) {
+    status.dataset.updateExtractInvokeStatus = 'rejected';
+    updateStatus(String(error?.message || error).slice(0, 300));
+  }
   finally { updateBusy = false; updateButtons(); }
 });
 $('updates-launch').addEventListener('click', async () => {
+  const status = $('updates-status');
+  if (window.__tusUpdaterSmokeDiagnostic === true) {
+    status.dataset.updateLaunchClickStatus = 'received';
+    status.dataset.updateLaunchInvokeStatus = 'pending';
+  }
   try {
     const result = await bridge.launchUpdate();
+    if (window.__tusUpdaterSmokeDiagnostic === true) status.dataset.updateLaunchInvokeStatus = 'fulfilled';
     updateStatus(result.started ? 'Waiting for the quit confirmation…' : 'Update launch cancelled.');
-  } catch (error) { updateStatus(String(error?.message || error).slice(0, 300)); }
+  } catch (error) {
+    if (window.__tusUpdaterSmokeDiagnostic === true) status.dataset.updateLaunchInvokeStatus = 'rejected';
+    updateStatus(String(error?.message || error).slice(0, 300));
+  }
 });
 bridge?.onUpdateProgress(progress => {
   if (progress?.state === 'downloading') {
     const received = (progress.received / 1048576).toFixed(1);
     const total = (progress.total / 1048576).toFixed(1);
     updateStatus('Downloading release package: ' + received + ' / ' + total + ' MB.');
+  } else if (progress?.state === 'verifying') {
+    updateStatus('Verifying release provenance…');
+  } else if (progress?.state === 'failed') {
+    const status = $('updates-status');
+    status.dataset.updateFailure = 'true';
+    status.dataset.updatePhase = progress.phase === 'provenance' ? 'provenance' : 'download';
+    status.dataset.updateFailureCode = typeof progress.failureCode === 'string' ? progress.failureCode : 'OTHER';
+    status.dataset.verifierCode = typeof progress.verifierCode === 'string' ? progress.verifierCode : 'OTHER';
+    status.dataset.verifierErrorType = typeof progress.verifierErrorType === 'string' ? progress.verifierErrorType : 'OTHER';
+    status.dataset.updateHttpStatus = Number.isInteger(progress.httpStatus) && progress.httpStatus >= 400 && progress.httpStatus <= 599 ? String(progress.httpStatus) : '';
   } else if (progress?.state === 'verified') {
     updateStatus('Verified ' + progress.assetName + ' (SHA-256 ' + progress.sha256.slice(0, 12) + '…).');
+  } else if (progress?.state === 'extract-failed') {
+    $('updates-status').dataset.updateExtractFailureCode = typeof progress.failureCode === 'string' ? progress.failureCode : 'OTHER';
+    $('updates-status').dataset.updateExtractStage = typeof progress.extractStage === 'string' ? progress.extractStage : 'unknown';
+    $('updates-status').dataset.updateExtractOperation = typeof progress.extractOperation === 'string' ? progress.extractOperation : 'unknown';
   } else if (progress?.state === 'extracted') {
     updateExtracted = true; updateStatus('Verified archive extracted. You can now launch the new copy.'); updateButtons();
   } else if (progress?.state === 'launch-cancelled') {

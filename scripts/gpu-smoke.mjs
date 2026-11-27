@@ -2,6 +2,8 @@ import fs, { mkdtemp, open } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+const cleanupTimeoutMs = 5000;
+
 // Do not print arbitrary Chromium messages: they can contain URLs, paths or tokens.
 export function gpuLogEvidence(text) {
   const result = [];
@@ -80,8 +82,21 @@ export async function createGpuDiagnostics(label, log = console.log) {
       } catch { report('chromium-log-unavailable'); }
       finally {
         try { await file?.close(); } catch {}
-        try { await fs.rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }); }
-        catch (error) { report('log-cleanup-failed'); throw error; }
+        let timer;
+        try {
+          // shortcut: bounds this wait but cannot cancel fs.rm; isolate removal if CI still stalls.
+          await Promise.race([
+            fs.rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }),
+            new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error('GPU log cleanup timed out after ' + cleanupTimeoutMs + 'ms.')), cleanupTimeoutMs);
+            }),
+          ]);
+        } catch (error) {
+          report('log-cleanup-failed');
+          throw error;
+        } finally {
+          clearTimeout(timer);
+        }
       }
     }
   };
