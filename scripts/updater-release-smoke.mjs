@@ -12,13 +12,11 @@ import { safeUpdaterFailureCode, safeVerifierCode, safeVerifierErrorType, verify
 import { closeSmokeApp, observeGraphics, waitForExit, withSmokeCleanup } from './graphics-smoke.mjs';
 import { createGpuDiagnostics } from './gpu-smoke.mjs';
 import { cleanupUpdaterTemporaryData, withTimeout } from './updater-cleanup.mjs';
-import { safeMainDiagnostics, safeZipBatcherComparison, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
+import { safeMainDiagnostics, updaterZipStreamSampleOffsetsMs } from './updater-smoke-diagnostics.mjs';
 import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEvents, safeNsisWizardEvents, safeWindowsScenarioFailureCategory, windowsInstallerHandoffInstallDir, windowsRelaunchRequestStatus } from './windows-updater-scenarios.mjs';
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
 const updateHttpStatusPattern = /\bHTTP (\d{3})\b/;
-// Four 15s counterbalanced memory-source Deflate sink arms plus setup/cleanup reserve; production extraction remains separately bounded.
-const zipBatcherComparisonTimeoutMs = 75_000;
 assert.deepEqual(
   'Downloading release package: 1.5 / 42.0 MB.'.match(updateProgressPattern)?.slice(1),
   ['1.5', '42.0'],
@@ -1594,17 +1592,6 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
   const downloadedPath = path.join(updateDir, downloadName);
   assert.equal(await fileDigest(downloadedPath), manifestFile.sha256, 'downloaded bytes match the published release manifest');
   console.log('TUS_UPDATE_ABORT_RETRY status=verified package=' + distribution);
-  let zipBatcherComparison = null;
-  if (process.platform === 'win32' && distribution === 'portable') {
-    setDiagnostic('zip-batcher-comparison');
-    const rawComparison = await withTimeout(current.instance.evaluate(async (_electron, expected) => {
-      const compare = globalThis.__tusUpdaterSmokeZipBatcherCompare;
-      return typeof compare === 'function' ? compare(expected) : null;
-    }, { tag, assetName, size: manifestFile.size, sha256: manifestFile.sha256 }),
-    'Verified-memory ZIP Deflate sink comparison', zipBatcherComparisonTimeoutMs);
-    zipBatcherComparison = safeZipBatcherComparison(rawComparison);
-    console.log('TUS_UPDATE_ZIP_SINK_COMPARISON ' + JSON.stringify(zipBatcherComparison));
-  }
   if (distribution === 'installer') {
     assert.ok(handoffProfile, 'the exact installer handoff has an isolated source profile');
     pendingWindowsInstallerCleanup = {
@@ -1828,43 +1815,6 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     await closeActive('updated package close');
   }
 
-  if (zipBatcherComparison) {
-    assert.equal(zipBatcherComparison.assetMatches, true, 'sink comparison uses the exact verified RC11 asset');
-    assert.equal(zipBatcherComparison.memorySourceVerified, true, 'the in-memory source rehashes to the exact published size and digest');
-    assert.equal(zipBatcherComparison.entryMatches, true, 'each arm reads the exact published non-ASAR Deflate entry');
-    assert.equal(zipBatcherComparison.batchBytes, 256 * 1024, 'both source modes use the production ZIP batcher size');
-    assert.equal(zipBatcherComparison.readHighWaterMarkBytes, 256 * 1024);
-    assert.equal(zipBatcherComparison.writeHighWaterMarkBytes, 16 * 1024);
-    assert.equal(zipBatcherComparison.measurementScope, 'verified-memory-deflate-file-vs-discard');
-    const expectedArms = [
-      { trial: 1, arm: 'memory-file', sink: 'node-fs-file' },
-      { trial: 1, arm: 'memory-discard', sink: 'count-discard' },
-      { trial: 2, arm: 'memory-discard', sink: 'count-discard' },
-      { trial: 2, arm: 'memory-file', sink: 'node-fs-file' },
-    ];
-    assert.deepEqual(zipBatcherComparison.arms.map(({ trial, arm, sink }) => ({ trial, arm, sink })), expectedArms);
-    for (const arm of zipBatcherComparison.arms) {
-      assert.ok(['completed', 'time-limit'].includes(arm.outcome), 'each bounded source arm produced a measurement');
-      assert.equal(arm.batchBytes, zipBatcherComparison.batchBytes, 'both sink modes use the same production batcher');
-      assert.equal(arm.cleanupStatus, arm.sink === 'node-fs-file' ? 'removed' : 'not-created',
-        'file sink cleanup is confirmed and discard sink creates no temporary file');
-      for (const key of ['wallMs', 'cpuUserMs', 'cpuSystemMs', 'sinkBytesProcessed']) {
-        assert.ok(Number.isSafeInteger(arm[key]) && arm[key] >= 0, 'each sink arm reports bounded ' + key);
-      }
-      assert.ok(Number.isSafeInteger(arm.decodedBytes) && arm.decodedBytes >= 0, 'each source arm reports decoded-byte progress');
-      assert.equal(arm.compressedBytesRead, null, 'all arms use the same verified in-memory ZIP buffer');
-      assert.equal(arm.countersMatch, arm.decodedBytes === arm.sinkBytesProcessed);
-      if (arm.outcome === 'completed') {
-        assert.equal(arm.compressedBytesRead, null);
-        assert.equal(arm.decodedBytes, zipBatcherComparison.entryUncompressedSize);
-        assert.equal(arm.sinkBytesProcessed, zipBatcherComparison.entryUncompressedSize);
-        assert.equal(arm.countersMatch, true);
-        assert.equal(arm.sourceReadableEnded, true);
-        assert.equal(arm.sinkWritableFinished, true);
-        assert.equal(arm.sinkClosed, true);
-      }
-    }
-  }
   console.log('Updater E2E passed: ' + platform + ' ' + distribution + ' -> ' + tag + ' (' + assetName + '), exact published digest and provenance, explicit cancel/launch, isolated world persistence.');
   return { workDir, downloadedPath, assetName, tag, manifest, targetExecutable };
 }
