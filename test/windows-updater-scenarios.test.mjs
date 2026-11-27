@@ -1197,6 +1197,7 @@ test('installer starts the source-exit window after late confirmation', async t 
   let markClickStarted;
   const clickStarted = new Promise(resolve => { markClickStarted = resolve; });
   let cleanedChild;
+  const events = [];
 
   try {
     const outcomesPromise = runWindowsUpdaterScenarios({
@@ -1206,10 +1207,14 @@ test('installer starts the source-exit window after late confirmation', async t 
         click: async () => {
           markClickStarted();
           await approval;
+          events.push('approval');
           child.exitCode = 0;
           child.emit('exit', 0);
         },
-        waitForExit: observedChild => waitForExit(observedChild, 30000),
+        waitForExit: observedChild => {
+          events.push('exit-window');
+          return waitForExit(observedChild, 30000);
+        },
         cleanup: async observedChild => { cleanedChild = observedChild; },
       }),
     });
@@ -1220,7 +1225,24 @@ test('installer starts the source-exit window after late confirmation', async t 
 
     const outcomes = await outcomesPromise;
     assert.equal(outcomes.installer.status, 'fulfilled', 'a fast source exit after late approval must still be observed');
+    assert.deepEqual(events, ['approval', 'exit-window']);
     assert.equal(cleanedChild, child);
+    assert.equal(child.listenerCount('exit'), 0);
+  } finally {
+    t.mock.timers.reset();
+  }
+});
+test('bounded child exit observes a signal received before listener setup', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = 'SIGTERM';
+  child.emit('exit', null, 'SIGTERM');
+
+  try {
+    const result = waitForExit(child, 30000).then(() => null, error => error);
+    t.mock.timers.tick(30000);
+    assert.equal(await result, null);
     assert.equal(child.listenerCount('exit'), 0);
   } finally {
     t.mock.timers.reset();

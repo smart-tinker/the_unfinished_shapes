@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 export function waitForExit(child, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
-    if (child.exitCode !== null) return resolve();
+    if (child.exitCode !== null || child.signalCode) return resolve();
     const onExit = () => { clearTimeout(timer); resolve(); };
     const timer = setTimeout(() => {
       child.removeListener('exit', onExit);
