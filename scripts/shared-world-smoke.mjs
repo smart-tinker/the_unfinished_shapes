@@ -51,6 +51,19 @@ const traceNumber = value => Number.isFinite(value) ? value : null;
 const hasCompleteMoveResponse = response => Number.isSafeInteger(response?.serverRevision) &&
   ['x', 'y', 'z'].every(axis => Number.isFinite(response.serverPosition?.[axis])) && typeof response.clientApplied === 'boolean';
 const qualifyingStatus = (evidence, complete) => evidence.length ? 'observed' : complete ? 'not_observed' : 'UNKNOWN';
+const completeMoveSequence = events => {
+  const moves = events.filter(event => event.type === 'move.request' || event.type === 'move.response');
+  const requests = moves.filter(event => event.type === 'move.request'), responses = moves.filter(event => event.type === 'move.response');
+  let pending = 0, badOrder = false;
+  for (const event of moves) {
+    if (event.type === 'move.request') { if (pending !== 0) badOrder = true; pending++; }
+    else { if (pending !== 1) badOrder = true; pending = Math.max(0, pending - 1); }
+  }
+  return !badOrder && pending === 0 && requests.length === responses.length &&
+    responses.every(event => jumpTraceResults.has(event.outcome) && event.outcome !== 'request-failed');
+};
+assert.equal(completeMoveSequence([{ type: 'move.request' }, { type: 'move.response', outcome: 'accepted' }]), true);
+assert.equal(completeMoveSequence([{ type: 'move.request' }]), false);
 assert.equal(hasCompleteMoveResponse({ serverRevision: 1, serverPosition: { x: 0, y: 0, z: 0 }, clientApplied: true }), true);
 assert.equal(hasCompleteMoveResponse({ serverRevision: 1, serverPosition: { x: 0, y: 0, z: null }, clientApplied: true }), false);
 assert.equal(qualifyingStatus([], true), 'not_observed');
@@ -67,8 +80,9 @@ async function jumpTraceState(id) {
 async function installJumpTrace(client) {
   const trace = { observations: [], stateErrors: 0, droppedObservations: 0 };
   await client.page.evaluate(() => {
-    const trace = { active: true, events: [], droppedEvents: 0, spaceKeydown: false, jumpRequested: null,
-      firstMoveJump: null, firstMoveSkip: null, firstMoveResult: null, jumpPostResponse: null, hudGate: null };
+    const trace = { active: true, events: [], droppedEvents: 0, droppedBeforeGate: 0, droppedAfterGate: 0, gateAt: null,
+      spaceKeydown: false, jumpRequested: null, firstMoveJump: null, firstMoveSkip: null,
+      firstMoveResult: null, jumpPostResponse: null, hudGate: null };
     const skips = new Set(['move-running', 'stationary', 'no-player', 'no-bridge']), results = new Set(['accepted', 'stale', 'rejected', 'request-failed']);
     const hud = () => {
       const match = /^X (-?\d+(?:\.\d+)?) · Y (-?\d+(?:\.\d+)?) · Z (-?\d+(?:\.\d+)?)$/.exec(document.querySelector('#coordinates')?.textContent || '');
@@ -79,8 +93,14 @@ async function installJumpTrace(client) {
     // shortcut: 128 events and 64 state samples, increase only if a slow 5s run reaches either cap.
     const record = (type, fields = {}) => {
       if (!trace.active) return;
-      if (trace.events.length >= 128) { trace.droppedEvents++; return; }
-      trace.events.push({ sequence: trace.events.length + 1, at: Date.now(), type, ...fields });
+      const at = Date.now();
+      if (trace.events.length >= 128) {
+        trace.droppedEvents++;
+        if (trace.gateAt !== null && at > trace.gateAt) trace.droppedAfterGate++;
+        else trace.droppedBeforeGate++;
+        return;
+      }
+      trace.events.push({ sequence: trace.events.length + 1, at, type, ...fields });
     };
     window.__TUS_SMOKE_JUMP_TRACE_STATE = trace;
     window.__TUS_SMOKE_JUMP_TRACE = (name, value, details) => {
@@ -89,7 +109,12 @@ async function installJumpTrace(client) {
       if (name === 'move.jump') {
         const jump = value === true;
         if (trace.spaceKeydown && trace.firstMoveJump === null) trace.firstMoveJump = jump;
-        record('move.request', { jump, hud: hud() });
+        const target = details?.position;
+        record('move.request', { jump, targetPosition: {
+          x: Number.isFinite(target?.x) ? target.x : null,
+          y: Number.isFinite(target?.y) ? target.y : null,
+          z: Number.isFinite(target?.z) ? target.z : null,
+        }, hud: hud() });
       }
       if (name === 'move.skip') {
         const reason = skips.has(value) ? value : null;
@@ -158,36 +183,38 @@ async function stopJumpTraceWindow(client, trace, gateAt) {
   trace.gateAt = gateAt; trace.stopped = true;
   await client.page.evaluate(gateAt => {
     const current = window.__TUS_SMOKE_JUMP_TRACE_STATE;
-    if (current) { current.gateAt = gateAt; current.active = false; }
+    if (current && current.gateAt === null) current.gateAt = gateAt;
   }, gateAt).catch(() => {});
 }
-async function reportJumpTrace(client, trace, gateResult, gateAt, initialSnapshot) {
+async function reportJumpTrace(client, trace, gateResult, gateAt, initialSnapshot, landingResult = 'not-reached') {
   const raw = await client.page.evaluate(() => {
     const current = window.__TUS_SMOKE_JUMP_TRACE_STATE;
     if (!current) return {};
+    current.active = false;
     return {
       spaceKeydown: current.spaceKeydown, jumpRequested: current.jumpRequested, firstMoveJump: current.firstMoveJump,
       firstMoveSkip: current.firstMoveSkip, firstMoveResult: current.firstMoveResult, jumpPostResponse: current.jumpPostResponse,
-      events: current.events, droppedEvents: current.droppedEvents, hudGate: current.hudGate,
+      events: current.events, droppedEvents: current.droppedEvents, droppedBeforeGate: current.droppedBeforeGate,
+      droppedAfterGate: current.droppedAfterGate, gateAt: current.gateAt, endAt: Date.now(), hudGate: current.hudGate,
     };
   }).catch(() => ({}));
   await Promise.allSettled([trace.sampleTask]);
   const startAt = trace.startedAt ?? gateAt, durationMs = Math.max(0, gateAt - startAt);
-  const events = (raw.events ?? []).filter(event => event.at <= gateAt), observations = trace.observations.filter(item => item.at <= gateAt);
-  const moves = events.filter(event => event.type === 'move.request' || event.type === 'move.response');
-  const requests = moves.filter(event => event.type === 'move.request'), responses = moves.filter(event => event.type === 'move.response');
-  let pending = 0, badOrder = false;
-  for (const event of moves) {
-    if (event.type === 'move.request') { if (pending !== 0) badOrder = true; pending++; }
-    else { if (pending !== 1) badOrder = true; pending = Math.max(0, pending - 1); }
-  }
+  const gateBoundaryAt = Number.isSafeInteger(raw.gateAt) ? raw.gateAt : gateAt, endAt = Number.isSafeInteger(raw.endAt) ? raw.endAt : Date.now();
+  const allEvents = (raw.events ?? []).filter(event => event.at <= endAt);
+  const events = allEvents.filter(event => event.at <= gateBoundaryAt), postGateEvents = allEvents.filter(event => event.at > gateBoundaryAt);
+  const observations = trace.observations.filter(item => item.at <= gateBoundaryAt);
+  const requests = events.filter(event => event.type === 'move.request'), responses = events.filter(event => event.type === 'move.response');
   const jumpRequests = requests.filter(event => event.jump), jumpResponses = events.filter(event => event.type === 'jump.response');
   const jumpResponsesComplete = jumpRequests.length > 0 && jumpRequests.length === jumpResponses.length && jumpResponses.every(event => event.responseReceived && jumpTraceResults.has(event.outcome) &&
     Number.isSafeInteger(event.serverRevision) && Object.values(event.serverPosition ?? {}).every(Number.isFinite));
-  const movementResponsesComplete = raw.droppedEvents === 0 && !badOrder && pending === 0 && requests.length === responses.length && jumpResponsesComplete &&
-    responses.every(event => jumpTraceResults.has(event.outcome) && event.outcome !== 'request-failed');
+  const movementResponsesComplete = raw.droppedBeforeGate === 0 && completeMoveSequence(events) && jumpResponsesComplete;
   // Polling can miss intermediate revisions; only a state-bearing result per POST proves a negative.
   const movementStateResponsesComplete = responses.length > 0 && responses.every(hasCompleteMoveResponse);
+  const postGateResponses = postGateEvents.filter(event => event.type === 'move.response');
+  const postGateComplete = Array.isArray(raw.events) && raw.droppedAfterGate === 0 &&
+    completeMoveSequence(postGateEvents) && postGateResponses.every(hasCompleteMoveResponse);
+  const postGateStatus = postGateComplete ? (postGateResponses.length ? 'complete' : 'not_observed') : 'UNKNOWN';
   const times = observations.map(item => item.at - startAt), maxGapMs = times.slice(1).reduce((max, at, index) => Math.max(max, at - times[index]), 0);
   const samplesComplete = trace.droppedObservations === 0 && observations.length > 0 && times[0] <= 200 &&
     times.at(-1) >= durationMs - 300 && maxGapMs <= 200 &&
@@ -230,8 +257,12 @@ async function reportJumpTrace(client, trace, gateResult, gateAt, initialSnapsho
       hudRevisionStatus, hudGateStatus: gateResult === 'airborne' ? (hudGateStateLinked ? 'linked' : 'UNKNOWN') : 'not_observed',
       hudGate: raw.hudGate && Number.isSafeInteger(raw.hudGate.at) ? { atMs: raw.hudGate.at - startAt, x: raw.hudGate.x, y: raw.hudGate.y, z: raw.hudGate.z, uiRevision: raw.hudGate.uiRevision } : null,
       sameRevisionSamples, linkedHudSamples, sampleCount: observations.length, samplesComplete, movementResponsesComplete, movementStateResponsesComplete, jumpResponsesComplete, serverCoverageComplete,
-      stateErrors: trace.stateErrors, droppedEvents: raw.droppedEvents ?? null, droppedObservations: trace.droppedObservations,
+      stateErrors: trace.stateErrors, droppedEvents: raw.droppedEvents ?? null,
+      droppedBeforeGate: raw.droppedBeforeGate ?? null, droppedAfterGate: raw.droppedAfterGate ?? null,
+      droppedObservations: trace.droppedObservations,
       timeline: events.map(event => ({ ...event, atMs: event.at - startAt, at: undefined })),
+      postGate: { status: postGateStatus, landingResult, eventCount: postGateEvents.length,
+        timeline: postGateEvents.map(event => ({ ...event, afterGateMs: event.at - gateBoundaryAt, at: undefined })) },
       observations: observations.map(item => ({
         atMs: item.at - startAt, serverAtMs: item.state.at - startAt, hudAtMs: item.hud.at - startAt,
         serverRevision: item.state.revision, serverPosition: item.state.position, serverVelocityY: item.state.velocityY,
@@ -458,8 +489,9 @@ await withSmokeCleanup(async () => {
       const qualifies = Number.isFinite(x) && Number.isFinite(y) && x >= 15 && x < 17 && y > 0;
       const trace = window.__TUS_SMOKE_JUMP_TRACE_STATE;
       if (qualifies && trace && trace.hudGate === null) {
-        const revision = /^REV (\d+)$/.exec(document.querySelector('#revision')?.textContent || '');
-        trace.hudGate = { at: Date.now(), x, y, z, uiRevision: revision && Number.isSafeInteger(Number(revision[1])) ? Number(revision[1]) : null };
+        const at = Date.now(), revision = /^REV (\d+)$/.exec(document.querySelector('#revision')?.textContent || '');
+        trace.gateAt = at;
+        trace.hudGate = { at, x, y, z, uiRevision: revision && Number.isSafeInteger(Number(revision[1])) ? Number(revision[1]) : null };
       }
       return qualifies;
     }, undefined, { polling: 'raf', timeout: 5000 });
@@ -473,22 +505,23 @@ await withSmokeCleanup(async () => {
     await alice.page.keyboard.up('d');
   }
   if (gateResult === 'timeout') {
-    const trace = await reportJumpTrace(alice, jumpTrace, gateResult, gateAt, jumpStart);
+    const trace = await reportJumpTrace(alice, jumpTrace, gateResult, gateAt, jumpStart, 'not-reached');
     await alice.page.evaluate(() => { delete window.__TUS_SMOKE_JUMP_TRACE; delete window.__TUS_SMOKE_JUMP_TRACE_STATE; }).catch(() => {});
     assert.equal(trace.spaceKeydown, true, 'Space keydown trace is missing');
     assert.equal(trace.jumpRequested, true, 'local jumpRequested trace is missing');
     assert.equal(typeof trace.firstMoveJump, 'boolean', 'first move.jump trace is missing');
     throw new Error('Shared-world jump did not reach airborne acceptance within the existing 5000ms timeout.');
   }
-  let landed;
+  let landed, landingResult = 'failed';
   try {
     await alice.page.waitForFunction(() => {
       const yPart = document.querySelector('#coordinates')?.textContent.split(' · ')[1];
       return Number(yPart?.slice(2)) > 0;
     }, undefined, { polling: 'raf', timeout: 5000 });
     landed = await waitForState(snapshot => snapshot.players.find(player => player.id === 'alice')?.position.y === 2, 'Alice to land on the supported object top');
+    landingResult = 'landed';
   } finally {
-    await reportJumpTrace(alice, jumpTrace, gateResult, gateAt, jumpStart);
+    await reportJumpTrace(alice, jumpTrace, gateResult, gateAt, jumpStart, landingResult);
     await alice.page.evaluate(() => {
       delete window.__TUS_SMOKE_JUMP_TRACE;
       delete window.__TUS_SMOKE_JUMP_TRACE_STATE;

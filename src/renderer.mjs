@@ -893,7 +893,13 @@ async function syncPosition() {
   if (!bridge) { traceSmokeJump('move.skip', 'no-bridge'); return; }
   moveRunning = true;
   try {
-    traceSmokeJump('move.jump', jump);
+    traceSmokeJump('move.jump', jump, {
+      position: {
+        x: Number.isFinite(position.x) ? position.x : null,
+        y: Number.isFinite(position.y) ? position.y : null,
+        z: Number.isFinite(position.z) ? position.z : null,
+      },
+    });
     const result = await request('/command', 'POST', { type: 'move', position, jump });
     let responseOutcome, clientApplied = false;
     if (generation === settingsGeneration && !result.error && Number.isSafeInteger(result.revision) && result.revision >= latestStateRevision) {
