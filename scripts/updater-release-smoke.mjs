@@ -17,7 +17,7 @@ import { runWindowsRelaunch, runWindowsUpdaterScenarios, safeInstallerHandoffEve
 
 const updateProgressPattern = /^Downloading release package: (\d+(?:\.\d+)?) \/ (\d+(?:\.\d+)?) MB\./;
 const updateHttpStatusPattern = /\bHTTP (\d{3})\b/;
-// Four 15s reader/Deflate/sink arms plus setup/cleanup reserve; timeout fails before production extraction can overlap.
+// Four 15s paired disk/memory Deflate file arms plus setup/cleanup reserve; timeout fails before production extraction can overlap.
 const zipBatcherComparisonTimeoutMs = 75_000;
 assert.deepEqual(
   'Downloading release package: 1.5 / 42.0 MB.'.match(updateProgressPattern)?.slice(1),
@@ -1555,9 +1555,9 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
       const compare = globalThis.__tusUpdaterSmokeZipBatcherCompare;
       return typeof compare === 'function' ? compare(expected) : null;
     }, { tag, assetName, size: manifestFile.size, sha256: manifestFile.sha256 }),
-    'Verified ZIP raw/direct/batched Deflate comparison', zipBatcherComparisonTimeoutMs);
+    'Verified ZIP disk/memory Deflate file comparison', zipBatcherComparisonTimeoutMs);
     zipBatcherComparison = safeZipBatcherComparison(rawComparison);
-    console.log('TUS_UPDATE_ZIP_BATCHER_COMPARISON ' + JSON.stringify(zipBatcherComparison));
+    console.log('TUS_UPDATE_ZIP_SOURCE_COMPARISON ' + JSON.stringify(zipBatcherComparison));
   }
   if (distribution === 'installer') {
     assert.ok(handoffProfile, 'the exact installer handoff has an isolated source profile');
@@ -1784,38 +1784,37 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
 
   if (zipBatcherComparison) {
     assert.equal(zipBatcherComparison.assetMatches, true, 'sink comparison uses the exact verified RC11 asset');
+    assert.equal(zipBatcherComparison.memorySourceVerified, true, 'the in-memory source rehashes to the exact published size and digest');
     assert.equal(zipBatcherComparison.entryMatches, true, 'each arm reads the exact published non-ASAR Deflate entry');
-    assert.equal(zipBatcherComparison.batchBytes, 256 * 1024, 'the production ZIP batcher size is fixed');
+    assert.equal(zipBatcherComparison.batchBytes, 256 * 1024, 'both source modes use the production ZIP batcher size');
     assert.equal(zipBatcherComparison.readHighWaterMarkBytes, 256 * 1024);
     assert.equal(zipBatcherComparison.writeHighWaterMarkBytes, 16 * 1024);
-    assert.equal(zipBatcherComparison.measurementScope, 'raw-reader-and-deflate-pipeline');
+    assert.equal(zipBatcherComparison.measurementScope, 'disk-vs-memory-file-sink');
     const expectedArms = [
-      { trial: 1, arm: 'raw-read', sink: 'count-discard' },
-      { trial: 1, arm: 'deflate-discard', sink: 'count-discard' },
-      { trial: 1, arm: 'deflate-file', sink: 'node-fs-file' },
-      { trial: 2, arm: 'deflate-direct', sink: 'count-discard' },
+      { trial: 1, arm: 'disk-file', sink: 'node-fs-file' },
+      { trial: 1, arm: 'memory-file', sink: 'node-fs-file' },
+      { trial: 2, arm: 'disk-file', sink: 'node-fs-file' },
+      { trial: 2, arm: 'memory-file', sink: 'node-fs-file' },
     ];
     assert.deepEqual(zipBatcherComparison.arms.map(({ trial, arm, sink }) => ({ trial, arm, sink })), expectedArms);
     for (const arm of zipBatcherComparison.arms) {
-      assert.ok(['completed', 'time-limit'].includes(arm.outcome), 'each bounded sink arm produced a measurement');
-      const usesBatcher = ['deflate-discard', 'deflate-file'].includes(arm.arm);
-      assert.equal(arm.batchBytes, usesBatcher ? zipBatcherComparison.batchBytes : null, 'only production Deflate sink arms use the batcher');
-      assert.equal(arm.cleanupStatus, arm.sink === 'node-fs-file' ? 'removed' : 'not-created');
-      for (const key of ['wallMs', 'cpuUserMs', 'cpuSystemMs', 'compressedBytesRead', 'sinkBytesProcessed']) {
-        assert.ok(Number.isSafeInteger(arm[key]) && arm[key] >= 0, 'each sink arm reports bounded ' + key);
+      assert.ok(['completed', 'time-limit'].includes(arm.outcome), 'each bounded source arm produced a measurement');
+      assert.equal(arm.batchBytes, zipBatcherComparison.batchBytes, 'both source modes use the same production batcher');
+      assert.equal(arm.cleanupStatus, 'removed', 'each temporary file sink was cleaned');
+      for (const key of ['wallMs', 'cpuUserMs', 'cpuSystemMs', 'sinkBytesProcessed']) {
+        assert.ok(Number.isSafeInteger(arm[key]) && arm[key] >= 0, 'each source arm reports bounded ' + key);
       }
-      if (arm.arm === 'raw-read') assert.equal(arm.decodedBytes, null);
-      else assert.ok(Number.isSafeInteger(arm.decodedBytes) && arm.decodedBytes >= 0, 'Deflate arms report decoded-byte progress');
+      assert.ok(Number.isSafeInteger(arm.decodedBytes) && arm.decodedBytes >= 0, 'each source arm reports decoded-byte progress');
+      if (arm.arm === 'memory-file') {
+        assert.equal(arm.compressedBytesRead, null, 'yauzl buffer-reader position is not a consumed-byte counter');
+      } else {
+        assert.ok(Number.isSafeInteger(arm.compressedBytesRead) && arm.compressedBytesRead >= 0, 'disk source reports bounded bytes read');
+      }
       if (arm.outcome === 'completed') {
-        assert.equal(arm.compressedBytesRead, zipBatcherComparison.entryCompressedSize);
-        if (arm.arm === 'raw-read') {
-          assert.equal(arm.sinkBytesProcessed, zipBatcherComparison.entryCompressedSize);
-          assert.equal(arm.countersMatch, null);
-        } else {
-          assert.equal(arm.decodedBytes, zipBatcherComparison.entryUncompressedSize);
-          assert.equal(arm.sinkBytesProcessed, zipBatcherComparison.entryUncompressedSize);
-          assert.equal(arm.countersMatch, true);
-        }
+        assert.equal(arm.compressedBytesRead, arm.arm === 'memory-file' ? null : zipBatcherComparison.entryCompressedSize);
+        assert.equal(arm.decodedBytes, zipBatcherComparison.entryUncompressedSize);
+        assert.equal(arm.sinkBytesProcessed, zipBatcherComparison.entryUncompressedSize);
+        assert.equal(arm.countersMatch, true);
         assert.equal(arm.sourceReadableEnded, true);
         assert.equal(arm.sinkWritableFinished, true);
         assert.equal(arm.sinkClosed, true);

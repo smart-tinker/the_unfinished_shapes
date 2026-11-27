@@ -46,37 +46,38 @@ test('ZIP pipeline diagnostic uses each requested batch size without changing by
   }
 });
 
-test('ZIP comparison exposes raw, batched and direct Deflate measurements', () => {
+test('ZIP comparison exposes paired disk and memory Deflate file measurements', () => {
   const plan = [
-    { trial: 1, arm: 'raw-read', sink: 'count-discard' },
-    { trial: 1, arm: 'deflate-discard', sink: 'count-discard' },
-    { trial: 1, arm: 'deflate-file', sink: 'node-fs-file' },
-    { trial: 2, arm: 'deflate-direct', sink: 'count-discard' },
+    { trial: 1, arm: 'disk-file', sink: 'node-fs-file' },
+    { trial: 1, arm: 'memory-file', sink: 'node-fs-file' },
+    { trial: 2, arm: 'disk-file', sink: 'node-fs-file' },
+    { trial: 2, arm: 'memory-file', sink: 'node-fs-file' },
   ];
   const arms = plan.map(({ trial, arm, sink }) => ({
     trial,
     arm,
     sink,
-    batchBytes: ['deflate-discard', 'deflate-file'].includes(arm) ? 256 * 1024 : null,
+    batchBytes: 256 * 1024,
     outcome: 'completed',
     wallMs: 10_000,
     cpuUserMs: 100,
     cpuSystemMs: 20,
     compressedBytesRead: 111_522_616,
-    decodedBytes: arm === 'raw-read' ? null : 249_832_448,
-    sinkBytesProcessed: arm === 'raw-read' ? 111_522_616 : 249_832_448,
+    decodedBytes: 249_832_448,
+    sinkBytesProcessed: 249_832_448,
     sinkWritableLength: 0,
     sinkNeedDrain: false,
-    writeCallbackWaitMs: sink === 'node-fs-file' ? 900 : 0,
+    writeCallbackWaitMs: 900,
     sourceReadableEnded: true,
     sinkWritableFinished: true,
     sinkClosed: true,
-    cleanupStatus: sink === 'node-fs-file' ? 'removed' : 'not-created',
+    cleanupStatus: 'removed',
     privatePath: 'C:/private/archive.zip',
     privateError: 'private filesystem error',
   }));
   const comparison = diagnostics.safeZipBatcherComparison({
     assetMatches: true,
+    memorySourceVerified: true,
     entrySequence: 12,
     compression: 'deflate',
     entryCompressedSize: 111_522_616,
@@ -91,24 +92,25 @@ test('ZIP comparison exposes raw, batched and direct Deflate measurements', () =
   });
 
   assert.equal(comparison.assetMatches, true);
+  assert.equal(comparison.memorySourceVerified, true);
   assert.equal(comparison.entryMatches, true);
   assert.equal(comparison.batchBytes, 256 * 1024);
   assert.deepEqual(comparison.armOrder, plan.map(({ arm }) => arm));
   assert.deepEqual(comparison.sinkOrder, plan.map(({ sink }) => sink));
-  assert.deepEqual(comparison.arms.map(({ trial, arm, sink, batchBytes, countersMatch }) => ({ trial, arm, sink, batchBytes, countersMatch })), [
-    { ...plan[0], batchBytes: null, countersMatch: null },
-    { ...plan[1], batchBytes: 256 * 1024, countersMatch: true },
-    { ...plan[2], batchBytes: 256 * 1024, countersMatch: true },
-    { ...plan[3], batchBytes: null, countersMatch: true },
+  assert.deepEqual(comparison.arms.map(({ trial, arm, sink, batchBytes, compressedBytesRead, countersMatch }) =>
+    ({ trial, arm, sink, batchBytes, compressedBytesRead, countersMatch })), [
+    { ...plan[0], batchBytes: 256 * 1024, compressedBytesRead: 111_522_616, countersMatch: true },
+    { ...plan[1], batchBytes: 256 * 1024, compressedBytesRead: null, countersMatch: true },
+    { ...plan[2], batchBytes: 256 * 1024, compressedBytesRead: 111_522_616, countersMatch: true },
+    { ...plan[3], batchBytes: 256 * 1024, compressedBytesRead: null, countersMatch: true },
   ]);
-  assert.equal(comparison.arms[0].sinkBytesProcessed, 111_522_616);
   assert.equal(comparison.arms[2].cleanupStatus, 'removed');
-  assert.equal(comparison.arms[0].cleanupStatus, 'not-created');
+  assert.equal(comparison.arms[0].cleanupStatus, 'removed');
   assert.equal(comparison.cacheCaveat, 'post-digest; filesystem-read-cache-not-reset');
-  assert.equal(comparison.measurementScope, 'raw-reader-and-deflate-pipeline');
+  assert.equal(comparison.measurementScope, 'disk-vs-memory-file-sink');
   assert.deepEqual(comparison.arms.map(({ sinkWritableLength, sinkNeedDrain, writeCallbackWaitMs }) => [
     sinkWritableLength, sinkNeedDrain, writeCallbackWaitMs,
-  ]), [[0, false, 0], [0, false, 0], [0, false, 900], [0, false, 0]]);
+  ]), [[0, false, 900], [0, false, 900], [0, false, 900], [0, false, 900]]);
   assert.equal(JSON.stringify(comparison).includes('C:/private'), false);
   assert.equal(JSON.stringify(comparison).includes('private filesystem error'), false);
   assert.equal(Object.keys(comparison).includes('privatePath'), false);

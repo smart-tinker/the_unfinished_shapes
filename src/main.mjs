@@ -36,7 +36,10 @@ if (updaterSmokeBoundary) {
       update?.asset?.digest === 'sha256:' + expected.sha256 &&
       update?.sha256 === expected.sha256;
     const { compareVerifiedWindowsZipBatcher } = await import('../scripts/updater-smoke-diagnostics.mjs');
-    return compareVerifiedWindowsZipBatcher(assetMatches ? update.filePath : null, assetMatches);
+    return compareVerifiedWindowsZipBatcher(assetMatches ? update.filePath : null, assetMatches, {
+      sha256: expected.sha256,
+      size: expected.size,
+    });
   };
 }
 if (!app.requestSingleInstanceLock()) app.quit();
