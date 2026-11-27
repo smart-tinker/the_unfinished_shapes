@@ -98,7 +98,7 @@ async function listPublishedReleasesForSmoke(phase) {
     const page = /^\d{1,2}$/.test(rawPage || '') && Number(rawPage) >= 1 && Number(rawPage) <= 10
       ? Number(rawPage) : null;
     const record = {
-      phase, page, count: ++requestCount, status: null, remainingZero: null, safeFailure: 'unknown',
+      stage: 'release-fetch', phase, page, count: ++requestCount, status: null, remainingZero: null, safeFailure: 'unknown',
     };
     if (updaterSmokeBoundary.releaseFetches.length < 40) updaterSmokeBoundary.releaseFetches.push(record);
     try {
@@ -107,8 +107,7 @@ async function listPublishedReleasesForSmoke(phase) {
         ? response.status : null;
       let remaining = null;
       try { remaining = response?.headers?.get?.('x-ratelimit-remaining') ?? null; } catch {}
-      const remainingZero = typeof remaining === 'string' && /^\d{1,6}$/.test(remaining)
-        ? Number(remaining) === 0 : null;
+      const remainingZero = typeof remaining === 'string' ? remaining === '0' : null;
       record.status = status;
       record.remainingZero = remainingZero;
       record.safeFailure = status === 429 || (status === 403 && remainingZero === true)
