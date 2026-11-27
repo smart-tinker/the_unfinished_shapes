@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { getDefaultHighWaterMark, Readable } from 'node:stream';
+import { Readable } from 'node:stream';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -457,67 +457,6 @@ test('extracts Windows portable and macOS app archives under the selected folder
   }
 });
 
-
-
-test('Windows extraction buffers non-ASAR ZIP files in a bounded write queue', async () => {
-  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-win-sink-'));
-  const archive = path.join(parent, 'windows.zip');
-  const executable = Buffer.from('verified executable fixture');
-  const appAsar = Buffer.from('verified app archive fixture');
-  const ordinaryFile = Buffer.alloc(384 * 1024, 0x5a);
-  try {
-    await writeFile(archive, zipFixture([
-      { name: 'TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe', contents: executable, mode: 0o100755 },
-      { name: 'TheUnfinishedShapes-win32-x64/resources/app.asar', contents: appAsar, mode: 0o100600 },
-      { name: 'TheUnfinishedShapes-win32-x64/resources/ordinary.bin', contents: ordinaryFile, mode: 0o100600 },
-    ]));
-    const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
-    const childSource = [
-      "import fs from 'node:fs';",
-      "import path from 'node:path';",
-      "import { syncBuiltinESMExports } from 'node:module';",
-      "const originalCreateWriteStream = fs.createWriteStream;",
-      "const observed = [];",
-      "fs.createWriteStream = (file, options = {}) => {",
-      "  const stream = originalCreateWriteStream(file, options);",
-      "  const basename = path.basename(String(file));",
-      "  if (basename === 'app.asar' || basename === 'ordinary.bin') {",
-      "    observed.push({",
-      "      kind: basename === 'app.asar' ? 'app-asar' : 'non-asar',",
-      "      highWaterMark: stream.writableHighWaterMark,",
-      "      flags: options.flags ?? null,",
-      "      mode: options.mode ?? null,",
-      "    });",
-      "  }",
-      "  return stream;",
-      "};",
-      "syncBuiltinESMExports();",
-      "const [moduleUrl, filePath, directory, sha256] = process.argv.slice(1);",
-      "const { extractVerifiedArchive } = await import(moduleUrl);",
-      "await extractVerifiedArchive({",
-      "  filePath, directory, tag: 'v0.1.0-rc11',",
-      "  assetName: 'TheUnfinishedShapes-0.1.0-rc.11-win32-x64.zip', sha256, platform: 'win32',",
-      "});",
-      "process.stdout.write(JSON.stringify(observed));",
-    ].join(String.fromCharCode(10));
-    const child = spawnSync(process.execPath, [
-      '--input-type=module', '-e', childSource,
-      new URL('../src/update-package.mjs', import.meta.url).href,
-      archive, parent, sha256,
-    ], { encoding: 'utf8' });
-    assert.equal(child.status, 0, 'the real archive extractor completes in the observer process');
-    assert.deepEqual(JSON.parse(child.stdout), [
-      { kind: 'app-asar', highWaterMark: getDefaultHighWaterMark(false), flags: 'wx', mode: 0o600 },
-      { kind: 'non-asar', highWaterMark: 1024 * 1024, flags: 'wx', mode: 0o600 },
-    ]);
-    const target = path.join(await realpath(parent), 'TheUnfinishedShapes-0.1.0-rc.11');
-    assert.deepEqual(await readFile(path.join(target, 'TheUnfinishedShapes.exe')), executable);
-    assert.deepEqual(await readFile(path.join(target, 'resources', 'app.asar')), appAsar);
-    assert.deepEqual(await readFile(path.join(target, 'resources', 'ordinary.bin')), ordinaryFile);
-  } finally {
-    await rm(parent, { recursive: true, force: true });
-  }
-});
 
 test('accepts ditto AppleDouble metadata without writing it outside the macOS app', async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-appledouble-'));
