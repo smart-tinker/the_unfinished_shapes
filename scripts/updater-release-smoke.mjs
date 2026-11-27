@@ -1576,8 +1576,10 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     });
     const pendingStatus = 'Choose a destination folder…';
     const successStatus = 'Verified archive extracted. You can now launch the new copy.';
+    const extractChooserMarker = path.join(workDir, 'extract-folder-chooser.json');
+    await rm(extractChooserMarker, { force: true });
     await activateUpdaterButtonByKeyboard(current.page, 'updates-extract');
-    const folderChooserInvoked = await waitForFile(path.join(workDir, 'extract-folder-chooser.json'), 5000);
+    const folderChooserInvoked = await waitForFile(extractChooserMarker, 5000);
     const extractDiagnostic = {
       folderChooserInvoked,
       outcome: folderChooserInvoked ? 'pending' : 'chooser-not-invoked',
