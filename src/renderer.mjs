@@ -882,8 +882,8 @@ async function poll() {
 function positionKey(position) { return `${position.x.toFixed(2)},${position.y.toFixed(8)},${position.z.toFixed(2)}`; }
 let lastPosition = '';
 // A failed smoke callback must never alter input or movement behavior.
-function traceSmokeJump(event, value) {
-  try { window.__TUS_SMOKE_JUMP_TRACE?.(event, value); } catch {}
+function traceSmokeJump(event, value, details) {
+  try { window.__TUS_SMOKE_JUMP_TRACE?.(event, value, details); } catch {}
 }
 async function syncPosition() {
   const position = { ...playerPosition }, key = positionKey(position), generation = settingsGeneration, movementVersion = localMovementVersion, jump = jumpRequested;
@@ -912,8 +912,7 @@ async function syncPosition() {
     } else {
       responseOutcome = result.error ? 'rejected' : 'stale';
     }
-    traceSmokeJump('move.result', {
-      outcome: responseOutcome,
+    traceSmokeJump('move.result', responseOutcome, {
       revision: Number.isSafeInteger(result.revision) ? result.revision : null,
       position: {
         x: Number.isFinite(result.position?.x) ? result.position.x : null,

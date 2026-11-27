@@ -83,7 +83,7 @@ async function installJumpTrace(client) {
       trace.events.push({ sequence: trace.events.length + 1, at: Date.now(), type, ...fields });
     };
     window.__TUS_SMOKE_JUMP_TRACE_STATE = trace;
-    window.__TUS_SMOKE_JUMP_TRACE = (name, value) => {
+    window.__TUS_SMOKE_JUMP_TRACE = (name, value, details) => {
       if (!trace.active) return;
       if (name === 'jumpRequested') { trace.jumpRequested = value === true; record('jump.requested', { value: trace.jumpRequested }); }
       if (name === 'move.jump') {
@@ -97,11 +97,11 @@ async function installJumpTrace(client) {
         record('move.skip', { reason, hud: hud() });
       }
       if (name === 'move.result') {
-        const response = value && typeof value === 'object' ? value : {};
-        const rawOutcome = typeof value === 'string' ? value : response.outcome;
-        const outcome = results.has(rawOutcome) ? rawOutcome : null;
-        const serverPosition = tracePosition(response.position);
-        const serverRevision = Number.isSafeInteger(response.revision) ? response.revision : null;
+        const response = details && typeof details === 'object' ? details : value && typeof value === 'object' ? value : {};
+        const outcome = results.has(value) ? value : null;
+        const serverPosition = tracePosition(response.position ?? response.serverPosition);
+        const serverRevision = Number.isSafeInteger(response.revision) ? response.revision :
+          Number.isSafeInteger(response.serverRevision) ? response.serverRevision : null;
         const clientApplied = typeof response.clientApplied === 'boolean' ? response.clientApplied : null;
         if (trace.spaceKeydown && trace.firstMoveResult === null && outcome) trace.firstMoveResult = outcome;
         record('move.response', { outcome, serverPosition, serverRevision, clientApplied, hud: hud() });
