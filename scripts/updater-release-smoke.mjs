@@ -1336,13 +1336,27 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
     setDiagnostic('check-download', errorCode);
     console.log('Updater startup release diagnostic ' + JSON.stringify({ status: 'error', errorCode }));
   }
-  await observeUpdaterKeyboardActions(current.page);
-  await activateUpdaterButtonByKeyboard(current.page, 'updates-check');
-
+  const startupAvailable = !startupErrorCode && /available\./.test(startupNotice || '');
+  if (!startupAvailable) {
+    console.log('TUS_UPDATER_MANUAL_CHECK ' + JSON.stringify({
+      startup: 'unavailable',
+      uiAction: 'not-dispatched',
+      manualGetObservation: 'not-instrumented',
+    }));
+  }
+  assert.equal(startupErrorCode, null, 'manual update check is not dispatched after startup failure');
   assert.match(startupNotice || '', /available\./, 'startup checks expose a published update without installing it');
   const startupTag = startupNotice?.match(/Prerelease (v\d+\.\d+\.\d+-rc\.?\d+) is available\./)?.[1];
   assert.ok(startupTag, 'startup check identifies the published prerelease');
   assert.ok(compareReleaseVersions(startupTag, baselineVersion) > 0, 'startup check identifies a newer prerelease');
+
+  await observeUpdaterKeyboardActions(current.page);
+  await activateUpdaterButtonByKeyboard(current.page, 'updates-check');
+  console.log('TUS_UPDATER_MANUAL_CHECK ' + JSON.stringify({
+    startup: 'available',
+    uiAction: 'dispatched',
+    manualGetObservation: 'not-instrumented',
+  }));
 
   await current.page.waitForFunction(() => document.querySelector('#updates-status')?.textContent.includes(' is available.'), null, { timeout: 30000 });
   const availability = await current.page.locator('#updates-status').innerText();
