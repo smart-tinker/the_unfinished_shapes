@@ -72,6 +72,7 @@ const safeDiagnosticMarkers = new Set([
   'TUS_UIA_DIAG: stdout-eof-budget-expired',
   'TUS_UIA_DIAG: stdout-eof-skipped-process-not-exited',
   'TUS_UIA_DIAG: stdout-eof-threw',
+  'TUS_UIA_DIAG: owner-window-wm-null=unknown',
 ]);
 
 function safeDiagnosticOutput(output) {
@@ -171,6 +172,8 @@ test('bounded UIA child preserves only a complete safe phase after kill and reap
     'an unfinished FromHandle call has no measured duration');
   assert.match(safeOutput, /^TUS_UIA_DIAG: diagnostic-enabled$/m,
     'test override enables safe diagnostic markers');
+  assert.match(safeOutput, /^TUS_UIA_DIAG: owner-window-wm-null=unknown$/m,
+    'the synthetic pending reader reports unknown without a live HWND');
   assert.match(safeOutput, /^TUS_UIA_DIAG: bounded-wait-returned$/m,
     'the bounded process wait returned before child cleanup');
   assert.match(safeOutput, /^TUS_UIA_DIAG: wait-(?:timed-out|budget-expired)$/m,
