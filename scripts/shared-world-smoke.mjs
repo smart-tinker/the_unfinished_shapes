@@ -99,7 +99,12 @@ async function installJumpTrace(client) {
       if (name === 'move.result') {
         const response = details && typeof details === 'object' ? details : value && typeof value === 'object' ? value : {};
         const outcome = results.has(value) ? value : null;
-        const serverPosition = tracePosition(response.position ?? response.serverPosition);
+        const position = response.position ?? response.serverPosition;
+        const serverPosition = {
+          x: Number.isFinite(position?.x) ? position.x : null,
+          y: Number.isFinite(position?.y) ? position.y : null,
+          z: Number.isFinite(position?.z) ? position.z : null,
+        };
         const serverRevision = Number.isSafeInteger(response.revision) ? response.revision :
           Number.isSafeInteger(response.serverRevision) ? response.serverRevision : null;
         const clientApplied = typeof response.clientApplied === 'boolean' ? response.clientApplied : null;
