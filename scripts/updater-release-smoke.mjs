@@ -381,6 +381,7 @@ async function extractRuntimeBoundary(current, extractDir, targetVersion, manife
         extractSubstage: boundary.extractSubstage,
         extractAppAsarEntry: boundary.extractAppAsarEntry,
         extractStreamSnapshot: typeof boundary.extractStreamSnapshot === 'function' ? boundary.extractStreamSnapshot() : null,
+        extractTiming: boundary.extractTiming,
       } : null;
     }), 'Updater extraction main snapshot', 5000).catch(() => null),
     withTimeout(current.page.evaluate(() => {
@@ -405,6 +406,7 @@ async function extractRuntimeBoundary(current, extractDir, targetVersion, manife
     extractSubstage: main?.extractSubstage,
     extractAppAsarEntry: main?.extractAppAsarEntry,
     extractStreamSnapshot: main?.extractStreamSnapshot,
+    extractTiming: main?.extractTiming,
     ...(previousStreamSnapshot ? {
       previousStreamSnapshot: previousStreamSnapshot.snapshot,
       streamIntervalMs: Math.round(performance.now() - previousStreamSnapshot.sampledAtMs),
@@ -424,6 +426,7 @@ async function extractRuntimeBoundary(current, extractDir, targetVersion, manife
     extractPhase: safe.extractPhase,
     extractSubstage: safe.extractSubstage,
     extractAppAsarEntry: safe.extractAppAsarEntry,
+    extractTiming: safe.extractTiming,
     streamSnapshot: safe.streamSnapshot,
     rendererStatus: safe.rendererStatus,
     rendererInvokeStatus: safe.rendererInvokeStatus,
@@ -1626,6 +1629,7 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
         let streamSampleTimer;
         let streamSamples = 0;
         let previousStreamSnapshot = null;
+        let entry12TimingReported = false;
         const streamSamplingStartedAtMs = performance.now();
         const scheduleStreamSample = () => {
           const offsetMs = updaterZipStreamSampleOffsetsMs[streamSamples];
@@ -1637,9 +1641,13 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
         const captureStreamSample = async () => {
           streamSampleTimer = null;
           if (!streamSampling || streamSamples >= updaterZipStreamSampleOffsetsMs.length) return;
-          const stream = await withTimeout(current.instance.evaluate(() => {
-            const snapshot = globalThis.__tusUpdaterSmokeBoundary?.extractStreamSnapshot;
-            return typeof snapshot === 'function' ? snapshot() : null;
+          const live = await withTimeout(current.instance.evaluate(() => {
+            const boundary = globalThis.__tusUpdaterSmokeBoundary;
+            const snapshot = boundary?.extractStreamSnapshot;
+            return boundary ? {
+              stream: typeof snapshot === 'function' ? snapshot() : null,
+              extractTiming: boundary.extractTiming,
+            } : null;
           }), 'Updater ZIP stream sample', 5000).catch(() => null);
           if (!streamSampling) return;
           const sampledAtMs = performance.now();
@@ -1650,10 +1658,15 @@ async function updateOnce(distribution, setDiagnostic = () => {}) {
               previousStreamSnapshot: previousStreamSnapshot.snapshot,
               streamIntervalMs: Math.round(sampledAtMs - previousStreamSnapshot.sampledAtMs),
             } : {}),
-            extractStreamSnapshot: stream,
+            extractStreamSnapshot: live?.stream,
+            extractTiming: live?.extractTiming,
           }], manifestFile, assetName, tag);
           const snapshot = safe?.streamSnapshot ?? null;
-          console.log('TUS_UPDATE_EXTRACT_STREAM ' + JSON.stringify(snapshot));
+          const reportEntry12Timing = snapshot?.entrySequence === 12 && !entry12TimingReported;
+          console.log('TUS_UPDATE_EXTRACT_STREAM ' + JSON.stringify(reportEntry12Timing
+            ? { ...snapshot, extractTiming: safe?.extractTiming }
+            : snapshot));
+          if (reportEntry12Timing) entry12TimingReported = true;
           previousStreamSnapshot = { snapshot, sampledAtMs };
           streamSamples++;
           scheduleStreamSample();

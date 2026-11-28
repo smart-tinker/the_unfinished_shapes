@@ -60,6 +60,21 @@ const safeArchiveFailureCode = value => safeArchiveFailureCodes.has(value) ? val
 const safeExtractStreamCount = (value, max = 0xffffffff) =>
   Number.isSafeInteger(value) && value >= 0 ? Math.min(value, max) : null;
 
+function safeExtractTiming(value) {
+  const elapsed = (start, end) => {
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    const milliseconds = Math.round(end - start);
+    return milliseconds >= 0 && milliseconds <= 120_000 ? milliseconds : null;
+  };
+  return {
+    ipcToExtractCallMs: elapsed(value?.ipcEnteredAt, value?.extractCallAt),
+    extractCallToDigestVerifiedMs: elapsed(value?.extractCallAt, value?.digestVerifiedAt),
+    digestVerifiedToFirstZipPipelineMs: elapsed(value?.digestVerifiedAt, value?.firstZipPipelineAt),
+    firstZipPipelineToEntry12Ms: elapsed(value?.firstZipPipelineAt, value?.entry12At),
+    ipcToEntry12Ms: elapsed(value?.ipcEnteredAt, value?.entry12At),
+  };
+}
+
 function safeExtractStreamSnapshot(value, previous, elapsedMs) {
   if (!value || typeof value !== 'object') return null;
   const entrySequence = Number.isSafeInteger(value.entrySequence) && value.entrySequence >= 1 && value.entrySequence <= 20_000
@@ -497,6 +512,7 @@ export function safeMainDiagnostics(live, manifestFile, assetName, tag) {
       extractPhase: safeExtractPhases.has(item.extractPhase) ? item.extractPhase : 'unknown',
       extractSubstage: safeExtractSubstages.has(item.extractSubstage) ? item.extractSubstage : 'unknown',
       extractAppAsarEntry: item.extractAppAsarEntry === true,
+      extractTiming: safeExtractTiming(item.extractTiming),
       failureCode: typeof item.failureCode === 'string' ? safeArchiveFailureCode(item.failureCode) : null,
       extractStage: typeof item.extractStage === 'string' ? safeArchiveExtractionStage(item.extractStage) : null,
       extractOperation: typeof item.extractOperation === 'string' ? safeArchiveExtractionOperation(item.extractOperation) : null,

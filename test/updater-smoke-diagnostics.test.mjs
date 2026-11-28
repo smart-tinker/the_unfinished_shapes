@@ -433,6 +433,64 @@ test('TUS ZIP entry timing separates pre-pipeline setup from pipeline and keeps 
 });
 
 
+test('TUS extraction timeline reports bounded monotonic phase intervals with safe entry-12 counters', () => {
+  const [diagnostic] = safeMainDiagnostics([{
+    stage: 'extract-archive',
+    status: 'starting',
+    extractTiming: {
+      ipcEnteredAt: 1_000,
+      extractCallAt: 1_025,
+      digestVerifiedAt: 1_080,
+      firstZipPipelineAt: 1_140,
+      entry12At: 1_360,
+      privatePath: 'C:/private/archive.zip',
+    },
+    extractStreamSnapshot: {
+      entrySequence: 12, compression: 'deflate',
+      entryCompressedSize: 111_522_616, entryUncompressedSize: 249_832_448,
+      compressedBytesRead: 500, decodedBytes: 5_000,
+      sourceReadableEnded: false, sinkWritableFinished: false, sinkClosed: false,
+      sinkBytesWritten: 4_500, sinkWritableLength: 0,
+      sourcePath: 'C:/private/archive.zip', entryName: 'private-entry',
+    },
+  }], { sha256: 'a'.repeat(64) }, 'candidate.zip', 'v0.1.0-rc11');
+
+  assert.deepEqual(diagnostic.extractTiming, {
+    ipcToExtractCallMs: 25,
+    extractCallToDigestVerifiedMs: 55,
+    digestVerifiedToFirstZipPipelineMs: 60,
+    firstZipPipelineToEntry12Ms: 220,
+    ipcToEntry12Ms: 360,
+  });
+  assert.deepEqual([
+    diagnostic.streamSnapshot.entrySequence,
+    diagnostic.streamSnapshot.compressedBytesRead,
+    diagnostic.streamSnapshot.decodedBytes,
+    diagnostic.streamSnapshot.sinkBytesWritten,
+  ], [12, 500, 5_000, 4_500]);
+
+  const [unsafe] = safeMainDiagnostics([{
+    stage: 'extract-archive',
+    status: 'starting',
+    extractTiming: {
+      ipcEnteredAt: 100,
+      extractCallAt: 90,
+      digestVerifiedAt: 130_100,
+      firstZipPipelineAt: 130_101,
+      entry12At: 130_099,
+      privatePath: 'C:/private/path',
+    },
+  }], { sha256: 'a'.repeat(64) }, 'candidate.zip', 'v0.1.0-rc11');
+  assert.deepEqual(unsafe.extractTiming, {
+    ipcToExtractCallMs: null,
+    extractCallToDigestVerifiedMs: null,
+    digestVerifiedToFirstZipPipelineMs: 1,
+    firstZipPipelineToEntry12Ms: null,
+    ipcToEntry12Ms: null,
+  });
+  assert.doesNotMatch(JSON.stringify([diagnostic, unsafe]), /C:\/private|private-entry|ipcEnteredAt|firstZipPipelineAt/);
+});
+
 test('TUS extraction snapshots localize bounded read, decode and write throughput per ZIP entry', () => {
   const manifestFile = { sha256: 'a'.repeat(64) };
   const assetName = 'candidate.zip';

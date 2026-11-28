@@ -18,7 +18,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let win, bridge, localServer, connectedWorld, gameToolSession, fullscreenRestoreBounds;
 let pendingRelaunch = null, availableUpdate = null, downloadedUpdate = null, extractedUpdate = null, updateDownloadController = null;
 const updaterSmokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic')
-  ? { releaseFetches: [], moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null, launchStatus: 'not-started', launchPhase: 'unknown', launchSubstage: 'not-started', launchReadPhase: 'not-started', launchReadBytes: 0, launchDialog: 'not-started', launchDecision: 'not-started' }
+  ? { releaseFetches: [], moduleImport: 'not-started', moduleFailureCode: null, moduleFailureName: null, downloadVerifiedAsset: 'not-started', extractArchive: 'not-started', extractModuleImport: 'not-started', extractCall: 'not-started', extractPhase: 'unknown', extractSubstage: 'none', extractAppAsarEntry: false, extractStreamSnapshot: null, extractTiming: null, launchStatus: 'not-started', launchPhase: 'unknown', launchSubstage: 'not-started', launchReadPhase: 'not-started', launchReadBytes: 0, launchDialog: 'not-started', launchDecision: 'not-started' }
   : null;
 if (updaterSmokeBoundary) globalThis.__tusUpdaterSmokeBoundary = updaterSmokeBoundary;
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -320,6 +320,10 @@ app.whenReady().then(async()=>{
     return true;
   });
   handle('updates:extract', async () => {
+    if (updaterSmokeBoundary) updaterSmokeBoundary.extractTiming = {
+      ipcEnteredAt: performance.now(), extractCallAt: null, digestVerifiedAt: null,
+      firstZipPipelineAt: null, entry12At: null,
+    };
     if (!downloadedUpdate || downloadedUpdate.distribution === 'installer') throw new Error('Download a portable update archive first.');
     const choice = await dialog.showOpenDialog(win, { title: 'Choose a folder for the verified TUS update', properties: ['openDirectory'] });
     if (choice.canceled || !choice.filePaths[0]) return { canceled: true };
