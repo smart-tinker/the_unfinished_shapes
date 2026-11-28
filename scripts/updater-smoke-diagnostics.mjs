@@ -101,8 +101,7 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
   const writeCallback = Object.hasOwn(value, 'writeCallbackState') ? {
     state: ['idle', 'write', 'writev'].includes(value.writeCallbackState) ? value.writeCallbackState : 'unknown',
     finishToCloseMs: safeExtractStreamCount(value.writeFinishToCloseMs, 120_000),
-    mainCpuUserMsDelta: safeExtractStreamCount(value.mainCpuUserMsDelta, 120_000),
-    mainCpuSystemMsDelta: safeExtractStreamCount(value.mainCpuSystemMsDelta, 120_000),
+    pipelineCpuMs: safeExtractStreamCount(value.pipelineCpuMs, 120_000),
     ageMs: safeExtractStreamCount(value.writeCallbackAgeMs, 120_000),
     waitMs: safeExtractStreamCount(value.writeCallbackWaitMs, 120_000),
     callbackCount: safeExtractStreamCount(value.writeCallbackCount),
@@ -151,8 +150,7 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
     ...(writeCallback ? {
       writeCallbackState: writeCallback.state,
       writeFinishToCloseMs: writeCallback.finishToCloseMs,
-      mainCpuUserMsDelta: writeCallback.mainCpuUserMsDelta,
-      mainCpuSystemMsDelta: writeCallback.mainCpuSystemMsDelta,
+      pipelineCpuMs: writeCallback.pipelineCpuMs,
       writeCallbackAgeMs: writeCallback.ageMs,
       writeCallbackWaitMs: writeCallback.waitMs,
       writeCallbackWaitMsDelta: delta(writeCallback.waitMs, previous?.writeCallbackWaitMs, 120_000),

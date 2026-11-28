@@ -82,7 +82,7 @@ export function trackZipWriteCallback(sink) {
   if (!sink || typeof sink._write !== 'function') return () => ({
     state: 'unknown', writeCallbackAgeMs: null, writeCallbackWaitMs: null,
     writeCallbackCount: null, writeCallCount: null, writevCallCount: null,
-    writeFinishToCloseMs: null, mainCpuUserMsDelta: null, mainCpuSystemMsDelta: null,
+    writeFinishToCloseMs: null, pipelineCpuMs: null,
   });
   if (typeof sink.once === 'function') {
     sink.once('finish', () => { finishedAt = performance.now(); });
@@ -96,8 +96,10 @@ export function trackZipWriteCallback(sink) {
     const cpuDeltaMs = (current, previous) =>
       Number.isSafeInteger(current) && Number.isSafeInteger(previous) && current >= previous
         ? Math.min(120_000, Math.round((current - previous) / 1000)) : null;
-    const mainCpuUserMsDelta = cpuDeltaMs(currentCpuUsage.user, previousCpuUsage.user);
-    const mainCpuSystemMsDelta = cpuDeltaMs(currentCpuUsage.system, previousCpuUsage.system);
+    const userCpuMs = cpuDeltaMs(currentCpuUsage.user, previousCpuUsage.user);
+    const systemCpuMs = cpuDeltaMs(currentCpuUsage.system, previousCpuUsage.system);
+    const pipelineCpuMs = userCpuMs === null || systemCpuMs === null
+      ? null : Math.min(120_000, userCpuMs + systemCpuMs);
     previousCpuUsage = currentCpuUsage;
     return {
       state: pending.size === 0 ? 'idle' : active?.state ?? 'unknown',
@@ -107,8 +109,7 @@ export function trackZipWriteCallback(sink) {
       writeCallCount,
       writevCallCount,
       writeFinishToCloseMs: finishedAt === null ? null : Math.min(120_000, Math.max(0, Math.round((closedAt ?? performance.now()) - finishedAt))),
-      mainCpuUserMsDelta,
-      mainCpuSystemMsDelta,
+      pipelineCpuMs,
     };
   };
 }
@@ -142,8 +143,7 @@ export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, ent
     ...(writeCallback ? {
       writeCallbackState: ['idle', 'write', 'writev'].includes(writeCallback.state) ? writeCallback.state : 'unknown',
       writeFinishToCloseMs: count(writeCallback.writeFinishToCloseMs, 120_000),
-      mainCpuUserMsDelta: count(writeCallback.mainCpuUserMsDelta, 120_000),
-      mainCpuSystemMsDelta: count(writeCallback.mainCpuSystemMsDelta, 120_000),
+      pipelineCpuMs: count(writeCallback.pipelineCpuMs, 120_000),
       writeCallbackAgeMs: count(writeCallback.writeCallbackAgeMs, 120_000),
       writeCallbackWaitMs: count(writeCallback.writeCallbackWaitMs, 120_000),
       writeCallbackCount: count(writeCallback.writeCallbackCount, 0xffffffff),
