@@ -459,6 +459,86 @@ test('extracts Windows portable and macOS app archives under the selected folder
 });
 
 
+
+test('reports completed ZIP entry timings through the safe boundary up to entry 15', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-entry-timing-'));
+  const archive = path.join(parent, 'windows.zip');
+  const assetName = 'TheUnfinishedShapes-0.1.0-rc.11-win32-x64.zip';
+  const root = 'TheUnfinishedShapes-win32-x64';
+  const executable = Buffer.from('verified executable fixture');
+  const entries = Array.from({ length: 15 }, (_, index) => ({
+    name: root + '/private-entry-' + (index + 1) + '.bin',
+    contents: Buffer.from('private payload ' + (index + 1)),
+    mode: 0o100644,
+  }));
+  entries.push({ name: root + '/TheUnfinishedShapes.exe', contents: executable, mode: 0o100755 });
+  const timing = { ipcEnteredAt: performance.now(), completedZipEntries: [] };
+  const smokeFlag = '--tus-smoke-provenance-diagnostic';
+  const addedSmokeFlag = !process.argv.includes(smokeFlag);
+  const previousBoundary = Object.getOwnPropertyDescriptor(globalThis, '__tusUpdaterSmokeBoundary');
+  try {
+    await writeFile(archive, zipFixture(entries));
+    const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+    if (addedSmokeFlag) process.argv.push(smokeFlag);
+    Object.defineProperty(globalThis, '__tusUpdaterSmokeBoundary', {
+      configurable: true, value: { extractTiming: timing },
+    });
+
+    const result = await extractVerifiedArchive({
+      filePath: archive, directory: parent, tag, assetName, sha256, platform: 'win32',
+    });
+    assert.deepEqual(await readFile(result.executablePath), executable);
+
+    const [diagnostic] = safeMainDiagnostics([{
+      stage: 'extract-archive', status: 'fulfilled', extractTiming: timing,
+    }], { sha256 }, assetName, tag);
+    assert.deepEqual(diagnostic.extractTiming.completedZipEntries.map(({ entrySequence }) => entrySequence),
+      Array.from({ length: 15 }, (_, index) => index + 1));
+    assert.ok(diagnostic.extractTiming.completedZipEntries.every(({ elapsedMs }) =>
+      Number.isSafeInteger(elapsedMs) && elapsedMs >= 0 && elapsedMs <= 120_000));
+    assert.doesNotMatch(JSON.stringify(diagnostic), /private-entry|private payload|private path/);
+  } finally {
+    if (addedSmokeFlag) process.argv.splice(process.argv.indexOf(smokeFlag), 1);
+    if (previousBoundary) Object.defineProperty(globalThis, '__tusUpdaterSmokeBoundary', previousBoundary);
+    else delete globalThis.__tusUpdaterSmokeBoundary;
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test('an unavailable smoke timing observer cannot fail verified ZIP extraction', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-observer-unavailable-'));
+  const archive = path.join(parent, 'windows.zip');
+  const payload = Buffer.from('verified executable fixture');
+  const entry = 'TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe';
+  const assetName = 'TheUnfinishedShapes-0.1.0-rc.11-win32-x64.zip';
+  const smokeFlag = '--tus-smoke-provenance-diagnostic';
+  const addedSmokeFlag = !process.argv.includes(smokeFlag);
+  const previousBoundary = Object.getOwnPropertyDescriptor(globalThis, '__tusUpdaterSmokeBoundary');
+  try {
+    await writeFile(archive, zipFixture(entry, payload));
+    const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+    if (addedSmokeFlag) process.argv.push(smokeFlag);
+    const unavailableBoundary = {};
+    Object.defineProperty(unavailableBoundary, 'extractTiming', {
+      configurable: true,
+      get() { throw new Error('private observer unavailable'); },
+    });
+    Object.defineProperty(globalThis, '__tusUpdaterSmokeBoundary', {
+      configurable: true, value: unavailableBoundary,
+    });
+
+    const result = await extractVerifiedArchive({
+      filePath: archive, directory: parent, tag, assetName, sha256, platform: 'win32',
+    });
+    assert.deepEqual(await readFile(result.executablePath), payload);
+  } finally {
+    if (addedSmokeFlag) process.argv.splice(process.argv.indexOf(smokeFlag), 1);
+    if (previousBoundary) Object.defineProperty(globalThis, '__tusUpdaterSmokeBoundary', previousBoundary);
+    else delete globalThis.__tusUpdaterSmokeBoundary;
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test('accepts ditto AppleDouble metadata without writing it outside the macOS app', async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-appledouble-'));
   const archive = path.join(parent, 'macos.zip');
