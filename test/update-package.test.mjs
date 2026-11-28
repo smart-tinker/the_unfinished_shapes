@@ -1165,6 +1165,7 @@ test('smoke ZIP extraction reports only bounded completion times for entries bef
     }], { sha256 }, assetName, tag);
     const completed = diagnostic.extractTiming.completedZipEntries;
 
+    assert.ok(Array.isArray(completed), 'completed ZIP entry timing reaches the safe log boundary');
     assert.deepEqual(completed.map(({ entrySequence }) => entrySequence), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     assert.ok(completed.every(({ elapsedMs }) => Number.isSafeInteger(elapsedMs) && elapsedMs >= 0 && elapsedMs <= 120_000));
     assert.ok(completed.every(({ elapsedMs }, index) => index === 0 || elapsedMs >= completed[index - 1].elapsedMs));
