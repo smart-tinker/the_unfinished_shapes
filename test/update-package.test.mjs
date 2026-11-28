@@ -460,51 +460,6 @@ test('extracts Windows portable and macOS app archives under the selected folder
 
 
 
-test('reports completed ZIP entry timings through the safe boundary up to entry 15', async () => {
-  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-entry-timing-'));
-  const archive = path.join(parent, 'windows.zip');
-  const assetName = 'TheUnfinishedShapes-0.1.0-rc.11-win32-x64.zip';
-  const root = 'TheUnfinishedShapes-win32-x64';
-  const executable = Buffer.from('verified executable fixture');
-  const entries = Array.from({ length: 15 }, (_, index) => ({
-    name: root + '/private-entry-' + (index + 1) + '.bin',
-    contents: Buffer.from('private payload ' + (index + 1)),
-    mode: 0o100644,
-  }));
-  entries.push({ name: root + '/TheUnfinishedShapes.exe', contents: executable, mode: 0o100755 });
-  const timing = { ipcEnteredAt: performance.now(), completedZipEntries: [] };
-  const smokeFlag = '--tus-smoke-provenance-diagnostic';
-  const addedSmokeFlag = !process.argv.includes(smokeFlag);
-  const previousBoundary = Object.getOwnPropertyDescriptor(globalThis, '__tusUpdaterSmokeBoundary');
-  try {
-    await writeFile(archive, zipFixture(entries));
-    const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
-    if (addedSmokeFlag) process.argv.push(smokeFlag);
-    Object.defineProperty(globalThis, '__tusUpdaterSmokeBoundary', {
-      configurable: true, value: { extractTiming: timing },
-    });
-
-    const result = await extractVerifiedArchive({
-      filePath: archive, directory: parent, tag, assetName, sha256, platform: 'win32',
-    });
-    assert.deepEqual(await readFile(result.executablePath), executable);
-
-    const [diagnostic] = safeMainDiagnostics([{
-      stage: 'extract-archive', status: 'fulfilled', extractTiming: timing,
-    }], { sha256 }, assetName, tag);
-    assert.deepEqual(diagnostic.extractTiming.completedZipEntries.map(({ entrySequence }) => entrySequence),
-      Array.from({ length: 15 }, (_, index) => index + 1));
-    assert.ok(diagnostic.extractTiming.completedZipEntries.every(({ elapsedMs }) =>
-      Number.isSafeInteger(elapsedMs) && elapsedMs >= 0 && elapsedMs <= 120_000));
-    assert.doesNotMatch(JSON.stringify(diagnostic), /private-entry|private payload|private path/);
-  } finally {
-    if (addedSmokeFlag) process.argv.splice(process.argv.indexOf(smokeFlag), 1);
-    if (previousBoundary) Object.defineProperty(globalThis, '__tusUpdaterSmokeBoundary', previousBoundary);
-    else delete globalThis.__tusUpdaterSmokeBoundary;
-    await rm(parent, { recursive: true, force: true });
-  }
-});
-
 test('an unavailable smoke timing observer cannot fail verified ZIP extraction', async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-observer-unavailable-'));
   const archive = path.join(parent, 'windows.zip');
@@ -1190,12 +1145,12 @@ test('openZipReadStream uses raw mode only when explicitly requested', async () 
   assert.deepEqual(opened, [[entry, { decodeFileData: false }], [entry]]);
 });
 
-test('smoke ZIP extraction reports only bounded completion times for entries before entry 12', async () => {
+test('smoke ZIP extraction reports bounded completion times through entry 15', async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-entry-timing-'));
   const archive = path.join(parent, 'private-candidate.zip');
   const archiveRoot = 'TheUnfinishedShapes-win32-x64';
   const assetName = 'TheUnfinishedShapes-0.1.0-rc.11-win32-x64.zip';
-  const entries = Array.from({ length: 11 }, (_, index) => ({
+  const entries = Array.from({ length: 15 }, (_, index) => ({
     name: archiveRoot + '/private-entry-name-' + (index + 1) + '.bin',
     contents: Buffer.from('entry fixture ' + (index + 1)),
     mode: 0o100644,
@@ -1246,7 +1201,7 @@ test('smoke ZIP extraction reports only bounded completion times for entries bef
     const completed = diagnostic.extractTiming.completedZipEntries;
 
     assert.ok(Array.isArray(completed), 'completed ZIP entry timing reaches the safe log boundary');
-    assert.deepEqual(completed.map(({ entrySequence }) => entrySequence), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    assert.deepEqual(completed.map(({ entrySequence }) => entrySequence), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
     assert.ok(completed.every(({ elapsedMs }) => Number.isSafeInteger(elapsedMs) && elapsedMs >= 0 && elapsedMs <= 120_000));
     assert.ok(completed.every(({ elapsedMs }, index) => index === 0 || elapsedMs >= completed[index - 1].elapsedMs));
     assert.ok(completed.every(entry => Object.keys(entry).sort().join(',') === 'elapsedMs,entrySequence'));
