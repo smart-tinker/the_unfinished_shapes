@@ -82,7 +82,7 @@ export function trackZipWriteCallback(sink) {
   if (!sink || typeof sink._write !== 'function') return () => ({
     state: 'unknown', writeCallbackAgeMs: null, writeCallbackWaitMs: null,
     writeCallbackCount: null, writeCallCount: null, writevCallCount: null,
-    writeFinishToCloseMs: null, mainCpuUserMsDelta: null, mainCpuSystemMsDelta: null,
+    writeFinishToCloseMs: null, pipelineCpuMs: null,
   });
   if (typeof sink.once === 'function') {
     sink.once('finish', () => { finishedAt = performance.now(); });
@@ -96,8 +96,10 @@ export function trackZipWriteCallback(sink) {
     const cpuDeltaMs = (current, previous) =>
       Number.isSafeInteger(current) && Number.isSafeInteger(previous) && current >= previous
         ? Math.min(120_000, Math.round((current - previous) / 1000)) : null;
-    const mainCpuUserMsDelta = cpuDeltaMs(currentCpuUsage.user, previousCpuUsage.user);
-    const mainCpuSystemMsDelta = cpuDeltaMs(currentCpuUsage.system, previousCpuUsage.system);
+    const userCpuMs = cpuDeltaMs(currentCpuUsage.user, previousCpuUsage.user);
+    const systemCpuMs = cpuDeltaMs(currentCpuUsage.system, previousCpuUsage.system);
+    const pipelineCpuMs = userCpuMs === null || systemCpuMs === null
+      ? null : Math.min(120_000, userCpuMs + systemCpuMs);
     previousCpuUsage = currentCpuUsage;
     return {
       state: pending.size === 0 ? 'idle' : active?.state ?? 'unknown',
@@ -107,8 +109,7 @@ export function trackZipWriteCallback(sink) {
       writeCallCount,
       writevCallCount,
       writeFinishToCloseMs: finishedAt === null ? null : Math.min(120_000, Math.max(0, Math.round((closedAt ?? performance.now()) - finishedAt))),
-      mainCpuUserMsDelta,
-      mainCpuSystemMsDelta,
+      pipelineCpuMs,
     };
   };
 }
@@ -142,8 +143,7 @@ export function safeZipExtractionStreamSnapshot(source, sink, entrySequence, ent
     ...(writeCallback ? {
       writeCallbackState: ['idle', 'write', 'writev'].includes(writeCallback.state) ? writeCallback.state : 'unknown',
       writeFinishToCloseMs: count(writeCallback.writeFinishToCloseMs, 120_000),
-      mainCpuUserMsDelta: count(writeCallback.mainCpuUserMsDelta, 120_000),
-      mainCpuSystemMsDelta: count(writeCallback.mainCpuSystemMsDelta, 120_000),
+      pipelineCpuMs: count(writeCallback.pipelineCpuMs, 120_000),
       writeCallbackAgeMs: count(writeCallback.writeCallbackAgeMs, 120_000),
       writeCallbackWaitMs: count(writeCallback.writeCallbackWaitMs, 120_000),
       writeCallbackCount: count(writeCallback.writeCallbackCount, 0xffffffff),
@@ -428,7 +428,7 @@ export async function verifyReleaseAttestation({ bundle, asset, tag }, verifySig
 async function fileSha256(filePath, onReadProgress) {
   const hash = createHash('sha256');
   let bytesRead = 0;
-  for await (const chunk of createReadStream(filePath)) {
+  for await (const chunk of createReadStream(filePath, { highWaterMark: 1024 * 1024 })) {
     hash.update(chunk);
     bytesRead = Math.min(0xffff_ffff, bytesRead + chunk.byteLength);
     if (onReadProgress) onReadProgress({ phase: 'reading', bytesRead });
@@ -800,18 +800,38 @@ export async function openZipReadStream(zip, entry, trackCompressedRead, readHig
   }
 }
 
+// Smoke telemetry is best-effort and must not fail a verified package extraction.
+function recordSmokeExtractTiming(smokeBoundary, field, value) {
+  try {
+    const timing = smokeBoundary?.extractTiming;
+    if (timing) timing[field] = value;
+  } catch {}
+}
+
 async function extractZip(filePath, destination, spec, extraction, appAsarPath, platform, smokeBoundary) {
   const appAsarRelative = path.relative(destination, appAsarPath).split(path.sep).join('/');
   extraction.value = 'zip-open';
   const zip = await yauzl.openPromise(filePath, { strictFileNames: true, validateEntrySizes: true });
   let count = 0, extractedBytes = 0;
   extraction.value = 'entry';
+  const recordCompletedEntry = () => {
+    try {
+      const timing = smokeBoundary?.extractTiming;
+      if (count > 15 || !Array.isArray(timing?.completedZipEntries) ||
+          timing.completedZipEntries.length >= 15 || !Number.isFinite(timing.ipcEnteredAt)) return;
+      timing.completedZipEntries.push({
+        entrySequence: count,
+        elapsedMs: Math.min(120_000, Math.max(0, Math.round(performance.now() - timing.ipcEnteredAt))),
+      });
+    } catch {}
+  };
   for await (const entry of zip.eachEntry()) {
     extraction.value = 'entry';
     count++;
-    if (count === 12 && smokeBoundary?.extractTiming && smokeBoundary.extractTiming.entry12At === null) {
-      smokeBoundary.extractTiming.entry12At = performance.now();
-    }
+    try {
+      const timing = smokeBoundary?.extractTiming;
+      if (count === 12 && timing && timing.entry12At === null) timing.entry12At = performance.now();
+    } catch {}
     if (count > maxArchiveEntries || !Number.isSafeInteger(entry.uncompressedSize) ||
         entry.uncompressedSize < 0 || (extractedBytes += entry.uncompressedSize) > maxExtractedBytes) {
       throw new Error('Update archive exceeds extraction limits.');
@@ -821,13 +841,13 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
         (entry.fileName === '__MACOSX' || entry.fileName.startsWith('__MACOSX/'))) {
       const relative = safeArchiveEntryPath(entry.fileName, '__MACOSX');
       const directory = entry.fileName.endsWith('/') || mode === 0o040000;
-      if (directory && (mode === 0 || mode === 0o040000)) continue;
+      if (directory && (mode === 0 || mode === 0o040000)) { recordCompletedEntry(); continue; }
       const name = relative.slice(relative.lastIndexOf('/') + 1);
-      if (!directory && (mode === 0 || mode === 0o100000) && name.startsWith('._') && name.length > 2) continue;
+      if (!directory && (mode === 0 || mode === 0o100000) && name.startsWith('._') && name.length > 2) { recordCompletedEntry(); continue; }
       throw new Error('Update archive contains an unsupported file type.');
     }
     const relative = safeArchiveEntryPath(entry.fileName, spec.root);
-    if (!relative) continue;
+    if (!relative) { recordCompletedEntry(); continue; }
     if (relative.startsWith(appAsarRelative + '/')) throw new Error('Update archive contains an unsupported file type.');
     const output = path.resolve(destination, ...relative.split('/'));
     if (!isWithin(destination, output)) throw new Error('Update archive path escapes its destination.');
@@ -842,6 +862,7 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
       extraction.substage = 'none';
       extraction.appAsarEntry = false;
       extraction.value = 'entry';
+      recordCompletedEntry();
       continue;
     }
     if (mode !== 0 && mode !== 0o100000 && mode !== 0o120000) throw new Error('Update archive contains an unsupported file type.');
@@ -866,6 +887,7 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
       if (isAppAsar) throw new Error('Update archive contains an unsupported file type.');
       await symlink(target, output);
       extraction.value = 'entry';
+      recordCompletedEntry();
       continue;
     }
     extraction.value = 'write';
@@ -917,9 +939,10 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
         streamTiming.stage = 'pipeline';
         streamTiming.pipelineStartedAt = pipelineStartedAt;
       }
-      if (smokeBoundary?.extractTiming && smokeBoundary.extractTiming.firstZipPipelineAt === null) {
-        smokeBoundary.extractTiming.firstZipPipelineAt = pipelineStartedAt;
-      }
+      try {
+        const timing = smokeBoundary?.extractTiming;
+        if (timing && timing.firstZipPipelineAt === null) timing.firstZipPipelineAt = pipelineStartedAt;
+      } catch {}
       await pipeline(...pipelineStreams);
       if (streamTiming) {
         streamTiming.pipelineMs = elapsedMs(streamTiming.pipelineStartedAt);
@@ -938,13 +961,14 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
       extraction.streamSnapshot = null;
     }
     extraction.value = 'entry';
+    recordCompletedEntry();
   }
 }
 
 export async function extractVerifiedArchive({ filePath, directory, tag, assetName, sha256, platform = process.platform }) {
   let phase = 'preflight', archiveFormat = 'unknown';
   const smokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic') ? globalThis.__tusUpdaterSmokeBoundary : null;
-  if (smokeBoundary?.extractTiming) smokeBoundary.extractTiming.extractCallAt = performance.now();
+  recordSmokeExtractTiming(smokeBoundary, 'extractCallAt', performance.now());
   const extraction = {
     get value() { return phase; },
     get trackDiagnostics() { return smokeBoundary !== null; },
@@ -987,7 +1011,7 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     extraction.value = 'digest';
     await verifyDownloadedFile({ filePath, sha256 });
-    if (smokeBoundary?.extractTiming) smokeBoundary.extractTiming.digestVerifiedAt = performance.now();
+    recordSmokeExtractTiming(smokeBoundary, 'digestVerifiedAt', performance.now());
     extraction.value = 'preflight';
     await mkdir(target, { recursive: false, mode: 0o700 });
     targetCreated = true;

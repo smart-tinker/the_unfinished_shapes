@@ -61,17 +61,32 @@ test('TUS Windows ZIP writer reports bounded finish-to-close time at the safe lo
   assert.equal(JSON.stringify([pendingSafe, closedSafe, bounded]).includes('C:/private/path'), false);
 });
 
-test('TUS Windows ZIP samples report capped main-process CPU deltas at the safe log boundary', async () => {
+test('TUS Windows ZIP samples report bounded pipeline CPU time at the safe log boundary', () => {
   const sink = new EventEmitter();
   sink._write = (_chunk, _encoding, callback) => callback();
-  const readSample = updatePackage.trackZipWriteCallback(sink);
-  readSample();
-  await new Promise(resolve => setTimeout(resolve, 20));
-  const sample = readSample();
-
-  for (const field of ['mainCpuUserMsDelta', 'mainCpuSystemMsDelta']) {
-    assert.ok(Number.isSafeInteger(sample[field]) && sample[field] >= 0 && sample[field] <= 120_000);
+  const originalCpuUsage = process.cpuUsage;
+  const cpuSamples = [
+    { user: 1_000, system: 2_000 },
+    { user: 5_000, system: 8_000 },
+    { user: 130_005_000, system: 8_000 },
+    { user: 1, system: 9_000 },
+  ];
+  let sample, capped, unavailable;
+  process.cpuUsage = () => cpuSamples.shift();
+  try {
+    const readSample = updatePackage.trackZipWriteCallback(sink);
+    sample = readSample();
+    capped = readSample();
+    unavailable = readSample();
+  } finally {
+    process.cpuUsage = originalCpuUsage;
   }
+  assert.deepEqual(
+    [sample.pipelineCpuMs, capped.pipelineCpuMs, unavailable.pipelineCpuMs],
+    [10, 120_000, null],
+  );
+  assert.equal(Object.hasOwn(sample, 'mainCpuUserMsDelta'), false);
+  assert.equal(Object.hasOwn(sample, 'mainCpuSystemMsDelta'), false);
 
   const manifestFile = { sha256: 'a'.repeat(64) };
   const raw = updatePackage.safeZipExtractionStreamSnapshot(
@@ -87,21 +102,29 @@ test('TUS Windows ZIP samples report capped main-process CPU deltas at the safe 
     status: 'starting',
     extractStreamSnapshot: { ...raw, privatePath: 'C:/private/path', privateError: 'raw error' },
   }], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
-  assert.equal(diagnostic.streamSnapshot.mainCpuUserMsDelta, sample.mainCpuUserMsDelta);
-  assert.equal(diagnostic.streamSnapshot.mainCpuSystemMsDelta, sample.mainCpuSystemMsDelta);
+  assert.equal(diagnostic.streamSnapshot.pipelineCpuMs, 10);
+  assert.equal(Object.hasOwn(diagnostic.streamSnapshot, 'mainCpuUserMsDelta'), false);
 
   const [bounded] = safeMainDiagnostics([{
     stage: 'extract-archive',
     status: 'starting',
-    extractStreamSnapshot: {
-      ...raw,
-      mainCpuUserMsDelta: Number.MAX_SAFE_INTEGER,
-      mainCpuSystemMsDelta: 'C:/private/path',
-    },
+    extractStreamSnapshot: { ...raw, pipelineCpuMs: Number.MAX_SAFE_INTEGER },
   }], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
-  assert.equal(bounded.streamSnapshot.mainCpuUserMsDelta, 120_000);
-  assert.equal(bounded.streamSnapshot.mainCpuSystemMsDelta, null);
-  assert.doesNotMatch(JSON.stringify([diagnostic, bounded]), /C:\/private\/path|raw error/);
+  const [invalid] = safeMainDiagnostics([{
+    stage: 'extract-archive',
+    status: 'starting',
+    extractStreamSnapshot: { ...raw, pipelineCpuMs: 'C:/private/path' },
+  }], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+  const [missing] = safeMainDiagnostics([{
+    stage: 'extract-archive',
+    status: 'starting',
+    extractStreamSnapshot: Object.fromEntries(Object.entries(raw).filter(([key]) => key !== 'pipelineCpuMs')),
+  }], manifestFile, 'candidate.zip', 'v0.1.0-rc11');
+  assert.deepEqual(
+    [bounded.streamSnapshot.pipelineCpuMs, invalid.streamSnapshot.pipelineCpuMs, missing.streamSnapshot.pipelineCpuMs],
+    [120_000, null, null],
+  );
+  assert.doesNotMatch(JSON.stringify([diagnostic, bounded, invalid, missing]), /C:\/private\/path|raw error/);
 });
 
 test('TUS main diagnostic preserves only safe verifier setup stages at the log boundary', () => {
@@ -461,6 +484,7 @@ test('TUS extraction timeline reports bounded monotonic phase intervals with saf
     digestVerifiedToFirstZipPipelineMs: 60,
     firstZipPipelineToEntry12Ms: 220,
     ipcToEntry12Ms: 360,
+    completedZipEntries: [],
   });
   assert.deepEqual([
     diagnostic.streamSnapshot.entrySequence,
@@ -487,6 +511,7 @@ test('TUS extraction timeline reports bounded monotonic phase intervals with saf
     digestVerifiedToFirstZipPipelineMs: 1,
     firstZipPipelineToEntry12Ms: null,
     ipcToEntry12Ms: null,
+    completedZipEntries: [],
   });
   assert.doesNotMatch(JSON.stringify([diagnostic, unsafe]), /C:\/private|private-entry|ipcEnteredAt|firstZipPipelineAt/);
 });

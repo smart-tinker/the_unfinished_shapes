@@ -11,6 +11,7 @@ import path from 'node:path';
 import { create as createTar } from 'tar';
 import yauzl from 'yauzl';
 import { createZipWriteBatcher, downloadVerifiedAsset, extractVerifiedArchive, openZipReadStream, safeArchiveEntryPath, safeUpdaterFailureCode, safeVerifierErrorType, safeVerifierSetupStage, safeZipExtractionStreamSnapshot, verifyDownloadedFile, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { safeMainDiagnostics } from '../scripts/updater-smoke-diagnostics.mjs';
 
 const tag = 'v0.1.0-rc11';
 const asset = {
@@ -457,6 +458,41 @@ test('extracts Windows portable and macOS app archives under the selected folder
   }
 });
 
+
+
+test('an unavailable smoke timing observer cannot fail verified ZIP extraction', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-observer-unavailable-'));
+  const archive = path.join(parent, 'windows.zip');
+  const payload = Buffer.from('verified executable fixture');
+  const entry = 'TheUnfinishedShapes-win32-x64/TheUnfinishedShapes.exe';
+  const assetName = 'TheUnfinishedShapes-0.1.0-rc.11-win32-x64.zip';
+  const smokeFlag = '--tus-smoke-provenance-diagnostic';
+  const addedSmokeFlag = !process.argv.includes(smokeFlag);
+  const previousBoundary = Object.getOwnPropertyDescriptor(globalThis, '__tusUpdaterSmokeBoundary');
+  try {
+    await writeFile(archive, zipFixture(entry, payload));
+    const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+    if (addedSmokeFlag) process.argv.push(smokeFlag);
+    const unavailableBoundary = {};
+    Object.defineProperty(unavailableBoundary, 'extractTiming', {
+      configurable: true,
+      get() { throw new Error('private observer unavailable'); },
+    });
+    Object.defineProperty(globalThis, '__tusUpdaterSmokeBoundary', {
+      configurable: true, value: unavailableBoundary,
+    });
+
+    const result = await extractVerifiedArchive({
+      filePath: archive, directory: parent, tag, assetName, sha256, platform: 'win32',
+    });
+    assert.deepEqual(await readFile(result.executablePath), payload);
+  } finally {
+    if (addedSmokeFlag) process.argv.splice(process.argv.indexOf(smokeFlag), 1);
+    if (previousBoundary) Object.defineProperty(globalThis, '__tusUpdaterSmokeBoundary', previousBoundary);
+    else delete globalThis.__tusUpdaterSmokeBoundary;
+    await rm(parent, { recursive: true, force: true });
+  }
+});
 
 test('accepts ditto AppleDouble metadata without writing it outside the macOS app', async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-appledouble-'));
@@ -1107,4 +1143,179 @@ test('openZipReadStream uses raw mode only when explicitly requested', async () 
   assert.equal((await openZipReadStream(zip, entry, false, null, false)).stream, streams[0]);
   assert.equal((await openZipReadStream(zip, entry, false, null)).stream, streams[1]);
   assert.deepEqual(opened, [[entry, { decodeFileData: false }], [entry]]);
+});
+
+test('smoke ZIP extraction reports bounded completion times through entry 15', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-entry-timing-'));
+  const archive = path.join(parent, 'private-candidate.zip');
+  const archiveRoot = 'TheUnfinishedShapes-win32-x64';
+  const assetName = 'TheUnfinishedShapes-0.1.0-rc.11-win32-x64.zip';
+  const entries = Array.from({ length: 15 }, (_, index) => ({
+    name: archiveRoot + '/private-entry-name-' + (index + 1) + '.bin',
+    contents: Buffer.from('entry fixture ' + (index + 1)),
+    mode: 0o100644,
+  }));
+  entries.push({
+    name: archiveRoot + '/TheUnfinishedShapes.exe',
+    contents: Buffer.from('verified executable fixture'),
+    mode: 0o100755,
+  });
+  const originalArgv = process.argv.slice();
+  const previousBoundary = Object.getOwnPropertyDescriptor(globalThis, '__tusUpdaterSmokeBoundary');
+  const boundary = {
+    extractTiming: {
+      ipcEnteredAt: performance.now(),
+      extractCallAt: null,
+      digestVerifiedAt: null,
+      firstZipPipelineAt: null,
+      entry12At: null,
+      completedZipEntries: [],
+    },
+  };
+
+  try {
+    await writeFile(archive, zipFixture(entries));
+    const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+    Object.defineProperty(globalThis, '__tusUpdaterSmokeBoundary', {
+      configurable: true, writable: true, value: boundary,
+    });
+    process.argv.push('--tus-smoke-provenance-diagnostic');
+    const result = await extractVerifiedArchive({
+      filePath: archive,
+      directory: parent,
+      tag,
+      assetName,
+      sha256,
+      platform: 'win32',
+    });
+    assert.equal(await readFile(result.executablePath, 'utf8'), 'verified executable fixture');
+    assert.equal(await readFile(path.join(result.target, 'private-entry-name-1.bin'), 'utf8'), 'entry fixture 1');
+
+    boundary.extractTiming.privatePath = archive;
+    boundary.extractTiming.privateEntryName = entries[0].name;
+    const [diagnostic] = safeMainDiagnostics([{
+      stage: 'extract-archive',
+      status: 'starting',
+      extractTiming: boundary.extractTiming,
+    }], { sha256 }, assetName, tag);
+    const completed = diagnostic.extractTiming.completedZipEntries;
+
+    assert.ok(Array.isArray(completed), 'completed ZIP entry timing reaches the safe log boundary');
+    assert.deepEqual(completed.map(({ entrySequence }) => entrySequence), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    assert.ok(completed.every(({ elapsedMs }) => Number.isSafeInteger(elapsedMs) && elapsedMs >= 0 && elapsedMs <= 120_000));
+    assert.ok(completed.every(({ elapsedMs }, index) => index === 0 || elapsedMs >= completed[index - 1].elapsedMs));
+    assert.ok(completed.every(entry => Object.keys(entry).sort().join(',') === 'elapsedMs,entrySequence'));
+    assert.doesNotMatch(JSON.stringify(diagnostic), /private-candidate|private-entry-name|tus-update-entry-timing/);
+  } finally {
+    process.argv.length = 0;
+    process.argv.push(...originalArgv);
+    if (previousBoundary) Object.defineProperty(globalThis, '__tusUpdaterSmokeBoundary', previousBoundary);
+    else delete globalThis.__tusUpdaterSmokeBoundary;
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test('file SHA-256 reads stay bounded and reject a same-size mutation', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-file-hash-bounded-'));
+  const filePath = path.join(parent, 'candidate.bin');
+  const payload = Buffer.alloc(4 * 1024 * 1024 + 37, 0x5a);
+  const sha256 = createHash('sha256').update(payload).digest('hex');
+  const progress = [];
+  let intactDigestVerified = false;
+  let mutationRejected = false;
+  let sameSizeMutationRetained = false;
+  try {
+    await writeFile(filePath, payload);
+    try {
+      intactDigestVerified = await verifyDownloadedFile({
+        filePath, sha256, onReadProgress: value => progress.push(value),
+      }) === true;
+    } catch {}
+    const reads = progress.filter(value => value.phase === 'reading');
+    let previousBytes = 0;
+    const chunkBytes = reads.map(value => {
+      const size = value.bytesRead - previousBytes;
+      previousBytes = value.bytesRead;
+      return size;
+    });
+    const bytesRead = reads.at(-1)?.bytesRead ?? 0;
+    const mutated = Buffer.from(payload);
+    mutated[0] = 0x5b;
+    await writeFile(filePath, mutated);
+    try {
+      await verifyDownloadedFile({ filePath, sha256 });
+    } catch (error) {
+      mutationRejected = error?.message === 'Downloaded update file failed its SHA-256 integrity check.';
+    }
+    const afterMutation = await readFile(filePath);
+    sameSizeMutationRetained = afterMutation.length === payload.length && afterMutation[0] === mutated[0];
+
+    assert.deepEqual(
+      { intactDigestVerified, bytesRead, mutationRejected, sameSizeMutationRetained },
+      { intactDigestVerified: true, bytesRead: payload.length, mutationRejected: true, sameSizeMutationRetained: true },
+    );
+    assert.ok(
+      reads.length <= 8 && chunkBytes.every(size => Number.isSafeInteger(size) && size > 0 && size <= 1024 * 1024),
+      'expected the real file-backed SHA-256 reader to use bounded large chunks; observed ' + reads.length + ' reads',
+    );
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test('a post-write .part mutation fails its disk rehash before provenance and is cleaned up', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-part-file-mutation-'));
+  const directory = path.join(parent, 'updates');
+  const childSource = [
+    "import fs from 'node:fs';",
+    "import { syncBuiltinESMExports } from 'node:module';",
+    "import { createHash } from 'node:crypto';",
+    "const originalCreateReadStream = fs.createReadStream;",
+    "let partMutated = false;",
+    "fs.createReadStream = (filePath, options) => {",
+    "  if (typeof filePath === 'string' && filePath.endsWith('.part') && !partMutated) {",
+    "    const fd = fs.openSync(filePath, 'r+');",
+    "    try { fs.writeSync(fd, Buffer.from([0x42]), 0, 1, 0); partMutated = true; }",
+    "    finally { fs.closeSync(fd); }",
+    "  }",
+    "  return originalCreateReadStream(filePath, options);",
+    "};",
+    "syncBuiltinESMExports();",
+    "const [moduleUrl, directory] = process.argv.slice(1);",
+    "const { downloadVerifiedAsset } = await import(moduleUrl);",
+    "const payload = Buffer.alloc(512 * 1024, 0x41);",
+    "const digest = createHash('sha256').update(payload).digest('hex');",
+    "const tag = 'v0.1.0-rc11';",
+    "const asset = { name: 'TheUnfinishedShapes-0.1.0-rc.11-linux-x64.tar.gz', size: payload.length, digest: 'sha256:' + digest };",
+    "let provenanceRequested = false;",
+    "try {",
+    "  await downloadVerifiedAsset({",
+    "    asset, tag, directory, onProgress: () => {}, verifySignature: async () => ({}),",
+    "    fetcher: async url => {",
+    "      if (url.startsWith('https://github.com/')) return new Response(null, { status: 302, headers: { location: 'https://release-assets.githubusercontent.com/package' } });",
+    "      if (url.startsWith('https://release-assets.githubusercontent.com/')) return new Response(payload, { status: 200, headers: { 'content-length': String(payload.length) } });",
+    "      if (url.startsWith('https://api.github.com/')) { provenanceRequested = true; return new Response(JSON.stringify({ attestations: [] }), { status: 200 }); }",
+    "      throw new Error('Unexpected test destination');",
+    "    },",
+    "  });",
+    "  process.stdout.write('unexpected-success');",
+    "  process.exitCode = 2;",
+    "} catch (error) {",
+    "  const clean = fs.readdirSync(directory).length === 0;",
+    "  const rejected = error?.message === 'Downloaded update file failed its SHA-256 integrity check.';",
+    "  process.stdout.write(partMutated && rejected && !provenanceRequested && clean ? 'disk-mutation-rejected-cleaned-before-provenance' : 'control-failed');",
+    "}",
+  ].join(String.fromCharCode(10));
+  try {
+    const child = spawnSync(process.execPath, [
+      '--input-type=module', '-e', childSource,
+      new URL('../src/update-package.mjs', import.meta.url).href,
+      directory,
+    ], { encoding: 'utf8', windowsHide: true });
+    assert.equal(child.status, 0, 'the post-write disk-mutation control completed');
+    assert.equal(child.stdout, 'disk-mutation-rejected-cleaned-before-provenance');
+    assert.deepEqual(await readdir(directory), []);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
 });

@@ -322,7 +322,7 @@ app.whenReady().then(async()=>{
   handle('updates:extract', async () => {
     if (updaterSmokeBoundary) updaterSmokeBoundary.extractTiming = {
       ipcEnteredAt: performance.now(), extractCallAt: null, digestVerifiedAt: null,
-      firstZipPipelineAt: null, entry12At: null,
+      firstZipPipelineAt: null, entry12At: null, completedZipEntries: [],
     };
     if (!downloadedUpdate || downloadedUpdate.distribution === 'installer') throw new Error('Download a portable update archive first.');
     const choice = await dialog.showOpenDialog(win, { title: 'Choose a folder for the verified TUS update', properties: ['openDirectory'] });

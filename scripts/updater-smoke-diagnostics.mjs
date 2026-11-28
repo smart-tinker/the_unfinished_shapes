@@ -66,12 +66,20 @@ function safeExtractTiming(value) {
     const milliseconds = Math.round(end - start);
     return milliseconds >= 0 && milliseconds <= 120_000 ? milliseconds : null;
   };
+  const completedZipEntries = [];
+  for (const entry of (Array.isArray(value?.completedZipEntries) ? value.completedZipEntries : []).slice(0, 15)) {
+    if (entry?.entrySequence !== completedZipEntries.length + 1 ||
+        !Number.isSafeInteger(entry.elapsedMs) || entry.elapsedMs < 0 || entry.elapsedMs > 120_000 ||
+        (completedZipEntries.length > 0 && entry.elapsedMs < completedZipEntries.at(-1).elapsedMs)) break;
+    completedZipEntries.push({ entrySequence: entry.entrySequence, elapsedMs: entry.elapsedMs });
+  }
   return {
     ipcToExtractCallMs: elapsed(value?.ipcEnteredAt, value?.extractCallAt),
     extractCallToDigestVerifiedMs: elapsed(value?.extractCallAt, value?.digestVerifiedAt),
     digestVerifiedToFirstZipPipelineMs: elapsed(value?.digestVerifiedAt, value?.firstZipPipelineAt),
     firstZipPipelineToEntry12Ms: elapsed(value?.firstZipPipelineAt, value?.entry12At),
     ipcToEntry12Ms: elapsed(value?.ipcEnteredAt, value?.entry12At),
+    completedZipEntries,
   };
 }
 
@@ -93,8 +101,7 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
   const writeCallback = Object.hasOwn(value, 'writeCallbackState') ? {
     state: ['idle', 'write', 'writev'].includes(value.writeCallbackState) ? value.writeCallbackState : 'unknown',
     finishToCloseMs: safeExtractStreamCount(value.writeFinishToCloseMs, 120_000),
-    mainCpuUserMsDelta: safeExtractStreamCount(value.mainCpuUserMsDelta, 120_000),
-    mainCpuSystemMsDelta: safeExtractStreamCount(value.mainCpuSystemMsDelta, 120_000),
+    pipelineCpuMs: safeExtractStreamCount(value.pipelineCpuMs, 120_000),
     ageMs: safeExtractStreamCount(value.writeCallbackAgeMs, 120_000),
     waitMs: safeExtractStreamCount(value.writeCallbackWaitMs, 120_000),
     callbackCount: safeExtractStreamCount(value.writeCallbackCount),
@@ -143,8 +150,7 @@ function safeExtractStreamSnapshot(value, previous, elapsedMs) {
     ...(writeCallback ? {
       writeCallbackState: writeCallback.state,
       writeFinishToCloseMs: writeCallback.finishToCloseMs,
-      mainCpuUserMsDelta: writeCallback.mainCpuUserMsDelta,
-      mainCpuSystemMsDelta: writeCallback.mainCpuSystemMsDelta,
+      pipelineCpuMs: writeCallback.pipelineCpuMs,
       writeCallbackAgeMs: writeCallback.ageMs,
       writeCallbackWaitMs: writeCallback.waitMs,
       writeCallbackWaitMsDelta: delta(writeCallback.waitMs, previous?.writeCallbackWaitMs, 120_000),
