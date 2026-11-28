@@ -1179,3 +1179,108 @@ test('smoke ZIP extraction reports only bounded completion times for entries bef
     await rm(parent, { recursive: true, force: true });
   }
 });
+
+test('file SHA-256 reads stay bounded and reject a same-size mutation', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-file-hash-bounded-'));
+  const filePath = path.join(parent, 'candidate.bin');
+  const payload = Buffer.alloc(4 * 1024 * 1024 + 37, 0x5a);
+  const sha256 = createHash('sha256').update(payload).digest('hex');
+  const progress = [];
+  let intactDigestVerified = false;
+  let mutationRejected = false;
+  let sameSizeMutationRetained = false;
+  try {
+    await writeFile(filePath, payload);
+    try {
+      intactDigestVerified = await verifyDownloadedFile({
+        filePath, sha256, onReadProgress: value => progress.push(value),
+      }) === true;
+    } catch {}
+    const reads = progress.filter(value => value.phase === 'reading');
+    let previousBytes = 0;
+    const chunkBytes = reads.map(value => {
+      const size = value.bytesRead - previousBytes;
+      previousBytes = value.bytesRead;
+      return size;
+    });
+    const bytesRead = reads.at(-1)?.bytesRead ?? 0;
+    const mutated = Buffer.from(payload);
+    mutated[0] = 0x5b;
+    await writeFile(filePath, mutated);
+    try {
+      await verifyDownloadedFile({ filePath, sha256 });
+    } catch (error) {
+      mutationRejected = error?.message === 'Downloaded update file failed its SHA-256 integrity check.';
+    }
+    const afterMutation = await readFile(filePath);
+    sameSizeMutationRetained = afterMutation.length === payload.length && afterMutation[0] === mutated[0];
+
+    assert.deepEqual(
+      { intactDigestVerified, bytesRead, mutationRejected, sameSizeMutationRetained },
+      { intactDigestVerified: true, bytesRead: payload.length, mutationRejected: true, sameSizeMutationRetained: true },
+    );
+    assert.ok(
+      reads.length <= 8 && chunkBytes.every(size => Number.isSafeInteger(size) && size > 0 && size <= 1024 * 1024),
+      'expected the real file-backed SHA-256 reader to use bounded large chunks; observed ' + reads.length + ' reads',
+    );
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test('a post-write .part mutation fails its disk rehash before provenance and is cleaned up', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-part-file-mutation-'));
+  const directory = path.join(parent, 'updates');
+  const childSource = [
+    "import fs from 'node:fs';",
+    "import { syncBuiltinESMExports } from 'node:module';",
+    "import { createHash } from 'node:crypto';",
+    "const originalCreateReadStream = fs.createReadStream;",
+    "let partMutated = false;",
+    "fs.createReadStream = (filePath, options) => {",
+    "  if (typeof filePath === 'string' && filePath.endsWith('.part') && !partMutated) {",
+    "    const fd = fs.openSync(filePath, 'r+');",
+    "    try { fs.writeSync(fd, Buffer.from([0x42]), 0, 1, 0); partMutated = true; }",
+    "    finally { fs.closeSync(fd); }",
+    "  }",
+    "  return originalCreateReadStream(filePath, options);",
+    "};",
+    "syncBuiltinESMExports();",
+    "const [moduleUrl, directory] = process.argv.slice(1);",
+    "const { downloadVerifiedAsset } = await import(moduleUrl);",
+    "const payload = Buffer.alloc(512 * 1024, 0x41);",
+    "const digest = createHash('sha256').update(payload).digest('hex');",
+    "const tag = 'v0.1.0-rc11';",
+    "const asset = { name: 'TheUnfinishedShapes-0.1.0-rc.11-linux-x64.tar.gz', size: payload.length, digest: 'sha256:' + digest };",
+    "let provenanceRequested = false;",
+    "try {",
+    "  await downloadVerifiedAsset({",
+    "    asset, tag, directory, onProgress: () => {}, verifySignature: async () => ({}),",
+    "    fetcher: async url => {",
+    "      if (url.startsWith('https://github.com/')) return new Response(null, { status: 302, headers: { location: 'https://release-assets.githubusercontent.com/package' } });",
+    "      if (url.startsWith('https://release-assets.githubusercontent.com/')) return new Response(payload, { status: 200, headers: { 'content-length': String(payload.length) } });",
+    "      if (url.startsWith('https://api.github.com/')) { provenanceRequested = true; return new Response(JSON.stringify({ attestations: [] }), { status: 200 }); }",
+    "      throw new Error('Unexpected test destination');",
+    "    },",
+    "  });",
+    "  process.stdout.write('unexpected-success');",
+    "  process.exitCode = 2;",
+    "} catch (error) {",
+    "  const clean = fs.readdirSync(directory).length === 0;",
+    "  const rejected = error?.message === 'Downloaded update file failed its SHA-256 integrity check.';",
+    "  process.stdout.write(partMutated && rejected && !provenanceRequested && clean ? 'disk-mutation-rejected-cleaned-before-provenance' : 'control-failed');",
+    "}",
+  ].join(String.fromCharCode(10));
+  try {
+    const child = spawnSync(process.execPath, [
+      '--input-type=module', '-e', childSource,
+      new URL('../src/update-package.mjs', import.meta.url).href,
+      directory,
+    ], { encoding: 'utf8', windowsHide: true });
+    assert.equal(child.status, 0, 'the post-write disk-mutation control completed');
+    assert.equal(child.stdout, 'disk-mutation-rejected-cleaned-before-provenance');
+    assert.deepEqual(await readdir(directory), []);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});

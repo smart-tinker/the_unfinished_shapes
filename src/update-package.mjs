@@ -428,7 +428,7 @@ export async function verifyReleaseAttestation({ bundle, asset, tag }, verifySig
 async function fileSha256(filePath, onReadProgress) {
   const hash = createHash('sha256');
   let bytesRead = 0;
-  for await (const chunk of createReadStream(filePath)) {
+  for await (const chunk of createReadStream(filePath, { highWaterMark: 1024 * 1024 })) {
     hash.update(chunk);
     bytesRead = Math.min(0xffff_ffff, bytesRead + chunk.byteLength);
     if (onReadProgress) onReadProgress({ phase: 'reading', bytesRead });
