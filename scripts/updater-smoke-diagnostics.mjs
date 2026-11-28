@@ -67,7 +67,7 @@ function safeExtractTiming(value) {
     return milliseconds >= 0 && milliseconds <= 120_000 ? milliseconds : null;
   };
   const completedZipEntries = [];
-  for (const entry of (Array.isArray(value?.completedZipEntries) ? value.completedZipEntries : []).slice(0, 11)) {
+  for (const entry of (Array.isArray(value?.completedZipEntries) ? value.completedZipEntries : []).slice(0, 15)) {
     if (entry?.entrySequence !== completedZipEntries.length + 1 ||
         !Number.isSafeInteger(entry.elapsedMs) || entry.elapsedMs < 0 || entry.elapsedMs > 120_000 ||
         (completedZipEntries.length > 0 && entry.elapsedMs < completedZipEntries.at(-1).elapsedMs)) break;

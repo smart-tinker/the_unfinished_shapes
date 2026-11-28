@@ -800,6 +800,14 @@ export async function openZipReadStream(zip, entry, trackCompressedRead, readHig
   }
 }
 
+// Smoke telemetry is best-effort and must not fail a verified package extraction.
+function recordSmokeExtractTiming(smokeBoundary, field, value) {
+  try {
+    const timing = smokeBoundary?.extractTiming;
+    if (timing) timing[field] = value;
+  } catch {}
+}
+
 async function extractZip(filePath, destination, spec, extraction, appAsarPath, platform, smokeBoundary) {
   const appAsarRelative = path.relative(destination, appAsarPath).split(path.sep).join('/');
   extraction.value = 'zip-open';
@@ -807,20 +815,23 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
   let count = 0, extractedBytes = 0;
   extraction.value = 'entry';
   const recordCompletedEntry = () => {
-    const timing = smokeBoundary?.extractTiming;
-    if (count >= 12 || !Array.isArray(timing?.completedZipEntries) ||
-        timing.completedZipEntries.length >= 11 || !Number.isFinite(timing.ipcEnteredAt)) return;
-    timing.completedZipEntries.push({
-      entrySequence: count,
-      elapsedMs: Math.min(120_000, Math.max(0, Math.round(performance.now() - timing.ipcEnteredAt))),
-    });
+    try {
+      const timing = smokeBoundary?.extractTiming;
+      if (count > 15 || !Array.isArray(timing?.completedZipEntries) ||
+          timing.completedZipEntries.length >= 15 || !Number.isFinite(timing.ipcEnteredAt)) return;
+      timing.completedZipEntries.push({
+        entrySequence: count,
+        elapsedMs: Math.min(120_000, Math.max(0, Math.round(performance.now() - timing.ipcEnteredAt))),
+      });
+    } catch {}
   };
   for await (const entry of zip.eachEntry()) {
     extraction.value = 'entry';
     count++;
-    if (count === 12 && smokeBoundary?.extractTiming && smokeBoundary.extractTiming.entry12At === null) {
-      smokeBoundary.extractTiming.entry12At = performance.now();
-    }
+    try {
+      const timing = smokeBoundary?.extractTiming;
+      if (count === 12 && timing && timing.entry12At === null) timing.entry12At = performance.now();
+    } catch {}
     if (count > maxArchiveEntries || !Number.isSafeInteger(entry.uncompressedSize) ||
         entry.uncompressedSize < 0 || (extractedBytes += entry.uncompressedSize) > maxExtractedBytes) {
       throw new Error('Update archive exceeds extraction limits.');
@@ -928,9 +939,10 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
         streamTiming.stage = 'pipeline';
         streamTiming.pipelineStartedAt = pipelineStartedAt;
       }
-      if (smokeBoundary?.extractTiming && smokeBoundary.extractTiming.firstZipPipelineAt === null) {
-        smokeBoundary.extractTiming.firstZipPipelineAt = pipelineStartedAt;
-      }
+      try {
+        const timing = smokeBoundary?.extractTiming;
+        if (timing && timing.firstZipPipelineAt === null) timing.firstZipPipelineAt = pipelineStartedAt;
+      } catch {}
       await pipeline(...pipelineStreams);
       if (streamTiming) {
         streamTiming.pipelineMs = elapsedMs(streamTiming.pipelineStartedAt);
@@ -956,7 +968,7 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
 export async function extractVerifiedArchive({ filePath, directory, tag, assetName, sha256, platform = process.platform }) {
   let phase = 'preflight', archiveFormat = 'unknown';
   const smokeBoundary = process.argv.includes('--tus-smoke-provenance-diagnostic') ? globalThis.__tusUpdaterSmokeBoundary : null;
-  if (smokeBoundary?.extractTiming) smokeBoundary.extractTiming.extractCallAt = performance.now();
+  recordSmokeExtractTiming(smokeBoundary, 'extractCallAt', performance.now());
   const extraction = {
     get value() { return phase; },
     get trackDiagnostics() { return smokeBoundary !== null; },
@@ -999,7 +1011,7 @@ export async function extractVerifiedArchive({ filePath, directory, tag, assetNa
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     extraction.value = 'digest';
     await verifyDownloadedFile({ filePath, sha256 });
-    if (smokeBoundary?.extractTiming) smokeBoundary.extractTiming.digestVerifiedAt = performance.now();
+    recordSmokeExtractTiming(smokeBoundary, 'digestVerifiedAt', performance.now());
     extraction.value = 'preflight';
     await mkdir(target, { recursive: false, mode: 0o700 });
     targetCreated = true;
