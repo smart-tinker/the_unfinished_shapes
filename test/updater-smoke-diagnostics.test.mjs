@@ -461,6 +461,7 @@ test('TUS extraction timeline reports bounded monotonic phase intervals with saf
     digestVerifiedToFirstZipPipelineMs: 60,
     firstZipPipelineToEntry12Ms: 220,
     ipcToEntry12Ms: 360,
+    completedZipEntries: [],
   });
   assert.deepEqual([
     diagnostic.streamSnapshot.entrySequence,
@@ -487,6 +488,7 @@ test('TUS extraction timeline reports bounded monotonic phase intervals with saf
     digestVerifiedToFirstZipPipelineMs: 1,
     firstZipPipelineToEntry12Ms: null,
     ipcToEntry12Ms: null,
+    completedZipEntries: [],
   });
   assert.doesNotMatch(JSON.stringify([diagnostic, unsafe]), /C:\/private|private-entry|ipcEnteredAt|firstZipPipelineAt/);
 });

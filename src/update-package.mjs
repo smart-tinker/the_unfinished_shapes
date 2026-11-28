@@ -806,6 +806,15 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
   const zip = await yauzl.openPromise(filePath, { strictFileNames: true, validateEntrySizes: true });
   let count = 0, extractedBytes = 0;
   extraction.value = 'entry';
+  const recordCompletedEntry = () => {
+    const timing = smokeBoundary?.extractTiming;
+    if (count >= 12 || !Array.isArray(timing?.completedZipEntries) ||
+        timing.completedZipEntries.length >= 11 || !Number.isFinite(timing.ipcEnteredAt)) return;
+    timing.completedZipEntries.push({
+      entrySequence: count,
+      elapsedMs: Math.min(120_000, Math.max(0, Math.round(performance.now() - timing.ipcEnteredAt))),
+    });
+  };
   for await (const entry of zip.eachEntry()) {
     extraction.value = 'entry';
     count++;
@@ -821,13 +830,13 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
         (entry.fileName === '__MACOSX' || entry.fileName.startsWith('__MACOSX/'))) {
       const relative = safeArchiveEntryPath(entry.fileName, '__MACOSX');
       const directory = entry.fileName.endsWith('/') || mode === 0o040000;
-      if (directory && (mode === 0 || mode === 0o040000)) continue;
+      if (directory && (mode === 0 || mode === 0o040000)) { recordCompletedEntry(); continue; }
       const name = relative.slice(relative.lastIndexOf('/') + 1);
-      if (!directory && (mode === 0 || mode === 0o100000) && name.startsWith('._') && name.length > 2) continue;
+      if (!directory && (mode === 0 || mode === 0o100000) && name.startsWith('._') && name.length > 2) { recordCompletedEntry(); continue; }
       throw new Error('Update archive contains an unsupported file type.');
     }
     const relative = safeArchiveEntryPath(entry.fileName, spec.root);
-    if (!relative) continue;
+    if (!relative) { recordCompletedEntry(); continue; }
     if (relative.startsWith(appAsarRelative + '/')) throw new Error('Update archive contains an unsupported file type.');
     const output = path.resolve(destination, ...relative.split('/'));
     if (!isWithin(destination, output)) throw new Error('Update archive path escapes its destination.');
@@ -842,6 +851,7 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
       extraction.substage = 'none';
       extraction.appAsarEntry = false;
       extraction.value = 'entry';
+      recordCompletedEntry();
       continue;
     }
     if (mode !== 0 && mode !== 0o100000 && mode !== 0o120000) throw new Error('Update archive contains an unsupported file type.');
@@ -866,6 +876,7 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
       if (isAppAsar) throw new Error('Update archive contains an unsupported file type.');
       await symlink(target, output);
       extraction.value = 'entry';
+      recordCompletedEntry();
       continue;
     }
     extraction.value = 'write';
@@ -938,6 +949,7 @@ async function extractZip(filePath, destination, spec, extraction, appAsarPath, 
       extraction.streamSnapshot = null;
     }
     extraction.value = 'entry';
+    recordCompletedEntry();
   }
 }
 

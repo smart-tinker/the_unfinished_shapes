@@ -66,12 +66,20 @@ function safeExtractTiming(value) {
     const milliseconds = Math.round(end - start);
     return milliseconds >= 0 && milliseconds <= 120_000 ? milliseconds : null;
   };
+  const completedZipEntries = [];
+  for (const entry of (Array.isArray(value?.completedZipEntries) ? value.completedZipEntries : []).slice(0, 11)) {
+    if (entry?.entrySequence !== completedZipEntries.length + 1 ||
+        !Number.isSafeInteger(entry.elapsedMs) || entry.elapsedMs < 0 || entry.elapsedMs > 120_000 ||
+        (completedZipEntries.length > 0 && entry.elapsedMs < completedZipEntries.at(-1).elapsedMs)) break;
+    completedZipEntries.push({ entrySequence: entry.entrySequence, elapsedMs: entry.elapsedMs });
+  }
   return {
     ipcToExtractCallMs: elapsed(value?.ipcEnteredAt, value?.extractCallAt),
     extractCallToDigestVerifiedMs: elapsed(value?.extractCallAt, value?.digestVerifiedAt),
     digestVerifiedToFirstZipPipelineMs: elapsed(value?.digestVerifiedAt, value?.firstZipPipelineAt),
     firstZipPipelineToEntry12Ms: elapsed(value?.firstZipPipelineAt, value?.entry12At),
     ipcToEntry12Ms: elapsed(value?.ipcEnteredAt, value?.entry12At),
+    completedZipEntries,
   };
 }
 
