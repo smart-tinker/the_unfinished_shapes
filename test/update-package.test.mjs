@@ -11,6 +11,7 @@ import path from 'node:path';
 import { create as createTar } from 'tar';
 import yauzl from 'yauzl';
 import { createZipWriteBatcher, downloadVerifiedAsset, extractVerifiedArchive, openZipReadStream, safeArchiveEntryPath, safeUpdaterFailureCode, safeVerifierErrorType, safeVerifierSetupStage, safeZipExtractionStreamSnapshot, verifyDownloadedFile, verifyReleaseAttestation } from '../src/update-package.mjs';
+import { safeMainDiagnostics } from '../scripts/updater-smoke-diagnostics.mjs';
 
 const tag = 'v0.1.0-rc11';
 const asset = {
@@ -1107,4 +1108,73 @@ test('openZipReadStream uses raw mode only when explicitly requested', async () 
   assert.equal((await openZipReadStream(zip, entry, false, null, false)).stream, streams[0]);
   assert.equal((await openZipReadStream(zip, entry, false, null)).stream, streams[1]);
   assert.deepEqual(opened, [[entry, { decodeFileData: false }], [entry]]);
+});
+
+test('smoke ZIP extraction reports only bounded completion times for entries before entry 12', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'tus-update-entry-timing-'));
+  const archive = path.join(parent, 'private-candidate.zip');
+  const archiveRoot = 'TheUnfinishedShapes-win32-x64';
+  const assetName = 'TheUnfinishedShapes-0.1.0-rc.11-win32-x64.zip';
+  const entries = Array.from({ length: 11 }, (_, index) => ({
+    name: archiveRoot + '/private-entry-name-' + (index + 1) + '.bin',
+    contents: Buffer.from('entry fixture ' + (index + 1)),
+    mode: 0o100644,
+  }));
+  entries.push({
+    name: archiveRoot + '/TheUnfinishedShapes.exe',
+    contents: Buffer.from('verified executable fixture'),
+    mode: 0o100755,
+  });
+  const originalArgv = process.argv.slice();
+  const previousBoundary = Object.getOwnPropertyDescriptor(globalThis, '__tusUpdaterSmokeBoundary');
+  const boundary = {
+    extractTiming: {
+      ipcEnteredAt: performance.now(),
+      extractCallAt: null,
+      digestVerifiedAt: null,
+      firstZipPipelineAt: null,
+      entry12At: null,
+      completedZipEntries: [],
+    },
+  };
+
+  try {
+    await writeFile(archive, zipFixture(entries));
+    const sha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+    Object.defineProperty(globalThis, '__tusUpdaterSmokeBoundary', {
+      configurable: true, writable: true, value: boundary,
+    });
+    process.argv.push('--tus-smoke-provenance-diagnostic');
+    const result = await extractVerifiedArchive({
+      filePath: archive,
+      directory: parent,
+      tag,
+      assetName,
+      sha256,
+      platform: 'win32',
+    });
+    assert.equal(await readFile(result.executablePath, 'utf8'), 'verified executable fixture');
+    assert.equal(await readFile(path.join(result.target, 'private-entry-name-1.bin'), 'utf8'), 'entry fixture 1');
+
+    boundary.extractTiming.privatePath = archive;
+    boundary.extractTiming.privateEntryName = entries[0].name;
+    const [diagnostic] = safeMainDiagnostics([{
+      stage: 'extract-archive',
+      status: 'starting',
+      extractTiming: boundary.extractTiming,
+    }], { sha256 }, assetName, tag);
+    const completed = diagnostic.extractTiming.completedZipEntries;
+
+    assert.deepEqual(completed.map(({ entrySequence }) => entrySequence), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    assert.ok(completed.every(({ elapsedMs }) => Number.isSafeInteger(elapsedMs) && elapsedMs >= 0 && elapsedMs <= 120_000));
+    assert.ok(completed.every(({ elapsedMs }, index) => index === 0 || elapsedMs >= completed[index - 1].elapsedMs));
+    assert.ok(completed.every(entry => Object.keys(entry).sort().join(',') === 'elapsedMs,entrySequence'));
+    assert.doesNotMatch(JSON.stringify(diagnostic), /private-candidate|private-entry-name|tus-update-entry-timing/);
+  } finally {
+    process.argv.length = 0;
+    process.argv.push(...originalArgv);
+    if (previousBoundary) Object.defineProperty(globalThis, '__tusUpdaterSmokeBoundary', previousBoundary);
+    else delete globalThis.__tusUpdaterSmokeBoundary;
+    await rm(parent, { recursive: true, force: true });
+  }
 });
